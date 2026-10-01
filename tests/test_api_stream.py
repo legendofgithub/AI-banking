@@ -347,3 +347,66 @@ def test_reminders_endpoint_no_due_returns_empty(tmp_path):
         r = client.get("/api/reminders")
         assert r.status_code == 200
         assert r.json() == {"reminders": []}
+
+
+# ------------------------------------------------- 悬空转账提醒接口(右下角弹窗+落地页)
+
+def test_pending_orders_and_page_confirm(tmp_path):
+    """弹窗数据源 + 页面直连确认:与对话闸门同一套安全规则(两步走+支付密码)。"""
+    client, db, tok = _client(tmp_path, [
+        '{"intent": "transfer"}',
+        '{"payee": "张三", "amount_yuan": "500", "when": "now"}',
+        "(不会被走到:建单后停闸门,report 不执行)",
+    ])
+    with client:
+        # 建单 → 悬空在人工闸门
+        r1 = _post_chat(client, "给张三转 500 元", "api-pend", token=tok)
+        card = _find_data(_frames(r1.text), "data-transfer-confirmation")
+        assert card is not None
+        order_id = card["data"]["order_id"]
+        assert _order(db, order_id)["status"] == "pending_confirm"
+        assert _balance(db) == DEFAULT_BALANCE  # 建单不动钱
+
+        # 弹窗数据源:当前用户悬空单可见
+        r = client.get("/api/pending-orders", params={"token": tok})
+        assert r.status_code == 200
+        orders = r.json()["orders"]
+        assert any(o["order_id"] == order_id and o["to_name"] == "张三"
+                   and o["amount_yuan"] == "500.00"
+                   and o["status"] == "pending_confirm" for o in orders)
+
+        # 未登录/无效 token → 空列表(不泄露他人订单)
+        assert client.get("/api/pending-orders",
+                          params={"token": "x" * 32}).json()["orders"] == []
+
+        # 页面确认:密码错 → 拒绝且订单不动
+        r = client.post("/api/orders/confirm",
+                        json={"token": tok, "order_id": order_id,
+                              "pay_password": "000000"})
+        assert r.status_code == 400 and "支付密码" in r.json()["error"]
+        assert _order(db, order_id)["status"] == "pending_confirm"
+        assert _balance(db) == DEFAULT_BALANCE
+
+        # 密码对 → executed + 恰好扣 500(与对话确认同一条收尾路径)
+        r = client.post("/api/orders/confirm",
+                        json={"token": tok, "order_id": order_id,
+                              "pay_password": "888888"})
+        assert r.status_code == 200 and r.json()["status"] == "executed"
+        assert _balance(db) == DEFAULT_BALANCE - 50_000
+
+        # 确认后弹窗数据源不再含该单
+        orders2 = client.get("/api/pending-orders",
+                             params={"token": tok}).json()["orders"]
+        assert all(o["order_id"] != order_id for o in orders2)
+
+        # 已执行单重复确认 → 状态不可确认
+        r = client.post("/api/orders/confirm",
+                        json={"token": tok, "order_id": order_id,
+                              "pay_password": "888888"})
+        assert r.status_code == 400 and "不可确认" in r.json()["error"]
+
+        # 别人的订单 404(user 隔离)
+        r = client.post("/api/orders/confirm",
+                        json={"token": tok, "order_id": 99999,
+                              "pay_password": "888888"})
+        assert r.status_code == 404
