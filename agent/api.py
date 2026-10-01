@@ -70,6 +70,8 @@ from pydantic import BaseModel, Field
 from agent import auth as auth_mod
 from agent.bank import BankTools, load_bank_tools
 from agent.graph import build_agent_graph, make_sqlite_checkpointer
+from bank_core.ledger import LedgerError, LedgerService
+from bank_core.money import cents_to_yuan
 from agent.llm import (RequestLLM, fetch_models_json, get_llm,
                        pick_default_model, reset_request_llm, set_request_llm)
 
@@ -133,6 +135,12 @@ class LoginIn(BaseModel):
 
 class TokenIn(BaseModel):
     token: str = Field(min_length=16, max_length=128)
+
+
+class OrderConfirmIn(BaseModel):
+    token: str = Field(min_length=16, max_length=128)
+    order_id: int
+    pay_password: str = Field(min_length=6, max_length=6)
 
 
 # ----------------------------------------------------------------- SSE 帧
@@ -382,6 +390,60 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         if not me:
             raise HTTPException(status_code=401, detail="未登录或会话过期")
         return me
+
+    # ------------------------------------------------ 悬空转账提醒(弹窗+落地页)
+    @app.get("/api/pending-orders")
+    async def pending_orders(token: str) -> dict:
+        """当前登录用户名下待确认/已排程的转账单(右下角强制提醒弹窗数据源)。
+
+        pending_confirm=建单后悬空待确认;scheduled=定时未到期(到期由
+        run_due_tasks 转成待确认)。观光/未登录返回空列表。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, token)
+        if not me:
+            return {"orders": []}
+        rows = app.state.auth_conn.execute(
+            """SELECT id, to_name, amount_cents, memo, status, created_at, scheduled_at
+               FROM transfer_orders
+               WHERE user_id=? AND status IN ('pending_confirm','scheduled')
+               ORDER BY id DESC LIMIT 20""", (me["user_id"],)).fetchall()
+        return {"orders": [{
+            "order_id": r["id"], "to_name": r["to_name"],
+            "amount_yuan": cents_to_yuan(r["amount_cents"]),
+            "memo": r["memo"] or "", "status": r["status"],
+            "created_at": r["created_at"],
+            "scheduled_at": r["scheduled_at"] or "",
+        } for r in rows]}
+
+    @app.post("/api/orders/confirm")
+    async def order_confirm(req: OrderConfirmIn):
+        """页面直连确认(弹窗"去确认"落地页):token 定用户 → 支付密码核验
+        → confirm_transfer_order 收尾。与对话闸门同一套安全规则(两步走+
+        支付密码),只是入口从聊天卡换成网页;operator 默认记 'agent'。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, req.token)
+        if not me:
+            return JSONResponse(status_code=401, content={"error": "未登录或会话过期"})
+        order = app.state.auth_conn.execute(
+            "SELECT status FROM transfer_orders WHERE id=? AND user_id=?",
+            (req.order_id, me["user_id"])).fetchone()
+        if not order:
+            return JSONResponse(status_code=404, content={"error": "订单不存在"})
+        if order["status"] == "scheduled":
+            return JSONResponse(status_code=400,
+                                content={"error": "定时转账未到期,到期后才可确认"})
+        if order["status"] != "pending_confirm":
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"订单状态为 {order['status']},不可确认"})
+        if not auth_mod.verify_pay_password(app.state.auth_conn,
+                                            me["user_id"], req.pay_password):
+            return JSONResponse(status_code=400, content={"error": "支付密码不正确"})
+        try:
+            svc = LedgerService(app.state.auth_conn, user_id=me["user_id"])
+            done = svc.confirm_transfer_order(req.order_id)
+        except LedgerError as e:
+            return JSONResponse(status_code=400, content={"error": str(e)})
+        return {"ok": True, "order_id": req.order_id, "status": done["status"]}
 
     @app.get("/api/threads")
     async def threads(limit: int = 100, token: str | None = None) -> dict:

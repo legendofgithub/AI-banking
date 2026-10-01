@@ -15,6 +15,7 @@ import { DataStreamHandler } from "./data-stream-handler";
 import { submitEditedMessage } from "./message-editor";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
+import { PendingTransferToast } from "./pending-transfer-toast";
 import { ReminderBanner } from "./reminder-banner";
 
 export function ChatShell() {
@@ -108,6 +109,9 @@ export function ChatShell() {
 
           {/* 到期提醒入口(挂载时查一次;横幅文本可一键发给助手处理) */}
           <ReminderBanner />
+
+          {/* 悬空转账强制提醒(右下角,无法关闭;确认完自动消失) */}
+          <PendingTransferToast />
 
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background md:rounded-tl-[12px] md:border-t md:border-l md:border-border/40">
             <Messages
