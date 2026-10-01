@@ -53,7 +53,8 @@ data/         运行库 bank.db 等(不入库,可重播种)
 
 ## 环境坑速查
 
-- 裸 pip 坏;GitHub 直连不通(git 全局代理配了无效键 `https.proxy`,要用先修)。
+- 裸 pip 坏;GitHub 直连已通(2026-10-01 修:删过无效代理键 `https.proxy`;若日后又断,
+  先看 Clash/FlClash 是否开着、`http.proxy` 是否指向活端口,再考虑镜像)。
 - `pnpm install` 必须加 `--registry=https://registry.npmmirror.com`。
 - 重播种(重置演示数据)前先停占用 bank.db 的服务(Windows 下库文件被占用)。
 - ZCode 内嵌浏览器(IAB)点按钮常超时:验证用 `elementFromPoint` 确认可点后,
