@@ -16,6 +16,9 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *                               费率/锁定期/风险/付款账户 或 持仓/估值/费用/到手)
  *   data-card-confirmation      卡片确认卡(kind=apply|limits|status;card=card_id/
  *                               尾号/类型/当前限额或状态/目标值;挂失加红字警示)
+ *   data-subscription-list      订阅/代扣总览卡(逐项金额/下次扣费/年化+取消入口;
+ *                               配套后台接入中,先经 /preview/subscriptions 演示)
+ *   data-subscription-cancel    取消代扣确认卡(金色闸门,支付密码核验)
  *   data-ask-slot               缺槽提示
  *   data-gate-pending           本轮停在人工闸门
  * 闸门答复 = 把「确认/取消」作为下一条用户消息发出(后端自动作为 resume 值恢复执行)。
@@ -276,9 +279,12 @@ function TransferCard({ data }: { data: TransferCardData }) {
 
 function GenericConfirmCard({
   data,
+  labelMap,
   title,
 }: {
   data: Record<string, unknown>;
+  // 键名→中文标签;未命中的键原样显示(后端新增字段不至于丢信息)
+  labelMap?: Record<string, string>;
   title: string;
 }) {
   // pay_required 是闸门控制字段而非展示内容,不渲染成键值行
@@ -293,10 +299,10 @@ function GenericConfirmCard({
     <GoldCard title={title}>
       <div className="flex flex-col gap-1.5">
         {entries.map(([k, v]) => (
-          <Row key={k} label={k} value={String(v)} />
+          <Row key={k} label={labelMap?.[k] ?? k} value={String(v)} />
         ))}
       </div>
-      <ConfirmButtons />
+      <ConfirmButtons payRequired={data.pay_required === true} />
     </GoldCard>
   );
 }
@@ -567,6 +573,294 @@ function ContactChoices({
   );
 }
 
+/* AA 收款确认卡(定制版):GenericConfirmCard 会把 participants 数组整行丢掉、
+ * 剩余字段直出英文键名(title/total_yuan),这里换成中文标签+参与者明细。 */
+const SETTLE_LABELS: Record<string, string> = {
+  bill_id: "账单编号",
+  contact_name: "结算成员",
+  share_yuan: "分摊金额",
+  title: "账单名称",
+};
+
+interface SplitCardData {
+  bill_id?: number;
+  participants?: { name?: string; share_yuan?: string }[];
+  pay_required?: boolean;
+  title?: string;
+  total_yuan?: string;
+}
+
+function SplitCard({ data }: { data: SplitCardData }) {
+  return (
+    <GoldCard title="AA 收款确认">
+      <div className="flex flex-col gap-1.5">
+        <Row label="账单名称" value={data.title} />
+        <Row
+          label="总金额"
+          value={<span className="text-base">¥{data.total_yuan}</span>}
+        />
+        <Row label="账单编号" value={data.bill_id} />
+      </div>
+      {data.participants?.length ? (
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-xs text-muted-foreground">参与人分摊</div>
+          {data.participants.map((p) => (
+            <div
+              className="flex justify-between gap-4 rounded-md bg-amber-100/40 px-2 py-1 text-[13px] dark:bg-amber-900/20"
+              key={`${p.name}-${p.share_yuan}`}
+            >
+              <span className="text-foreground">{p.name}</span>
+              <span className="font-medium text-foreground">
+                ¥{p.share_yuan}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <ConfirmButtons payRequired={data.pay_required === true} />
+    </GoldCard>
+  );
+}
+
+/*
+ * 订阅/代扣场景部件(赛题六场景最后一个;前端先行,配套后台接入前用
+ * /preview/subscriptions 假数据演示,字段结构与将来编排层输出对齐):
+ *   data-subscription-list   订阅总览卡:逐项金额/下次扣费/年化 + 一键取消入口
+ *   data-subscription-cancel 取消代扣确认卡:金色闸门,需支付密码
+ */
+export interface SubscriptionItem {
+  amount_yuan?: string;
+  annual_yuan?: string;
+  category?: string;
+  merchant_name?: string;
+  next_charge_date?: string;
+  note?: string;
+  period_text?: string;
+}
+
+interface SubscriptionListData {
+  annual_total_yuan?: string;
+  hint?: string;
+  items?: SubscriptionItem[];
+  monthly_total_yuan?: string;
+}
+
+interface SubscriptionCancelData extends SubscriptionItem {
+  confirm_hint?: string;
+  pay_required?: boolean;
+}
+
+/* 单条订阅行(提取成组件:循环里的 onClick 需要各自的稳定回调) */
+function SubscriptionRow({
+  disabled,
+  item,
+  onCancel,
+}: {
+  disabled: boolean;
+  item: SubscriptionItem;
+  onCancel: (item: SubscriptionItem) => void;
+}) {
+  const handleClick = useCallback(() => onCancel(item), [item, onCancel]);
+  return (
+    <div className="rounded-xl border border-amber-200/60 bg-white/60 p-2.5 dark:border-amber-500/20 dark:bg-amber-950/20">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[13px] font-medium text-foreground">
+            {item.merchant_name}
+          </span>
+          {item.category ? (
+            <span className="shrink-0 rounded-full bg-amber-100/80 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+              {item.category}
+            </span>
+          ) : null}
+        </div>
+        <span className="shrink-0 text-[13px] font-semibold text-foreground">
+          ¥{item.amount_yuan}
+          <span className="text-[11px] font-normal text-muted-foreground">
+            /{item.period_text ?? "期"}
+          </span>
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+        <span>
+          下次扣费 {item.next_charge_date ?? "—"} · 年化 ¥
+          {item.annual_yuan ?? "—"}
+        </span>
+        <button
+          className="shrink-0 rounded-md border border-amber-300/70 px-2 py-0.5 text-[11px] text-amber-700 transition hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-500/40 dark:text-amber-300 dark:hover:bg-amber-900/30"
+          disabled={disabled}
+          onClick={handleClick}
+          type="button"
+        >
+          取消代扣
+        </button>
+      </div>
+      {item.note ? (
+        <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+          {item.note}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* 卡体(与聊天上下文无关的部分):列表 + 合计 */
+function SubscriptionListBody({
+  data,
+  disabled,
+  onCancel,
+}: {
+  data: SubscriptionListData;
+  disabled: boolean;
+  onCancel: (item: SubscriptionItem) => void;
+}) {
+  const items = data.items ?? [];
+  return (
+    <GoldCard title="订阅/代扣总览">
+      <div className="flex flex-col gap-2">
+        {items.map((item) => (
+          <SubscriptionRow
+            disabled={disabled}
+            item={item}
+            key={item.merchant_name}
+            onCancel={onCancel}
+          />
+        ))}
+      </div>
+      <div className="mt-2.5 flex flex-col gap-1 border-t border-amber-200/60 pt-2 dark:border-amber-500/20">
+        <Row
+          label="本月合计"
+          value={<span className="text-base">¥{data.monthly_total_yuan}</span>}
+        />
+        <Row label="年化合计" value={`¥${data.annual_total_yuan ?? "—"}`} />
+      </div>
+      {data.hint ? (
+        <div className="mt-2 text-xs text-muted-foreground">{data.hint}</div>
+      ) : null}
+    </GoldCard>
+  );
+}
+
+/* 聊天模式外壳:取消入口 = 把意图作为下一条用户消息发出(需聊天上下文,
+ * 与其它闸门卡同规则) */
+function SubscriptionListChat({ data }: { data: SubscriptionListData }) {
+  const { answered, busy, reply } = useGateReply();
+  const handleCancel = useCallback(
+    (item: SubscriptionItem) =>
+      reply(`取消${item.merchant_name ?? ""}的自动扣费`),
+    [reply]
+  );
+  return (
+    <SubscriptionListBody
+      data={data}
+      disabled={answered || busy}
+      onCancel={handleCancel}
+    />
+  );
+}
+
+export function SubscriptionListCard({
+  data,
+  onPickCancel,
+}: {
+  data: SubscriptionListData;
+  /* 演示页注入的本地回调;不传(生产)=把「取消 XX 的自动扣费」作为
+   * 下一条用户消息发出,由编排层接管。传了则完全不碰聊天上下文
+   * (演示页没有 ActiveChatProvider,hook 一调就 throw)。 */
+  onPickCancel?: (item: SubscriptionItem) => void;
+}) {
+  if (onPickCancel) {
+    return (
+      <SubscriptionListBody
+        data={data}
+        disabled={false}
+        onCancel={onPickCancel}
+      />
+    );
+  }
+  return <SubscriptionListChat data={data} />;
+}
+
+/* 取消代扣确认卡:默认走聊天闸门(ConfirmButtons);演示页传 onResolve
+ * 时切换为本地交互(自持密码框,不依赖 useChat 上下文)。 */
+export function SubscriptionCancelCard({
+  data,
+  onResolve,
+}: {
+  data: SubscriptionCancelData;
+  /* 本地模式回调:确认传 6 位密码,取消传 "cancel" */
+  onResolve?: (answer: string) => void;
+}) {
+  const [payPassword, setPayPassword] = useState("");
+  const payReady = /^\d{6}$/.test(payPassword);
+  const handleLocalConfirm = useCallback(() => {
+    if (payReady) {
+      onResolve?.(payPassword);
+    }
+  }, [onResolve, payPassword, payReady]);
+  const handleLocalCancel = useCallback(
+    () => onResolve?.("cancel"),
+    [onResolve]
+  );
+  const handleLocalChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    setPayPassword(e.target.value.replace(/\D/g, "").slice(0, 6));
+  }, []);
+  const localControls = onResolve ? (
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+      <input
+        aria-label="支付密码"
+        className="h-8 w-36 rounded-lg border border-amber-300/70 bg-white/80 px-2.5 text-sm tracking-[0.35em] text-foreground outline-none transition placeholder:text-xs placeholder:tracking-normal placeholder:text-muted-foreground focus:border-amber-500 dark:border-amber-500/40 dark:bg-amber-950/40"
+        inputMode="numeric"
+        maxLength={6}
+        onChange={handleLocalChange}
+        placeholder="支付密码"
+        type="password"
+        value={payPassword}
+      />
+      <button
+        className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={!payReady}
+        onClick={handleLocalConfirm}
+        type="button"
+      >
+        确认取消
+      </button>
+      <button
+        className="rounded-lg border border-border/60 px-4 py-1.5 text-sm text-muted-foreground transition hover:bg-muted"
+        onClick={handleLocalCancel}
+        type="button"
+      >
+        取消
+      </button>
+    </div>
+  ) : (
+    <ConfirmButtons payRequired={data.pay_required !== false} />
+  );
+  return (
+    <GoldCard title="取消代扣确认">
+      <div className="flex flex-col gap-1.5">
+        <Row label="商户" value={data.merchant_name} />
+        <Row label="分类" value={data.category} />
+        <Row
+          label="每期扣费"
+          value={`¥${data.amount_yuan ?? "—"} /${data.period_text ?? "期"}`}
+        />
+        <Row label="下次扣费" value={data.next_charge_date} />
+        <Row label="取消后年省" value={`¥${data.annual_yuan ?? "—"}`} />
+      </div>
+      {data.note ? (
+        <div className="mt-1 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+          {data.note}
+        </div>
+      ) : null}
+      {localControls}
+      <div className="mt-2 text-xs text-muted-foreground">
+        {data.confirm_hint ?? "取消后代扣协议立即生效终止,已有会员期不受影响"}
+      </div>
+    </GoldCard>
+  );
+}
+
 const SLOT_LABELS: Record<string, string> = {
   action: "想办的业务",
   actions: "要准备的东西",
@@ -620,19 +914,23 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
     return <TransferCard data={(data ?? {}) as TransferCardData} />;
   }
   if (type === "data-split-confirmation") {
-    return (
-      <GenericConfirmCard
-        data={(data ?? {}) as Record<string, unknown>}
-        title="AA 收款确认"
-      />
-    );
+    return <SplitCard data={(data ?? {}) as SplitCardData} />;
   }
   if (type === "data-settle-confirmation") {
     return (
       <GenericConfirmCard
         data={(data ?? {}) as Record<string, unknown>}
+        labelMap={SETTLE_LABELS}
         title="AA 结算确认"
       />
+    );
+  }
+  if (type === "data-subscription-list") {
+    return <SubscriptionListCard data={(data ?? {}) as SubscriptionListData} />;
+  }
+  if (type === "data-subscription-cancel") {
+    return (
+      <SubscriptionCancelCard data={(data ?? {}) as SubscriptionCancelData} />
     );
   }
   if (type === "data-contact-choices") {
