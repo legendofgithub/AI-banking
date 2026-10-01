@@ -42,7 +42,10 @@ export function SidebarUserNav({ user }: { user: User }) {
   // 否则保持 Guest——右上角登录入口由 chat-header 负责。
   const [bankNickname, setBankNickname] = useState("");
   useEffect(() => {
-    if (typeof window !== "undefined" && window.localStorage.getItem("bank-token")) {
+    if (
+      typeof window !== "undefined" &&
+      window.localStorage.getItem("bank-token")
+    ) {
       setBankNickname(window.localStorage.getItem("bank-nickname") ?? "");
     }
   }, []);
@@ -88,6 +91,7 @@ export function SidebarUserNav({ user }: { user: User }) {
               </SidebarMenuButton>
             ) : (
               <SidebarMenuButton
+                aria-label="账户菜单"
                 className="h-8 px-2 rounded-lg bg-transparent text-sidebar-foreground/70 transition-colors duration-150 hover:text-sidebar-foreground data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                 data-testid="user-nav-button"
               >
