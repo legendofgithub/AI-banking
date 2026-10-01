@@ -1,0 +1,11 @@
+{
+  "_comment": "仿真样本：仿照天天基金实时估值接口 https://fundgz.1234567.com.cn/js/{code}.js 的原始返回（JSONP 去壳后）。字段名与真实接口逐字一致：fundcode/name/jzrq/dwjz/gsz/gszzl/gztime。真实接口只覆盖股/混基金，货基七日年化见 eastmoney_moneyfund.sample.json。演示用，数值均为编造。",
+  "_endpoint": "GET https://fundgz.1234567.com.cn/js/{fundcode}.js",
+  "_as_of": "2026-09-27T15:00:00+08:00",
+  "quotes": [
+    {"fundcode": "005827", "name": "易方达蓝筹精选混合", "jzrq": "2026-09-26", "dwjz": "1.8421", "gsz": "1.8512", "gszzl": "0.49", "gztime": "2026-09-27 15:00"},
+    {"fundcode": "110022", "name": "易方达消费行业股票", "jzrq": "2026-09-26", "dwjz": "3.9615", "gsz": "3.9740", "gszzl": "0.32", "gztime": "2026-09-27 15:00"},
+    {"fundcode": "270042", "name": "广发纳斯达克100指数(QDII)", "jzrq": "2026-09-26", "dwjz": "2.3188", "gsz": "2.3301", "gszzl": "0.49", "gztime": "2026-09-27 15:00"},
+    {"fundcode": "000216", "name": "华安黄金易(ETF联接)A", "jzrq": "2026-09-26", "dwjz": "1.6402", "gsz": "1.6475", "gszzl": "0.45", "gztime": "2026-09-27 15:00"}
+  ]
+}
