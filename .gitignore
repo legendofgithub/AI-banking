@@ -1,0 +1,33 @@
+# ===== Python =====
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ===== 前端 =====
+webui/node_modules/
+webui/.next/
+webui/out/
+
+# ===== 密钥(绝不入库) =====
+webui/.env.local
+.env
+.env.local
+
+# ===== 运行时数据库/数据(演示库可随时重播种) =====
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# ===== 日志与临时产物 =====
+scripts_eval_*.log
+scripts_eval_*.stderr
+*.log
+.tmp_notes/
+.playwright-mcp/
+nul
+
+# ===== 系统 =====
+Thumbs.db
+.DS_Store

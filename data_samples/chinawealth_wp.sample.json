@@ -1,0 +1,59 @@
+{
+  "_comment": "仿真样本：仿照中国理财网(银行业理财登记托管中心 chinawealth.com.cn)产品披露的字段结构——登记编码(C开头)/发行机构/产品类型/风险等级/业绩比较基准(区间型)/起购/募集期/期限。该平台无公开 API，生产接入需合规采购或对接受让数据；字段名以官网披露页为准做了常见英文化。演示用，机构与数值均为编造。",
+  "_endpoint": "中国理财网理财产品信息披露(生产走合规数据采购/登记托管中心对接)",
+  "_as_of": "2026-09-27",
+  "products": [
+    {
+      "registration_code": "C1089726000117",
+      "product_name": "微众银行周周升90天定开理财",
+      "issuer": "微众银行",
+      "product_type": "固定收益类",
+      "risk_level": "二级(中低)",
+      "benchmark": "2.30%-2.80%(区间型)",
+      "benchmark_note": "业绩比较基准不构成收益承诺，随市场波动",
+      "min_subscribe_yuan": 1000,
+      "raise_start": "2026-09-21", "raise_end": "2026-09-28",
+      "term": "90天(定开)", "establish_date": "2026-09-29", "maturity_date": "2026-12-28",
+      "status": "募集中"
+    },
+    {
+      "registration_code": "C1089726000218",
+      "product_name": "招银理财招睿日盈180天持有(美元债)",
+      "issuer": "招银理财",
+      "product_type": "固定收益类",
+      "risk_level": "二级(中低)",
+      "benchmark": "2.60%-3.20%(区间型)",
+      "benchmark_note": "业绩比较基准不构成收益承诺，随市场波动",
+      "min_subscribe_yuan": 1000,
+      "raise_start": "2026-09-14", "raise_end": "2026-09-30",
+      "term": "最短持有180天", "establish_date": "2026-10-01",
+      "status": "存续期"
+    },
+    {
+      "registration_code": "C1089726000325",
+      "product_name": "工银理财恒睿365天挂钩中债指数",
+      "issuer": "工银理财",
+      "product_type": "混合类",
+      "risk_level": "三级(中)",
+      "benchmark": "2.90%-3.90%(挂钩中债-新综合指数,区间型)",
+      "benchmark_note": "业绩比较基准不构成收益承诺，随市场波动",
+      "min_subscribe_yuan": 100,
+      "raise_start": "2026-09-07", "raise_end": "2026-10-07",
+      "term": "365天", "establish_date": "2026-10-08", "maturity_date": "2027-10-07",
+      "status": "存续期"
+    },
+    {
+      "registration_code": "C1089726000431",
+      "product_name": "兴银理财稳利60天1元起购",
+      "issuer": "兴银理财",
+      "product_type": "固定收益类",
+      "risk_level": "一级(低)",
+      "benchmark": "1.90%-2.30%(区间型)",
+      "benchmark_note": "业绩比较基准不构成收益承诺，随市场波动",
+      "min_subscribe_yuan": 1,
+      "raise_start": "2026-09-24", "raise_end": "2026-09-30",
+      "term": "60天滚存", "establish_date": "2026-10-01",
+      "status": "募集中"
+    }
+  ]
+}

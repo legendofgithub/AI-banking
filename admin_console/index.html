@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Banking · 管理后台</title>
+<style>
+/* ================= 基础变量与全局 ================= */
+:root{
+  --bg:#0f1115;            /* 页面底色 */
+  --panel:#1a1d24;         /* 卡片底色 */
+  --panel2:#20242e;        /* 卡片内嵌块/按钮底色 */
+  --line:#262b36;          /* 卡片描边 */
+  --line2:#222732;         /* 表格行分隔线 */
+  --text:#e8ebf2;
+  --muted:#8b93a3;
+  --faint:#6b7280;
+  --gold:#d8b45a;          /* 金色点缀 */
+  --gold-soft:#e6c87e;
+  --blue:#5aa2ea;          /* 蓝色点缀 */
+  --blue-soft:#7ab5f5;
+  --green:#3ecf8e;
+  --red:#ef5b6a;
+  --amber:#e8a84c;
+  --mono:"Cascadia Code","SF Mono",Consolas,"Courier New",monospace; /* 等宽数字字体 */
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.65 "PingFang SC","Microsoft YaHei","Segoe UI",Arial,sans-serif;min-height:100vh}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#2b3140;border-radius:5px}
+::-webkit-scrollbar-track{background:transparent}
+button{font-family:inherit}
+
+/* ================= 顶栏 ================= */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 28px;border-bottom:1px solid var(--line2);background:linear-gradient(180deg,#151923,#0f1115)}
+.brand{display:flex;align-items:center;gap:14px}
+.brand h1{font-size:19px;font-weight:700;letter-spacing:.4px}
+.brand .sub{color:var(--muted);font-size:12px;letter-spacing:3px;margin-top:2px}
+.top-actions{display:flex;align-items:center;gap:10px}
+.nick{display:inline-flex;align-items:center;gap:7px;padding:5px 14px;border:1px solid rgba(216,180,90,.4);border-radius:999px;color:var(--gold-soft);font-size:13px;background:rgba(216,180,90,.07);white-space:nowrap}
+
+/* ================= 页签 ================= */
+.tabs{display:flex;flex-wrap:wrap;gap:2px;padding:0 24px;background:#12151c;border-bottom:1px solid var(--line2)}
+.tab{appearance:none;border:none;background:transparent;color:var(--muted);font-size:14px;padding:12px 15px;cursor:pointer;position:relative;transition:color .15s}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--gold-soft);font-weight:600}
+.tab.active::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--gold),rgba(216,180,90,.15))}
+
+/* ================= 主区与面板 ================= */
+main{padding:20px 28px 70px;max-width:1560px;margin:0 auto}
+.panel{display:none}
+.panel.active{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* ================= 两级视图（首页用户总览 / 个人管理台） ================= */
+.view{display:none}
+.view.active{display:block;animation:fade .18s ease}
+[hidden]{display:none !important} /* .nick 等自带 display 的元素也能被隐藏 */
+
+/* 首页：页头（副标题 + 注册用户数统计） */
+.page-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.page-title{font-size:17px;font-weight:700;letter-spacing:.3px}
+.page-sub{color:var(--muted);font-size:13px}
+
+/* 首页：注册时间筛选按钮组（分段选择，选中态金色高亮） */
+.seg{display:inline-flex;flex-wrap:wrap;gap:5px}
+.seg-btn{appearance:none;border:1px solid #2f3646;background:#161a23;color:var(--muted);padding:5px 14px;border-radius:999px;cursor:pointer;font-size:13px;line-height:1.5;font-family:inherit;transition:color .12s,border-color .12s,background .12s}
+.seg-btn:hover{color:var(--text);border-color:#465064}
+.seg-btn.active{color:var(--gold-soft);border-color:rgba(216,180,90,.55);background:rgba(216,180,90,.10);font-weight:600}
+
+/* 个人台：面包屑栏（位于页签区上方） */
+.crumbs{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 28px;background:#12151c;border-bottom:1px solid var(--line2);font-size:13px}
+.crumbs .path{color:var(--muted)}
+.crumbs .path strong{color:var(--gold-soft);font-weight:600}
+.crumbs .path .idpart{color:var(--faint)}
+
+/* 首页：用户行整行可双击进入 */
+tr.usr td{cursor:pointer}
+
+/* ================= 卡片容器 ================= */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:16px 18px;margin-bottom:16px}
+.card>h3{font-size:14px;font-weight:600;color:#cdd5e4;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card>h3::before{content:"";width:3px;height:14px;border-radius:2px;background:var(--gold);flex:none}
+.head-note{margin-left:auto;font-size:12px;color:var(--faint);font-weight:400;letter-spacing:0}
+
+/* ================= 统计卡 / 账户卡 ================= */
+.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:13px 16px}
+.stat .k{color:var(--muted);font-size:12px;margin-bottom:5px}
+.stat .v{font-size:20px;font-weight:700;font-family:var(--mono);color:var(--text);word-break:break-all}
+.acct-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(235px,1fr));gap:12px}
+.acct{background:var(--panel2);border:1px solid #2b3140;border-radius:10px;padding:13px 15px}
+.acct-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.acct-name{font-weight:600}
+.tag{display:inline-block;font-size:11px;color:var(--muted);border:1px solid #2f3646;border-radius:4px;padding:0 7px;line-height:1.8;background:#191d26;white-space:nowrap}
+.acct-bal{font-size:21px;font-weight:700;color:var(--gold-soft);margin:7px 0 2px}
+.acct-sub{font-size:12px}
+
+/* ================= 表格 ================= */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--line2);border-radius:9px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{color:var(--muted);font-weight:600;font-size:12px;text-align:left;padding:9px 12px;background:#161a23;border-bottom:1px solid #2b3140;white-space:nowrap;letter-spacing:.03em}
+tbody td{padding:8px 12px;border-bottom:1px solid var(--line2);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:#1b1f2a}
+.num,.mono,.ts{font-family:var(--mono)}
+.num{text-align:right;white-space:nowrap}
+.mono{white-space:nowrap}
+.ts{white-space:nowrap;font-size:12px;color:#a9b1c2}
+.up{color:#4ddc9a}
+.down{color:#f2838f}
+.flat{color:#cdd5e4}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+td.empty{text-align:center;color:var(--faint);padding:28px 0}
+.refcell{min-width:96px}
+.ops{display:flex;gap:6px;flex-wrap:wrap}
+
+/* 明细展开行（功能修改 - JSON） */
+.detail-row td{background:#141822}
+.detail-row:hover td{background:#141822}
+.detail-row pre{margin:10px 14px;padding:10px 13px;background:#10131a;border:1px solid #232833;border-radius:8px;font-family:var(--mono);font-size:12px;line-height:1.55;color:#9fb3d0;white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto}
+.link{background:none;border:none;color:var(--blue-soft);cursor:pointer;font-size:12px;padding:0}
+.link:hover{text-decoration:underline}
+
+/* ================= 徽标 ================= */
+.badge{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;line-height:1.8;color:#aeb6c6;background:#232833;border:1px solid #2f3646;white-space:nowrap;vertical-align:middle}
+.b-agent{color:#7ab5f5;background:rgba(90,162,234,.10);border-color:rgba(90,162,234,.4)}
+.b-admin{color:#e6c87e;background:rgba(216,180,90,.10);border-color:rgba(216,180,90,.45)}
+.cat-contact{color:#7ab5f5;background:rgba(90,162,234,.10);border-color:rgba(90,162,234,.4)}
+.cat-card{color:#63cfd6;background:rgba(99,207,214,.10);border-color:rgba(99,207,214,.4)}
+.cat-wealth{color:#e6c87e;background:rgba(216,180,90,.10);border-color:rgba(216,180,90,.45)}
+.cat-linkage{color:#b9a4f2;background:rgba(151,124,240,.12);border-color:rgba(151,124,240,.4)}
+.cat-aa{color:#5fd0a2;background:rgba(62,207,142,.10);border-color:rgba(62,207,142,.4)}
+.cat-transfer{color:#f0a26e;background:rgba(240,160,90,.10);border-color:rgba(240,160,90,.4)}
+.cat-admin{color:#e58ba0;background:rgba(239,91,106,.10);border-color:rgba(239,91,106,.4)}
+.st-ok{color:#4ddc9a;background:rgba(62,207,142,.10);border-color:rgba(62,207,142,.4)}
+.st-locked{color:#e8b45f;background:rgba(232,168,76,.10);border-color:rgba(232,168,76,.4)}
+.st-lost{color:#f08a95;background:rgba(239,91,106,.10);border-color:rgba(239,91,106,.45)}
+.st-done{color:#7ab5f5;background:rgba(90,162,234,.10);border-color:rgba(90,162,234,.4)}
+.st-cancel{color:#8b93a3;background:#222733;border-color:#2f3646}
+.os-pending{color:#e8b45f;background:rgba(232,168,76,.10);border-color:rgba(232,168,76,.4)}
+.os-sched{color:#7ab5f5;background:rgba(90,162,234,.10);border-color:rgba(90,162,234,.4)}
+.os-exec{color:#4ddc9a;background:rgba(62,207,142,.10);border-color:rgba(62,207,142,.4)}
+.risk-1{color:#4ddc9a;background:rgba(62,207,142,.10);border-color:rgba(62,207,142,.4)}
+.risk-2{color:#8fd48a;background:rgba(120,200,120,.10);border-color:rgba(120,200,120,.4)}
+.risk-3{color:#e8b45f;background:rgba(232,168,76,.10);border-color:rgba(232,168,76,.4)}
+.risk-4{color:#f09a6e;background:rgba(240,150,90,.10);border-color:rgba(240,150,90,.4)}
+.risk-5{color:#f06e7e;background:rgba(239,91,106,.12);border-color:rgba(239,91,106,.45)}
+
+/* ================= 按钮 / 表单 ================= */
+.btn{appearance:none;border:1px solid #2f3646;background:var(--panel2);color:#cdd5e4;padding:6px 14px;border-radius:7px;cursor:pointer;font-size:13px;line-height:1.5;transition:filter .12s,border-color .12s}
+.btn:hover{border-color:#465064;filter:brightness(1.12)}
+.btn.primary{background:rgba(90,162,234,.13);border-color:rgba(90,162,234,.5);color:var(--blue-soft)}
+.btn.gold{background:rgba(216,180,90,.12);border-color:rgba(216,180,90,.5);color:var(--gold-soft)}
+.btn.danger{background:rgba(239,91,106,.10);border-color:rgba(239,91,106,.45);color:#f2838f}
+.btn.warn{background:rgba(232,168,76,.10);border-color:rgba(232,168,76,.45);color:#e8b45f}
+.btn.mini{padding:2px 10px;font-size:12px;border-radius:6px}
+.btn.icon{display:inline-flex;align-items:center;gap:6px}
+.toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:12px}
+.toolbar label{font-size:13px;color:var(--muted);display:inline-flex;align-items:center;gap:7px}
+.toolbar .hint{margin-left:auto;font-size:12px;color:var(--faint)}
+input,select,textarea{background:#12151c;border:1px solid #2c3242;color:var(--text);border-radius:7px;padding:7px 10px;font-size:13px;outline:none;font-family:inherit}
+input:focus,select:focus,textarea:focus{border-color:var(--blue)}
+input.mono{font-family:var(--mono)}
+.form-row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+.field{display:flex;flex-direction:column;gap:5px}
+.field>label{font-size:12px;color:var(--muted)}
+.form-col{display:flex;flex-direction:column;gap:14px;max-width:460px}
+.form-col .field>input,.form-col .field>select{width:100%}
+.form-note{font-size:12px;color:var(--faint);margin-bottom:14px}
+
+/* ================= Toast（右上角，3 秒消失） ================= */
+#toasts{position:fixed;top:16px;right:16px;z-index:999;display:flex;flex-direction:column;gap:8px;max-width:380px}
+.toast{padding:10px 14px;border-radius:9px;font-size:13px;color:var(--text);background:var(--panel);border:1px solid;box-shadow:0 8px 24px rgba(0,0,0,.5);word-break:break-all;animation:slidein .18s ease}
+.toast.ok{border-color:rgba(62,207,142,.5)}
+.toast.err{border-color:rgba(239,91,106,.55)}
+.toast.out{opacity:0;transform:translateX(10px);transition:all .3s}
+@keyframes slidein{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+
+<!-- ================= 顶栏：标题 + 副标题 + 当前昵称 + 全局刷新 ================= -->
+<header class="topbar">
+  <div class="brand">
+    <svg width="34" height="34" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="none" stroke="#d8b45a" stroke-width="1.4" opacity=".9"/>
+      <path d="M7.2 16.5 12 7.5l4.8 9" fill="none" stroke="#d8b45a" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="9" y1="13.4" x2="15" y2="13.4" stroke="#d8b45a" stroke-width="1.4" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <h1>AI Banking · 管理后台</h1>
+      <p class="sub">零 LLM · 双库留痕</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span class="nick" id="nickChip" hidden>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.6 3.7-5.4 7-5.4s6.2 1.8 7 5.4"/></svg>
+      <span id="nickText">当前用户：—</span>
+    </span>
+    <button class="btn gold icon" id="btnRefresh" title="刷新当前页签数据">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+      刷新
+    </button>
+  </div>
+</header>
+
+<!-- ================= 第一级：首页 · 用户总览（默认视图） ================= -->
+<div id="viewUsers" class="view active">
+<main>
+  <div class="page-head">
+    <h2 class="page-title">用户总览</h2>
+    <p class="page-sub" id="usersTotal">共 — 位注册用户</p>
+  </div>
+  <div class="card">
+    <div class="toolbar">
+      <label>注册时间</label>
+      <div class="seg" id="withinSeg">
+        <button type="button" class="seg-btn" data-within="week">一周内新注册</button>
+        <button type="button" class="seg-btn" data-within="month">一月内</button>
+        <button type="button" class="seg-btn" data-within="quarter">三月内</button>
+        <button type="button" class="seg-btn" data-within="year">一年内</button>
+        <button type="button" class="seg-btn active" data-within="all">全部</button>
+      </div>
+      <button type="button" class="btn icon" id="btnUsersRefresh" title="重新拉取用户列表">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+        刷新
+      </button>
+      <span class="hint">双击用户行（或点行内「进入管理」）进入该用户的管理台</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>用户ID</th><th>姓名</th><th>手机号</th><th>注册时间</th>
+          <th class="num">账户数</th><th class="num">总余额(元)</th><th class="num">联系人数</th>
+          <th class="num">订单数</th><th class="num">流水笔数(业务库)</th>
+          <th class="num">双库记录数(资金流水+功能修改)</th><th>最近活跃时间</th><th>操作</th>
+        </tr></thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+</div>
+
+<!-- ================= 第二级：个人管理台（9 页签原样保留） ================= -->
+<div id="viewConsole" class="view">
+<!-- 面包屑：返回用户列表 + 当前用户标识 -->
+<div class="crumbs">
+  <button type="button" class="btn" id="btnBackList">← 返回用户列表</button>
+  <span class="path">用户总览 / <strong id="crumbNick">—</strong><span class="idpart">（ID:<span id="crumbId">—</span>）</span></span>
+</div>
+
+<!-- ================= 页签导航（9 个） ================= -->
+<nav class="tabs" id="tabNav">
+  <button class="tab active" data-tab="overview">总览</button>
+  <button class="tab" data-tab="money">资金流水</button>
+  <button class="tab" data-tab="change">功能修改</button>
+  <button class="tab" data-tab="contacts">联系人</button>
+  <button class="tab" data-tab="cards">卡片</button>
+  <button class="tab" data-tab="wealth">理财</button>
+  <button class="tab" data-tab="plans">联动计划</button>
+  <button class="tab" data-tab="orders">转账订单</button>
+  <button class="tab" data-tab="adjust">调账</button>
+</nav>
+
+<main>
+<!-- ================= 1. 总览 ================= -->
+<section id="tab-overview" class="panel active">
+  <div class="card">
+    <h3>注册信息<span class="head-note">账号脱敏展示（JR/T 0171 C2 级）</span></h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>注册方式</th><th>账号</th><th>真实姓名</th><th>身份证（脱敏）</th><th>邮箱（脱敏）</th><th>注册时间</th><th>最近登录</th></tr></thead>
+        <tbody id="regBody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="stat-grid">
+    <div class="stat"><div class="k">当前用户</div><div class="v" id="ovNick">—</div></div>
+    <div class="stat"><div class="k">今日动钱笔数</div><div class="v" id="ovTodayCount">—</div></div>
+    <div class="stat"><div class="k">今日净额（元）</div><div class="v" id="ovTodayDelta">—</div></div>
+    <div class="stat"><div class="k">24h 修改记录数</div><div class="v" id="ovChange24">—</div></div>
+    <div class="stat"><div class="k">活跃联动计划数</div><div class="v" id="ovPlans">—</div></div>
+  </div>
+  <div class="card">
+    <h3>账户余额</h3>
+    <div class="acct-grid" id="ovAccounts"></div>
+  </div>
+  <div class="card">
+    <h3>待确认转账单</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>单号</th><th>收款人</th><th class="num">金额(元)</th><th>状态</th><th>创建时间</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody id="ovPendingBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>到期任务</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>任务ID</th><th>执行时间</th><th>任务内容</th></tr></thead>
+        <tbody id="ovDueBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 2. 资金流水（money_ledger 库视图） ================= -->
+<section id="tab-money" class="panel">
+  <div class="card">
+    <h3>资金流水<span class="head-note">数据源：money_ledger</span></h3>
+    <div class="toolbar">
+      <label>条数
+        <select id="moneyLimit">
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+        </select>
+      </label>
+      <span class="hint">核对链路：前端取 3000 元 → 此处应有一条 -3000.00 的 agent 流水，变动前/后余额随之减少</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>昵称</th><th>来源工具</th><th class="num">变动(元)</th><th class="num">变动前(元)</th><th class="num">变动后(元)</th><th>操作方</th><th>关联单号</th></tr></thead>
+        <tbody id="moneyBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 3. 功能修改（change_log 库视图） ================= -->
+<section id="tab-change" class="panel">
+  <div class="card">
+    <h3>功能修改记录<span class="head-note">数据源：change_log</span></h3>
+    <div class="toolbar">
+      <label>类别
+        <select id="changeCategory">
+          <option value="">全部</option>
+          <option value="contact">联系人</option>
+          <option value="card">卡片</option>
+          <option value="wealth">理财</option>
+          <option value="linkage">联动</option>
+          <option value="aa">AA</option>
+          <option value="transfer">转账</option>
+          <option value="admin">管理</option>
+        </select>
+      </label>
+      <span class="hint">点击「查看」展开该条修改的明细 JSON；后端出现新类别时会自动补进下拉</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>昵称</th><th>类别</th><th>动作</th><th>对象</th><th>明细</th><th>操作方</th></tr></thead>
+        <tbody id="changeBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 4. 联系人 ================= -->
+<section id="tab-contacts" class="panel">
+  <div class="card">
+    <h3>新增联系人</h3>
+    <form id="contactForm" class="form-row" autocomplete="off">
+      <div class="field"><label for="cName">姓名 *</label><input id="cName" maxlength="50" placeholder="如：张三" required></div>
+      <div class="field"><label for="cPhone">手机号 *</label><input id="cPhone" class="mono" maxlength="20" placeholder="如：13800001111" required></div>
+      <div class="field"><label for="cNote">备注</label><input id="cNote" maxlength="200" placeholder="选填"></div>
+      <button type="submit" class="btn primary">新增联系人</button>
+    </form>
+  </div>
+  <div class="card">
+    <h3>联系人列表</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>姓名</th><th>手机号</th><th>关系</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody id="contactsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 5. 卡片 ================= -->
+<section id="tab-cards" class="panel">
+  <div class="card">
+    <h3>银行卡管理</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>卡号</th><th>类型</th><th>状态</th><th class="num">日限额(元)</th><th class="num">单笔限额(元)</th><th>操作</th></tr></thead>
+        <tbody id="cardsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 6. 理财 ================= -->
+<section id="tab-wealth" class="panel">
+  <div class="card">
+    <h3>理财产品</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>代码</th><th>名称</th><th>类型</th><th>风险</th><th class="num">业绩基准</th><th class="num">起购(元)</th></tr></thead>
+        <tbody id="productsBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>当前持仓</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>产品</th><th class="num">本金(元)</th><th class="num">估值(元)</th><th class="num">收益(元)</th><th>操作</th></tr></thead>
+        <tbody id="holdingsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 7. 联动计划 ================= -->
+<section id="tab-plans" class="panel">
+  <div class="card">
+    <h3>联动计划</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>计划</th><th>状态</th><th class="num">预算(元)</th><th>进度</th><th>锁定单状态</th><th>创建时间</th><th>操作</th></tr></thead>
+        <tbody id="plansBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 8. 转账订单 ================= -->
+<section id="tab-orders" class="panel">
+  <div class="card">
+    <h3>转账订单</h3>
+    <div class="toolbar">
+      <label>状态
+        <select id="orderStatus">
+          <option value="">全部</option>
+          <option value="pending_confirm">pending_confirm（待确认）</option>
+          <option value="scheduled">scheduled（已排程）</option>
+          <option value="executed">executed（已执行）</option>
+          <option value="cancelled">cancelled（已撤销）</option>
+          <option value="failed">failed（失败）</option>
+        </select>
+      </label>
+      <span class="hint">仅待确认 / 已排程状态的订单可撤销</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>单号</th><th>收款人</th><th class="num">金额(元)</th><th>状态</th><th>创建时间</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>订阅自动扣款</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>商户</th><th class="num">金额(元)</th><th class="num">周期(天)</th><th>下次扣款日</th><th>状态</th></tr></thead>
+        <tbody id="subsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 9. 调账（管理员工具） ================= -->
+<section id="tab-adjust" class="panel">
+  <div class="card">
+    <h3>调账工具（管理员）</h3>
+    <p class="form-note">直接调整账户余额：正数入账、负数扣减（如 -3000）。操作将写入 money_ledger 留痕，操作方记为 admin，请务必填写清晰原因。</p>
+    <form id="adjustForm" class="form-col" autocomplete="off">
+      <div class="field"><label for="adjAccount">账户</label><select id="adjAccount" required></select></div>
+      <div class="field"><label for="adjAmount">金额（元，可负数）</label><input id="adjAmount" class="mono" placeholder="如 -3000 或 500" required></div>
+      <div class="field"><label for="adjReason">调账原因 *</label><input id="adjReason" maxlength="200" placeholder="必填，如：冲正多扣手续费" required></div>
+      <div><button type="submit" class="btn gold">提交调账</button></div>
+    </form>
+  </div>
+</section>
+</main>
+</div><!-- /viewConsole -->
+
+<!-- Toast 容器（右上角） -->
+<div id="toasts"></div>
+
+<script>
+'use strict';
+/* =====================================================
+   AI Banking 管理后台（零 LLM，数据全部来自 REST API）
+   两级结构：首页（用户总览）→ 双击用户行进入个人管理台（9 页签）
+   结构：通用工具 → 徽标/行渲染助手 → 首页用户列表 → 各页签加载器
+        → 页签路由与两级视图切换 → 事件绑定与启动
+   ===================================================== */
+
+/* ---------------- 通用工具 ---------------- */
+const $ = (sel, el = document) => el.querySelector(sel);
+
+/** HTML 转义：所有动态文本插入页面前必须经过它 */
+function esc(v){
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+/** 金额格式化：千分位 + 两位小数；空/非法值显示 — */
+function money(v){
+  const n = Number(v);
+  if (v === null || v === undefined || v === '' || !isFinite(n)) return '—';
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** 带符号金额文本：正数加 +，负数自带 - */
+function signedMoney(v){
+  const n = Number(v);
+  if (v === null || v === undefined || v === '' || !isFinite(n)) return '—';
+  return (n > 0 ? '+' : '') + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** 变动单元格：红跌绿涨、带正负号、右对齐等宽 */
+function deltaHTML(v){
+  const n = Number(v);
+  if (v === null || v === undefined || v === '' || !isFinite(n)) return '<span class="muted">—</span>';
+  const cls = n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
+  return `<span class="num ${cls}">${signedMoney(n)}</span>`;
+}
+
+/** 时间展示：兼容 ISO 字符串（T / 毫秒 / Z / 时区偏移），统一截断为 yyyy-MM-dd HH:mm（去掉秒与时区） */
+function fmtTime(v){
+  if (v === null || v === undefined || v === '') return '—';
+  return String(v).replace('T', ' ').slice(0, 16);
+}
+
+/** 账号脱敏（前端兜底，后端 users 接口仍返回完整手机号）：
+    11 位手机号 → 前3****后4；邮箱 → 首字符***@域名；其余原样返回 */
+function maskId(v){
+  const s = String(v ?? '').trim();
+  if (!s) return '';
+  if (s.includes('@')){
+    const at = s.indexOf('@');
+    return s.slice(0, 1) + '***' + s.slice(at);
+  }
+  if (/^\d{11}$/.test(s)) return s.slice(0, 3) + '****' + s.slice(7);
+  return s;
+}
+
+/** 表格空态占位行 */
+function emptyRow(cols){ return `<tr><td colspan="${cols}" class="empty">暂无记录</td></tr>`; }
+
+/** 表格加载中占位行 */
+function loadingRow(cols){ return `<tr><td colspan="${cols}" class="empty">加载中…</td></tr>`; }
+
+/** toast 提示：type = ok（绿）| err（红），3 秒后自动消失 */
+function toast(msg, type = 'ok'){
+  const box = $('#toasts');
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type === 'err' ? 'err' : 'ok');
+  t.textContent = msg;
+  box.appendChild(t);
+  setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 320); }, 3000);
+}
+
+/** 统一请求入口：非 2xx 时解析 {"error": "..."} 并抛出中文原因 */
+async function api(path, opts = {}){
+  const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* 响应体可能为空 */ }
+  if (!res.ok){
+    // 业务拒绝统一 400 {"error":"..."}；user_id 不存在返回 404 {"detail":"用户 x 不存在"}
+    const msg = data ? (data.error || data.detail) : '';
+    throw new Error(msg || `请求失败（HTTP ${res.status}）`);
+  }
+  return data;
+}
+
+/* ---------------- 两级结构全局状态 ---------------- */
+let currentView = 'users';  // 当前视图：users = 首页用户总览；console = 个人管理台
+let currentUser = null;     // 个人台当前管理的用户：{user_id, nickname}
+const LS_USER_KEY = 'admin_current_user'; // localStorage：记住上次选中的用户
+
+/** 给接口路径追加当前用户的 user_id 查询参数（GET 与写接口均为 query 参数，非 body）
+    例外：/api/products 为全局产品库，调用处直接使用原始路径，不经过本函数 */
+function withUser(path){
+  if (!currentUser) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'user_id=' + encodeURIComponent(currentUser.user_id);
+}
+
+/** 页签加载器统一包一层：出错弹红色 toast，不打断页面 */
+function safe(loader){
+  return async (...args) => { try { await loader(...args); } catch (e) { toast(e.message, 'err'); } };
+}
+
+/** 纯金额字符串校验：-3000 / 500 / 12.5 */
+function isAmount(s){ return /^-?\d+(\.\d+)?$/.test(s); }
+
+/** 百分比展示：muted=true 时作为收益后缀弱化显示 */
+function pct(v, muted = false){
+  if (v === null || v === undefined || v === '') return muted ? '' : '—';
+  const s = String(v);
+  const txt = s.includes('%') ? s : s + '%';
+  return muted ? ` <span class="muted small">(${esc(txt)})</span>` : esc(txt);
+}
+
+/** change_log.detail 是 JSON 字符串，渲染时解析并美化；解析失败原样展示 */
+function prettyJSON(d){
+  if (d === null || d === undefined || d === '') return '(空)';
+  if (typeof d === 'object'){ try { return JSON.stringify(d, null, 2); } catch (e) { return String(d); } }
+  try { return JSON.stringify(JSON.parse(d), null, 2); } catch (e) { return String(d); }
+}
+
+/* ---------------- 徽标助手 ---------------- */
+function operatorBadge(op){
+  if (op === 'admin') return '<span class="badge b-admin">admin</span>';
+  if (op === 'agent') return '<span class="badge b-agent">agent</span>';
+  return op ? `<span class="badge">${esc(op)}</span>` : '<span class="muted">—</span>';
+}
+
+/* change_log 类别 → 中文标签（未知类别显示原始值 + 中性徽标） */
+const CAT_LABEL = { contact: '联系人', card: '卡片', wealth: '理财', linkage: '联动', aa: 'AA', transfer: '转账', admin: '管理' };
+function catBadge(c){
+  if (c === null || c === undefined || c === '') return '<span class="muted">—</span>';
+  const slug = String(c).trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  return `<span class="badge cat-${slug || 'x'}">${esc(CAT_LABEL[c] || c)}</span>`;
+}
+
+const CARD_STATUS = { active: ['正常', 'st-ok'], locked: ['已锁定', 'st-locked'], lost: ['已挂失', 'st-lost'] };
+function cardStatusBadge(s){
+  const m = CARD_STATUS[s];
+  return m ? `<span class="badge ${m[1]}">${m[0]}</span>` : `<span class="badge">${esc(s ?? '—')}</span>`;
+}
+
+const PLAN_STATUS = { active: ['进行中', 'st-ok'], done: ['已完成', 'st-done'], finished: ['已完成', 'st-done'], cancelled: ['已作废', 'st-cancel'], canceled: ['已作废', 'st-cancel'] };
+function planBadge(s){
+  const m = PLAN_STATUS[s];
+  return m ? `<span class="badge ${m[1]}">${m[0]}</span>` : `<span class="badge">${esc(s ?? '—')}</span>`;
+}
+
+const ORDER_STATUS = { pending_confirm: ['待确认', 'os-pending'], scheduled: ['已排程', 'os-sched'], executed: ['已执行', 'os-exec'], cancelled: ['已撤销', 'st-cancel'], failed: ['失败', 'st-lost'] };
+function orderBadge(s){
+  const m = ORDER_STATUS[s];
+  return m ? `<span class="badge ${m[1]}">${m[0]}</span>` : `<span class="badge">${esc(s ?? '—')}</span>`;
+}
+
+/** 风险等级 R1~R5 徽标，兼容数字 2 或字符串 "R2" */
+function riskBadge(v){
+  const n = parseInt(String(v ?? '').replace(/^R/i, ''), 10);
+  if (isNaN(n) || n < 1 || n > 5) return `<span class="badge">${esc(v ?? '—')}</span>`;
+  return `<span class="badge risk-${n}">R${n}</span>`;
+}
+
+/* ---------------- 行渲染助手 ---------------- */
+/** 转账订单行（总览待确认单与订单页共用），待确认/已排程可撤销 */
+function orderRow(o){
+  const canCancel = o.status === 'pending_confirm' || o.status === 'scheduled';
+  return `<tr>
+    <td class="mono">#${esc(o.id)}</td>
+    <td>${esc(o.to_name)}</td>
+    <td class="num">${money(o.amount_yuan)}</td>
+    <td>${orderBadge(o.status)}</td>
+    <td class="ts">${esc(fmtTime(o.created_at))}</td>
+    <td class="muted small">${o.memo ? esc(o.memo) : '—'}</td>
+    <td>${canCancel ? `<button class="btn mini danger js-cancel-order" data-id="${esc(o.id)}">撤销</button>` : '<span class="muted">—</span>'}</td>
+  </tr>`;
+}
+
+/** 后端新增类别时自动补进下拉，无需改前端代码 */
+function syncCatOptions(records){
+  const sel = $('#changeCategory');
+  const known = new Set(Array.from(sel.options).map(o => o.value));
+  records.forEach(r => {
+    const c = r.category;
+    if (c && !known.has(c)){
+      known.add(c);
+      const opt = document.createElement('option');
+      opt.value = c;
+      opt.textContent = CAT_LABEL[c] || c;
+      sel.appendChild(opt);
+    }
+  });
+}
+
+/* =====================================================
+   首页（第一级）：用户总览
+   ===================================================== */
+let withinFilter = 'all'; // 注册时间筛选：week | month | quarter | year | all（默认全部）
+
+/** 用户行：双击整行或点击行内「进入管理」按钮进入该用户管理台 */
+function userRow(u){
+  // 双库记录数展示为 "资金流水+功能修改"，如 "2+3"；缺失按 0 计
+  const dual = `${u.money_records ?? 0}+${u.change_records ?? 0}`;
+  return `<tr class="usr" data-id="${esc(u.user_id)}" data-nick="${esc(u.nickname ?? '')}" title="双击进入该用户的管理台">
+    <td class="mono">${esc(u.user_id)}</td>
+    <td>${u.nickname ? esc(u.nickname) : '<span class="muted">—</span>'}</td>
+    <td class="mono">${u.phone ? esc(maskId(u.phone)) : '<span class="muted">—</span>'}</td>
+    <td class="ts">${esc(fmtTime(u.created_at))}</td>
+    <td class="num">${u.accounts ?? '—'}</td>
+    <td class="num">${money(u.total_balance_yuan)}</td>
+    <td class="num">${u.contacts ?? '—'}</td>
+    <td class="num">${u.orders ?? '—'}</td>
+    <td class="num">${u.transactions ?? '—'}</td>
+    <td class="num mono">${esc(dual)}</td>
+    <td class="ts">${esc(fmtTime(u.last_active))}</td>
+    <td><button type="button" class="btn mini js-enter">进入管理</button></td>
+  </tr>`;
+}
+
+/** 拉取用户汇总列表（按当前注册时间筛选） */
+async function loadUsers(){
+  $('#usersBody').innerHTML = loadingRow(12);
+  const d = await api('/api/users?within=' + encodeURIComponent(withinFilter));
+  const users = d.users || [];
+  // 用户数优先取后端 total_users（含被筛选掉的口径以后端为准）
+  $('#usersTotal').textContent = `共 ${d.total_users ?? users.length} 位注册用户`;
+  $('#usersBody').innerHTML = users.map(userRow).join('') || `<tr><td colspan="12" class="empty">暂无符合条件的用户</td></tr>`;
+}
+const loadUsersSafe = safe(loadUsers);
+
+/* =====================================================
+   各页签数据加载器
+   ===================================================== */
+
+/* ---------- 1. 总览 ---------- */
+/** 总览「注册信息」卡：users[].auth 有值 → 展示脱敏账号/注册方式/最近登录；
+    真实姓名/身份证（脱敏）/邮箱（脱敏）来自 users 行（实名注册同步写入）；
+    老演示用户无注册（auth=null）→ 注册方式与最近登录显示"—"，账号回退显示
+    该 users 行的 phone（前端脱敏）；users 接口暂缺 auth 字段时同样回退。 */
+function renderRegInfo(ud){
+  const body = $('#regBody');
+  if (!body) return;
+  const uid = currentUser ? String(currentUser.user_id) : '';
+  const urow = ud && Array.isArray(ud.users)
+    ? ud.users.find(x => String(x.user_id) === uid)
+    : null;
+  const a = urow && urow.auth ? urow.auth : null;
+  const how = a ? (a.identifier_type === 'email' ? '邮箱' : '手机号') : '—';
+  const idShown = a ? a.identifier_masked : (urow && urow.phone ? maskId(urow.phone) : '');
+  const lastLogin = a && a.last_login_at ? fmtTime(a.last_login_at) : '—';
+  const idCard = urow && urow.id_card_masked ? urow.id_card_masked : '';
+  const email = urow && urow.email_masked ? urow.email_masked : '';
+  body.innerHTML = `<tr>
+    <td>${esc(how)}</td>
+    <td class="mono">${idShown ? esc(idShown) : '<span class="muted">—</span>'}</td>
+    <td>${urow && urow.nickname ? esc(urow.nickname) : '<span class="muted">—</span>'}</td>
+    <td class="mono">${idCard ? esc(idCard) : '<span class="muted">—</span>'}</td>
+    <td class="mono">${email ? esc(email) : '<span class="muted">—</span>'}</td>
+    <td class="ts">${esc(urow ? fmtTime(urow.created_at) : '—')}</td>
+    <td class="ts">${esc(lastLogin)}</td>
+  </tr>`;
+}
+
+async function loadOverview(){
+  // 并行拉总览与用户列表（注册信息卡按 user_id 从 users 里匹配当前用户行）
+  const [d, ud] = await Promise.all([
+    api(withUser('/api/overview')),
+    api('/api/users?within=all').catch(() => null), // 拉取失败不阻断总览，卡片降级为"—"
+  ]);
+  renderRegInfo(ud);
+  // 顶部常显昵称
+  $('#nickText').textContent = '当前用户：' + (d.nickname || '—');
+  $('#ovNick').textContent = d.nickname || '—';
+  const st = d.stats || {};
+  $('#ovTodayCount').textContent = `${st.today_money_count ?? 0} 笔`;
+  const dv = Number(st.today_money_delta_yuan ?? 0);
+  const deltaEl = $('#ovTodayDelta');
+  deltaEl.textContent = signedMoney(st.today_money_delta_yuan ?? 0);
+  deltaEl.classList.remove('up', 'down', 'flat');
+  deltaEl.classList.add(dv > 0 ? 'up' : dv < 0 ? 'down' : 'flat');
+  $('#ovChange24').textContent = `${st.change_count_24h ?? 0} 条`;
+  $('#ovPlans').textContent = `${st.active_plans ?? 0} 个`;
+
+  // 账户余额卡：每账户一张
+  $('#ovAccounts').innerHTML = (d.accounts || []).map(a => `
+    <div class="acct">
+      <div class="acct-top"><span class="acct-name">${esc(a.name)}</span><span class="tag">${esc(a.type)}</span></div>
+      <div class="acct-bal num">${money(a.balance_yuan)}</div>
+      <div class="acct-sub muted">账户ID ${esc(a.id)}</div>
+    </div>`).join('') || '<span class="muted">暂无账户</span>';
+
+  // 待确认转账单
+  $('#ovPendingBody').innerHTML = (d.pending_orders || []).map(orderRow).join('') || emptyRow(7);
+
+  // 到期任务
+  $('#ovDueBody').innerHTML = (d.due_tasks || []).map(t => `
+    <tr>
+      <td class="mono">#${esc(t.id)}</td>
+      <td class="ts">${esc(fmtTime(t.run_at))}</td>
+      <td>${esc(t.payload_title)}</td>
+    </tr>`).join('') || emptyRow(3);
+}
+
+/* ---------- 2. 资金流水 ---------- */
+async function loadMoney(){
+  const limit = $('#moneyLimit').value;
+  $('#moneyBody').innerHTML = loadingRow(8);
+  const d = await api(withUser(`/api/money-records?limit=${encodeURIComponent(limit)}`));
+  $('#moneyBody').innerHTML = (d.records || []).map(r => `
+    <tr>
+      <td class="ts">${esc(fmtTime(r.ts))}</td>
+      <td>${esc(r.nickname)}${r.account_id !== undefined && r.account_id !== null ? `<span class="muted small"> ·账户${esc(r.account_id)}</span>` : ''}</td>
+      <td>${esc(r.tool)}</td>
+      <td>${deltaHTML(r.delta_yuan)}</td>
+      <td class="num">${money(r.before_yuan)}</td>
+      <td class="num">${money(r.after_yuan)}</td>
+      <td>${operatorBadge(r.operator)}</td>
+      <td class="refcell">${r.ref ? `<span class="mono small">${esc(r.ref)}</span>` : '<span class="muted">—</span>'}${r.note ? `<div class="muted small">${esc(r.note)}</div>` : ''}</td>
+    </tr>`).join('') || emptyRow(8);
+}
+
+/* ---------- 3. 功能修改 ---------- */
+async function loadChange(){
+  const cat = $('#changeCategory').value;
+  $('#changeBody').innerHTML = loadingRow(7);
+  const qs = new URLSearchParams({ limit: '100' });
+  if (cat) qs.set('category', cat);
+  const d = await api(withUser('/api/change-records?' + qs.toString()));
+  const records = d.records || [];
+  syncCatOptions(records);
+  $('#changeBody').innerHTML = records.map(r => `
+    <tr>
+      <td class="ts">${esc(fmtTime(r.ts))}</td>
+      <td>${esc(r.nickname)}</td>
+      <td>${catBadge(r.category)}</td>
+      <td>${esc(r.action)}</td>
+      <td>${esc(r.target)}</td>
+      <td><button class="link js-detail">查看</button></td>
+      <td>${operatorBadge(r.operator)}</td>
+    </tr>
+    <tr class="detail-row" hidden><td colspan="7"><pre>${esc(prettyJSON(r.detail))}</pre></td></tr>`).join('') || emptyRow(7);
+}
+
+/* ---------- 4. 联系人 ---------- */
+async function loadContacts(){
+  $('#contactsBody').innerHTML = loadingRow(5);
+  const d = await api(withUser('/api/contacts'));
+  $('#contactsBody').innerHTML = (d.contacts || []).map(c => `
+    <tr>
+      <td>${esc(c.name)}</td>
+      <td class="mono">${esc(c.phone)}</td>
+      <td>${c.relation ? esc(c.relation) : '<span class="muted">—</span>'}</td>
+      <td class="muted">${c.note ? esc(c.note) : '—'}</td>
+      <td><button class="btn mini danger js-del-contact" data-id="${esc(c.id)}" data-name="${esc(c.name)}">删除</button></td>
+    </tr>`).join('') || emptyRow(5);
+}
+
+/* ---------- 5. 卡片 ---------- */
+async function loadCards(){
+  $('#cardsBody').innerHTML = loadingRow(6);
+  const d = await api(withUser('/api/cards'));
+  $('#cardsBody').innerHTML = (d.cards || []).map(c => {
+    const ops = [];
+    if (c.status === 'active') ops.push(`<button class="btn mini js-card-lock" data-id="${esc(c.id)}">锁定</button>`);
+    if (c.status === 'locked') ops.push(`<button class="btn mini primary js-card-unlock" data-id="${esc(c.id)}">解锁</button>`);
+    if (c.status === 'active' || c.status === 'locked') ops.push(`<button class="btn mini warn js-card-lost" data-id="${esc(c.id)}" data-no="${esc(c.card_no_masked)}">挂失</button>`);
+    ops.push(`<button class="btn mini js-card-limits" data-id="${esc(c.id)}" data-dl="${esc(String(c.daily_limit_yuan ?? ''))}" data-pl="${esc(String(c.per_tx_limit_yuan ?? ''))}">限额调整</button>`);
+    return `<tr>
+      <td class="mono">${esc(c.card_no_masked)}</td>
+      <td>${esc(c.card_type)}</td>
+      <td>${cardStatusBadge(c.status)}</td>
+      <td class="num">${money(c.daily_limit_yuan)}</td>
+      <td class="num">${money(c.per_tx_limit_yuan)}</td>
+      <td class="ops">${ops.join('') || '<span class="muted">—</span>'}</td>
+    </tr>`;
+  }).join('') || emptyRow(6);
+}
+
+/* ---------- 6. 理财 ---------- */
+async function loadWealth(){
+  $('#productsBody').innerHTML = loadingRow(6);
+  $('#holdingsBody').innerHTML = loadingRow(5);
+  // 产品库全局共享不带 user_id；持仓需带当前用户
+  const [pd, hd] = await Promise.all([api('/api/products'), api(withUser('/api/holdings'))]);
+  // 产品列表
+  $('#productsBody').innerHTML = (pd.products || []).map(p => `
+    <tr>
+      <td class="mono">${esc(p.code)}</td>
+      <td>${esc(p.name)}</td>
+      <td>${esc(p.p_type)}</td>
+      <td>${riskBadge(p.risk_level)}</td>
+      <td class="num">${pct(p.expected_return_pct)}</td>
+      <td class="num">${money(p.min_subscribe_yuan)}</td>
+    </tr>`).join('') || emptyRow(6);
+  // 当前持仓
+  $('#holdingsBody').innerHTML = (hd.holdings || []).map(h => {
+    const pn = Number(h.profit_yuan);
+    const cls = pn > 0 ? 'up' : pn < 0 ? 'down' : 'flat';
+    return `<tr>
+      <td>${esc(h.product)}${h.code ? ` <span class="muted small mono">${esc(h.code)}</span>` : ''}</td>
+      <td class="num">${money(h.principal_yuan)}</td>
+      <td class="num">${money(h.est_value_yuan)}</td>
+      <td class="num ${cls}">${signedMoney(h.profit_yuan)}${pct(h.profit_pct, true)}</td>
+      <td><button class="btn mini warn js-redeem" data-id="${esc(h.holding_id)}" data-name="${esc(h.product)}">代赎回</button></td>
+    </tr>`;
+  }).join('') || emptyRow(5);
+}
+
+/* ---------- 7. 联动计划 ---------- */
+async function loadPlans(){
+  $('#plansBody').innerHTML = loadingRow(7);
+  const d = await api(withUser('/api/linkage-plans'));
+  $('#plansBody').innerHTML = (d.plans || []).map(p => `
+    <tr>
+      <td>${esc(p.title)}</td>
+      <td>${planBadge(p.status)}</td>
+      <td class="num">${money(p.budget_yuan)}</td>
+      <td>${p.progress === null || p.progress === undefined || p.progress === '' ? '<span class="muted">—</span>' : esc(p.progress)}</td>
+      <td>${p.lock_status ? esc(p.lock_status) : '<span class="muted">—</span>'}</td>
+      <td class="ts">${esc(fmtTime(p.created_at))}</td>
+      <td>${p.status === 'active' ? `<button class="btn mini danger js-cancel-plan" data-id="${esc(p.plan_id)}" data-title="${esc(p.title)}">作废</button>` : '<span class="muted">—</span>'}</td>
+    </tr>`).join('') || emptyRow(7);
+}
+
+/* ---------- 8. 转账订单（含订阅扣款只读视图） ---------- */
+async function loadOrders(){
+  $('#ordersBody').innerHTML = loadingRow(7);
+  $('#subsBody').innerHTML = loadingRow(5);
+  const st = $('#orderStatus').value;
+  const [od, sd] = await Promise.all([
+    api(withUser(st ? `/api/orders?status=${encodeURIComponent(st)}` : '/api/orders')),
+    api(withUser('/api/subscriptions')),
+  ]);
+  $('#ordersBody').innerHTML = (od.orders || []).map(orderRow).join('') || emptyRow(7);
+  $('#subsBody').innerHTML = (sd.subscriptions || []).map(s => `
+    <tr>
+      <td>${esc(s.merchant_name)}</td>
+      <td class="num">${money(s.amount_yuan)}</td>
+      <td class="num">${esc(s.period_days)}</td>
+      <td class="ts">${esc(s.next_charge_date)}</td>
+      <td>${esc(s.status)}</td>
+    </tr>`).join('') || emptyRow(5);
+}
+
+/* ---------- 9. 调账 ---------- */
+async function loadAdjust(){
+  // 复用 /api/overview 拉账户下拉，同时刷新顶部昵称
+  const d = await api(withUser('/api/overview'));
+  $('#nickText').textContent = '当前用户：' + (d.nickname || '—');
+  $('#adjAccount').innerHTML = (d.accounts || []).map(a =>
+    `<option value="${esc(a.id)}">${esc(a.name)}（${esc(a.type)}）· 余额 ${money(a.balance_yuan)} 元</option>`).join('');
+}
+
+/* =====================================================
+   页签路由（纯 JS 显示/隐藏，进入即拉取数据）
+   ===================================================== */
+let currentTab = 'overview';
+const TAB_LOADERS = {
+  overview: safe(loadOverview),
+  money:    safe(loadMoney),
+  change:   safe(loadChange),
+  contacts: safe(loadContacts),
+  cards:    safe(loadCards),
+  wealth:   safe(loadWealth),
+  plans:    safe(loadPlans),
+  orders:   safe(loadOrders),
+  adjust:   safe(loadAdjust),
+};
+function switchTab(key){
+  currentTab = key;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === key));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + key));
+  TAB_LOADERS[key]();
+}
+
+/* =====================================================
+   两级视图切换与用户上下文
+   ===================================================== */
+/** 渲染面包屑与顶栏昵称（昵称缺失时回退为 "用户{ID}"） */
+function renderCrumb(){
+  if (!currentUser) return;
+  $('#crumbNick').textContent = currentUser.nickname || ('用户' + currentUser.user_id);
+  $('#crumbId').textContent = currentUser.user_id;
+  $('#nickText').textContent = '当前用户：' + (currentUser.nickname || '—');
+}
+
+/** 首页 ⇄ 个人台视图切换：users = 用户总览；console = 个人管理台 */
+function showView(name){
+  currentView = name;
+  $('#viewUsers').classList.toggle('active', name === 'users');
+  $('#viewConsole').classList.toggle('active', name === 'console');
+  // 首页无用户上下文：隐藏顶栏"当前用户"胶囊；顶栏刷新按钮语义随视图切换
+  $('#nickChip').hidden = name !== 'console';
+  $('#btnRefresh').title = name === 'console' ? '刷新当前页签数据' : '刷新用户列表';
+}
+
+/** 进入某用户的个人管理台：记住上下文 → 切视图 → 默认落在"总览"页签并拉取 */
+function enterConsole(u){
+  // 已在该用户台（如「进入管理」按钮被连点/双击）直接忽略，避免重复拉取
+  if (currentView === 'console' && currentUser && String(currentUser.user_id) === String(u.user_id)) return;
+  currentUser = u;
+  try { localStorage.setItem(LS_USER_KEY, JSON.stringify({ user_id: u.user_id, nickname: u.nickname || '' })); } catch (e) { /* 存储不可用时静默降级 */ }
+  renderCrumb();
+  showView('console');
+  switchTab('overview');
+}
+
+/** 返回用户列表：清空用户上下文与记忆，回到首页视图并重新拉取 */
+function backToList(){
+  currentUser = null;
+  try { localStorage.removeItem(LS_USER_KEY); } catch (e) { /* 忽略 */ }
+  showView('users');
+  loadUsersSafe();
+}
+
+/* ---------------- 写操作 ---------------- */
+/** 撤销转账单（总览 / 订单页共用） */
+async function cancelOrder(id){
+  if (!confirm(`确认撤销转账单 #${id}？`)) return;
+  try {
+    await api(withUser(`/api/orders/${id}/cancel`), { method: 'POST' });
+    toast('转账单已撤销');
+    TAB_LOADERS[currentTab]();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+/* ---------------- 事件绑定 ---------------- */
+// 页签切换 / 全局刷新 / 各筛选器
+$('#tabNav').addEventListener('click', e => {
+  const b = e.target.closest('.tab'); if (b) switchTab(b.dataset.tab);
+});
+// 顶栏刷新随视图：个人台刷新当前页签，首页刷新用户列表
+$('#btnRefresh').addEventListener('click', () => {
+  if (currentView === 'console') TAB_LOADERS[currentTab](); else loadUsersSafe();
+});
+
+// ---- 首页（用户总览）----
+// 注册时间筛选按钮组：切换即重新拉取
+$('#withinSeg').addEventListener('click', e => {
+  const b = e.target.closest('.seg-btn'); if (!b) return;
+  if (b.dataset.within === withinFilter) return; // 重复点击同项不重复拉取
+  withinFilter = b.dataset.within;
+  document.querySelectorAll('#withinSeg .seg-btn').forEach(x => x.classList.toggle('active', x === b));
+  loadUsersSafe();
+});
+$('#btnUsersRefresh').addEventListener('click', () => loadUsersSafe());
+// 双击用户行 → 进入该用户管理台
+$('#usersBody').addEventListener('dblclick', e => {
+  const tr = e.target.closest('tr.usr'); if (!tr) return;
+  enterConsole({ user_id: tr.dataset.id, nickname: tr.dataset.nick });
+});
+// 行内「进入管理」按钮（单击，效果同双击，手机/演示友好）
+$('#usersBody').addEventListener('click', e => {
+  const btn = e.target.closest('.js-enter'); if (!btn) return;
+  const tr = btn.closest('tr.usr');
+  enterConsole({ user_id: tr.dataset.id, nickname: tr.dataset.nick });
+});
+// 面包屑：返回用户列表
+$('#btnBackList').addEventListener('click', backToList);
+$('#moneyLimit').addEventListener('change', () => TAB_LOADERS.money());
+$('#changeCategory').addEventListener('change', () => TAB_LOADERS.change());
+$('#orderStatus').addEventListener('change', () => TAB_LOADERS.orders());
+
+// 功能修改：明细 JSON 展开/收起（事件委托，重渲染后依然有效）
+$('#changeBody').addEventListener('click', e => {
+  const btn = e.target.closest('.js-detail'); if (!btn) return;
+  const detail = btn.closest('tr').nextElementSibling;
+  if (detail && detail.classList.contains('detail-row')){
+    detail.hidden = !detail.hidden;
+    btn.textContent = detail.hidden ? '查看' : '收起';
+  }
+});
+
+// 联系人：新增表单
+$('#contactForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = $('#cName').value.trim();
+  const phone = $('#cPhone').value.trim();
+  const note = $('#cNote').value.trim();
+  if (!name) { toast('请输入姓名', 'err'); return; }
+  if (!phone) { toast('请输入手机号', 'err'); return; }
+  if (!confirm(`确认新增联系人：${name} / ${phone}？`)) return;
+  try {
+    await api(withUser('/api/contacts'), { method: 'POST', body: JSON.stringify({ name, phone, note }) });
+    toast('联系人已新增');
+    e.target.reset();
+    TAB_LOADERS.contacts();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// 联系人：删除（委托）
+$('#contactsBody').addEventListener('click', async e => {
+  const btn = e.target.closest('.js-del-contact'); if (!btn) return;
+  if (!confirm(`确认删除联系人「${btn.dataset.name}」？删除后不可恢复。`)) return;
+  try {
+    await api(withUser(`/api/contacts/${btn.dataset.id}`), { method: 'DELETE' });
+    toast('联系人已删除');
+    TAB_LOADERS.contacts();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// 卡片：锁定 / 解锁 / 挂失（二次强确认）/ 限额调整（prompt）
+$('#cardsBody').addEventListener('click', async e => {
+  const lockBtn   = e.target.closest('.js-card-lock');
+  const unlockBtn = e.target.closest('.js-card-unlock');
+  const lostBtn   = e.target.closest('.js-card-lost');
+  const limBtn    = e.target.closest('.js-card-limits');
+  try {
+    if (lockBtn) {
+      const id = lockBtn.dataset.id;
+      if (!confirm('确认锁定该卡片？锁定期间无法进行交易。')) return;
+      await api(withUser(`/api/cards/${id}/status`), { method: 'POST', body: JSON.stringify({ status: 'locked' }) });
+      toast('卡片已锁定');
+      TAB_LOADERS.cards();
+    } else if (unlockBtn) {
+      const id = unlockBtn.dataset.id;
+      if (!confirm('确认解锁该卡片？')) return;
+      await api(withUser(`/api/cards/${id}/status`), { method: 'POST', body: JSON.stringify({ status: 'active' }) });
+      toast('卡片已解锁');
+      TAB_LOADERS.cards();
+    } else if (lostBtn) {
+      const id = lostBtn.dataset.id;
+      if (!confirm(`确认对 ${lostBtn.dataset.no} 申请挂失？`)) return;
+      // 挂失为不可逆操作，二次 confirm 强提示
+      if (!confirm('【不可逆操作】挂失后该卡片将永久失效，无法解锁或恢复！\n请再次确认是否继续挂失？')) return;
+      await api(withUser(`/api/cards/${id}/status`), { method: 'POST', body: JSON.stringify({ status: 'lost' }) });
+      toast('卡片已挂失');
+      TAB_LOADERS.cards();
+    } else if (limBtn) {
+      const id = limBtn.dataset.id;
+      const body = {};
+      const dl = prompt('请输入新的日限额（元），留空或取消表示不修改：', limBtn.dataset.dl || '');
+      if (dl !== null && dl.trim() !== ''){
+        if (!isAmount(dl.trim())) { toast('日限额格式不正确，需为数字', 'err'); return; }
+        body.daily_limit_yuan = dl.trim();
+      }
+      const pl = prompt('请输入新的单笔限额（元），留空或取消表示不修改：', limBtn.dataset.pl || '');
+      if (pl !== null && pl.trim() !== ''){
+        if (!isAmount(pl.trim())) { toast('单笔限额格式不正确，需为数字', 'err'); return; }
+        body.per_tx_limit_yuan = pl.trim();
+      }
+      if (!body.daily_limit_yuan && !body.per_tx_limit_yuan){ toast('未修改任何限额'); return; }
+      const desc = [body.daily_limit_yuan ? `日限额 ${body.daily_limit_yuan} 元` : '', body.per_tx_limit_yuan ? `单笔限额 ${body.per_tx_limit_yuan} 元` : ''].filter(Boolean).join('，');
+      if (!confirm(`确认调整该卡片限额：${desc}？`)) return;
+      await api(withUser(`/api/cards/${id}/limits`), { method: 'POST', body: JSON.stringify(body) });
+      toast('限额已调整');
+      TAB_LOADERS.cards();
+    }
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// 理财：代赎回（委托）
+$('#holdingsBody').addEventListener('click', async e => {
+  const btn = e.target.closest('.js-redeem'); if (!btn) return;
+  if (!confirm(`确认为客户赎回「${btn.dataset.name}」的该笔持仓？赎回资金将回到账户余额。`)) return;
+  try {
+    await api(withUser(`/api/holdings/${btn.dataset.id}/redeem`), { method: 'POST' });
+    toast('赎回指令已提交');
+    TAB_LOADERS.wealth();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// 联动计划：作废（仅 active，委托）
+$('#plansBody').addEventListener('click', async e => {
+  const btn = e.target.closest('.js-cancel-plan'); if (!btn) return;
+  if (!confirm(`确认作废联动计划「${btn.dataset.title}」？作废后不可恢复。`)) return;
+  try {
+    await api(withUser(`/api/linkage-plans/${btn.dataset.id}/cancel`), { method: 'POST' });
+    toast('联动计划已作废');
+    TAB_LOADERS.plans();
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+// 订单撤销（总览 + 订单页共用委托）
+$('#ordersBody').addEventListener('click', e => {
+  const btn = e.target.closest('.js-cancel-order'); if (!btn) return;
+  cancelOrder(btn.dataset.id);
+});
+$('#ovPendingBody').addEventListener('click', e => {
+  const btn = e.target.closest('.js-cancel-order'); if (!btn) return;
+  cancelOrder(btn.dataset.id);
+});
+
+// 调账表单提交
+$('#adjustForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const accountId = Number($('#adjAccount').value);
+  const amount = $('#adjAmount').value.trim();
+  const reason = $('#adjReason').value.trim();
+  if (!accountId) { toast('请选择账户', 'err'); return; }
+  if (!isAmount(amount)) { toast('金额格式不正确，示例：-3000 或 500', 'err'); return; }
+  if (!reason) { toast('请填写调账原因', 'err'); return; }
+  if (!confirm(`确认提交调账？\n账户ID：${accountId}\n金额：${amount} 元\n原因：${reason}`)) return;
+  try {
+    const r = await api(withUser('/api/adjust'), {
+      method: 'POST',
+      body: JSON.stringify({ account_id: accountId, amount_yuan: amount, reason }),
+    });
+    toast(`调账成功，新余额 ${money(r.new_balance_yuan)} 元`);
+    $('#adjAmount').value = '';
+    $('#adjReason').value = '';
+    TAB_LOADERS.adjust(); // 刷新账户下拉中的余额展示
+  } catch (err) { toast(err.message, 'err'); }
+});
+
+/* ---------------- 启动：优先恢复上次选中的用户，否则进入首页（用户总览） ---------------- */
+(function boot(){
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(LS_USER_KEY) || 'null'); } catch (e) { saved = null; }
+  if (saved && saved.user_id !== undefined && saved.user_id !== null){
+    // 刷新页面直接回到上次用户的个人管理台（默认"总览"页签并拉取）
+    currentUser = { user_id: saved.user_id, nickname: saved.nickname || '' };
+    renderCrumb();
+    showView('console');
+    switchTab('overview');
+  } else {
+    showView('users');
+    loadUsersSafe();
+  }
+})();
+</script>
+</body>
+</html>

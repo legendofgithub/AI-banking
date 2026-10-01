@@ -1,0 +1,22 @@
+# 依赖策略(评审修复:上下界齐备;精确复现用 requirements.lock.txt 快照)
+# - fastmcp 上限 <4:4.x 要求 mcp>=2,而 langchain-mcp-adapters 0.3.x 锁 mcp<2,
+#   同一 venv 无法共存(升 4.x 会让 import bank_core.mcp_server 直接崩)
+# - 适配器同样加上界 <0.4:0.4+ 可能切到 mcp 2.x,破坏同一约束
+# 计划 §8「M0 起锁版本」:区间约束(本文件)+ 精确快照(requirements.lock.txt,
+# pip freeze 生成)双保险;换机器装完用 `.venv/Scripts/python.exe -m pip install
+# -r requirements.lock.txt` 可逐字节复现本环境。
+
+# ---- bank_core 银行能力层 ----
+fastmcp>=3.4.7,<4
+fastapi>=0.141.1,<1.0
+uvicorn>=0.53.0,<1.0
+pytest>=9.1.1,<10
+
+# ---- agent 编排层(M1,LangGraph + MCP 适配器)----
+langgraph>=1.2.11,<2
+langgraph-checkpoint-sqlite>=3.1.1,<4   # AsyncSqliteSaver(thread 会话恢复;同步版不支持异步)
+langchain-core>=1.6.3,<2
+langchain-mcp-adapters>=0.3.2,<0.4      # 锁 mcp>=1.24,<2.0,勿与 fastmcp 4.x 同装
+langchain-openai>=1.6.2,<2              # get_llm() 的 OpenAI 兼容端点(智谱 GLM)
+aiosqlite>=0.22.1,<1                    # AsyncSqliteSaver 底层,agent/graph.py 直接使用
+httpx>=0.28.1,<1                        # fastapi.testclient.TestClient 的流式端点测试依赖
