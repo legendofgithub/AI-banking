@@ -53,8 +53,9 @@ data/         运行库 bank.db 等(不入库,可重播种)
 
 ## 环境坑速查
 
-- 裸 pip 坏;GitHub 直连已通(2026-10-01 修:删过无效代理键 `https.proxy`;若日后又断,
-  先看 Clash/FlClash 是否开着、`http.proxy` 是否指向活端口,再考虑镜像)。
+- 裸 pip 坏。**GitHub 推拉走 SSH:443**(`~/.ssh/config` 已把 github.com 指到 ssh.github.com:443,
+  remote 为 `git@github.com:legendofgithub/AI-banking.git` 私有库);HTTPS 对 github.com 时通时断,
+  push 超时就换 SSH 路线,别死磕 https。
 - `pnpm install` 必须加 `--registry=https://registry.npmmirror.com`。
 - 重播种(重置演示数据)前先停占用 bank.db 的服务(Windows 下库文件被占用)。
 - ZCode 内嵌浏览器(IAB)点按钮常超时:验证用 `elementFromPoint` 确认可点后,
