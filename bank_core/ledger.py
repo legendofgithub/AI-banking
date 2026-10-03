@@ -489,6 +489,13 @@ class LedgerService:
         result = {"card_id": card_id,
                   "daily_limit_yuan": cents_to_yuan(d["daily_limit_cents"]),
                   "per_tx_limit_yuan": cents_to_yuan(d["per_tx_limit_cents"])}
+        # 评审修复(2026-10-03):本方法此前只写 change_log、漏了 audit_log,
+        # 是全库唯一没有审计留痕的写操作(铁律 4「全量审计」的缺口)。
+        audit(self.conn, "set_card_limits",
+              {"card_id": card_id,
+               "daily_limit_cents": daily_limit_cents,
+               "per_tx_limit_cents": per_tx_limit_cents},
+              result, risk="MED")
         record_change(self.conn, self.user_id, category="card", action="limits",
                       target=d["card_no_masked"],
                       detail={"card_id": card_id,

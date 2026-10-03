@@ -247,6 +247,10 @@ _FALLBACK_TEXT = {
     "wealth_subscribed": "申购已确认执行,资金已从付款账户扣减。",
     "wealth_redeemed": "赎回已确认执行,资金已到账。",
     "wealth_cancelled": "好的,本次理财操作已取消,资金未变动。",
+    "wealth_duplicate": "这笔申购此前已经执行过了,本次没有重复扣款。",
+    "wealth_need_assess": ("你还没有风险测评记录。按适当性要求,未测评暂时只能申购 R1 "
+                           "现金管理类产品;对我说「做风险测评」,我先带你过五道题,"
+                           "通过后就能按你的风险等级选品了。"),
     "no_product": "没有找到匹配的理财产品,换个说法或说全产品名试试。",
     "no_holding": "没有找到可赎回的持仓。",
     # ---- 卡片管理 ----
@@ -271,6 +275,20 @@ def _idempotency_key(*, thread_id: str, turn_text: str, account_id: Any,
     raw = "|".join(str(x) for x in (thread_id, turn_text, account_id, contact_id,
                                     to_name, amount_cents, scheduled_at))
     return "agent-" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _wealth_idempotency_key(*, kind: str, thread_id: str, turn_text: str,
+                            target_id: Any, amount_cents: int,
+                            from_account_id: Any) -> str:
+    """理财申赎幂等键(评审修复 2026-10-03:补上 bank_core 早已支持、编排层从未启用的防重放)。
+
+    与转账 _idempotency_key 同构:同一会话 + 同一句指令原文 + 业务要素 → 同键,
+    重放(HTTP 重试/崩溃恢复/用户原样重发)命中既有流水并拒绝重复扣款;
+    用户换一种说法(「再买1000元」)指令原文不同 → 新键,视为新一笔,互不误伤。
+    """
+    raw = "|".join(str(x) for x in ("wealth", kind, thread_id, turn_text,
+                                    target_id, amount_cents, from_account_id))
+    return "agent-wealth-" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def _fallback_announcement(notice: dict | None) -> str:
@@ -853,8 +871,13 @@ def _w_redeem_question(w: dict) -> str:
 
 
 def _w_order_view(w: dict) -> dict:
-    """confirm_wealth 闸门载荷的 order 视图(kind=subscribe|redeem + 复述要素)。"""
-    o = dict(w.get("order") or {})
+    """confirm_wealth 闸门载荷的 order 视图(kind=subscribe|redeem + 复述要素)。
+
+    下划线开头的键是本层内部状态(如 _idempotency_key),只供图内节点复用,
+    不进前端卡片载荷——避免内部字段泄漏到 data-wealth-confirmation。
+    """
+    o = {k: v for k, v in (w.get("order") or {}).items()
+         if not str(k).startswith("_")}
     o["kind"] = w.get("kind")
     return o
 
@@ -1810,11 +1833,20 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                                "error": err or "产品查询失败"}}
         if ("对比" in text or "比较" in text) and len(res) >= 2:
             ids = [int(p["id"]) for p in res[:3]]
-            cmp_args = {"ids": ids}
+            # 评审修复(2026-10-03):参数名原本写成 {"ids": ...},而工具签名是
+            # compare_products(product_ids)——pydantic 直接报 missing/unexpected,
+            # 异常被 BankTools.call 兜成 {"error": ...},又被下面的 _has_error 静默
+            # 吞成空列表,于是"对比结果已生成"照播、数据全空。「对比理财产品」
+            # 因此一直是坏的却不报错,测试也没覆盖对比路径。现改为:参数名对齐 +
+            # 失败走可见的 bank_error(与 w_query 其它工具失败同构),不再假装成功。
+            cmp_args = {"product_ids": ids}
             cmp = await tools.call("compare_products", **cmp_args)
             calls.append(_jr("compare_products", cmp_args, cmp))
-            if _has_error(cmp):
-                cmp = []
+            err = _has_error(cmp)
+            if err or not isinstance(cmp, list):
+                return {"bank_calls": calls,
+                        "notice": {"kind": "bank_error", "where": "compare_products",
+                                   "error": err or "产品对比失败"}}
             return {"bank_calls": calls,
                     "notice": {"kind": "wealth_compare", "level": level,
                                "products": cmp}}
@@ -1890,18 +1922,30 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             return {"bank_calls": calls,
                     "notice": {"kind": "bank_error", "where": "get_accounts",
                                "error": "没有可用付款账户"}}
-        # 3) 建单(confirmed=False,不动钱):起购/风险超限在此就被 bank 拒掉。
-        # 金额先规范化成两位小数:确认时 w_confirm 原样复用 order 里的同一字符串,
-        # 保证"同参数 confirmed=True 二次调用"字面成立(幂等语义靠此约定)。
+        # 3) 建单(confirmed=False,不动钱):起购/风险超限/未测评在此就被 bank 拒掉。
+        # 金额先规范化成两位小数:确认时 w_confirm 原样复用 order 里的同一字符串。
+        # 幂等键在此生成、存进 order,确认节点原样复用(评审修复 2026-10-03:
+        # 此前理财只靠"同参数二次调用"的字面约定,bank 侧 external_ref 带秒级 ts,
+        # 同一条指令重放会再扣一次款)。
         amount_yuan = _norm_yuan(draft["amount_yuan"]) or str(draft["amount_yuan"])
+        key = _wealth_idempotency_key(
+            kind="sub",
+            thread_id=str((get_config().get("configurable") or {}).get("thread_id", "")),
+            turn_text=str(state.get("turn_text") or ""),
+            target_id=int(product["id"]),
+            amount_cents=_cents(amount_yuan) or 0,
+            from_account_id=int(account["id"]))
         sargs = {"product_id": int(product["id"]), "amount_yuan": amount_yuan,
-                 "from_account_id": int(account["id"]), "confirmed": False}
+                 "from_account_id": int(account["id"]), "confirmed": False,
+                 "idempotency_key": key}
         pending = await tools.call("subscribe_product", **sargs)
         calls.append(_jr("subscribe_product", sargs, pending))
         err = _has_error(pending)
         if err:
+            # 适当性拦下来的走确定性话术(未测评/超等级),其余才是泛化银行错误
+            kind = "wealth_need_assess" if "风险测评" in str(err) else "bank_error"
             return {"bank_calls": calls,
-                    "notice": {"kind": "bank_error", "where": "subscribe_product",
+                    "notice": {"kind": kind, "where": "subscribe_product",
                                "error": err}}
         # 4) 组装闸门复述要素(费率/锁定期/风险等级原样引用产品库返回)
         order = {"product_id": int(product["id"]),
@@ -1913,7 +1957,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                  "risk_level": product.get("risk_level"),
                  "from_account_id": int(account["id"]),
                  "from_account_name": account.get("name") or account.get("type"),
-                 "status": pending.get("status")}
+                 "status": pending.get("status"),
+                 "_idempotency_key": key}
         return {"bank_calls": calls,
                 "wealth": {**draft, "kind": "subscribe", "product": product,
                            "order": order}}
@@ -1931,12 +1976,19 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                 "amount_yuan": str(o["amount_yuan"]),
                 "from_account_id": int(o["from_account_id"]),
                 "confirmed": True}
+        # 幂等键在 w_subscribe 建单时生成并存入 order,此处原样复用:同一条指令
+        # 重放 → 同键 → bank 侧撞上已有流水并拒绝,不会二次扣款(评审修复)。
+        if o.get("_idempotency_key"):
+            args["idempotency_key"] = str(o["_idempotency_key"])
         res = await tools.call("subscribe_product", **args)
         calls = [_jr("subscribe_product", args, res)]
         err = _has_error(res)
         if err:
+            kind = ("wealth_duplicate" if "幂等命中" in str(err)
+                    else "wealth_need_assess" if "风险测评" in str(err)
+                    else "bank_error")
             return {"bank_calls": calls,
-                    "notice": {"kind": "bank_error", "where": "subscribe_product",
+                    "notice": {"kind": kind, "where": "subscribe_product",
                                "error": err}}
         return {"bank_calls": calls,
                 "notice": {"kind": "wealth_subscribed", "result": res,

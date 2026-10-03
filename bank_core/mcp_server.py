@@ -247,11 +247,14 @@ def get_holdings() -> list[dict]:
 
 @mcp.tool
 def subscribe_product(product_id: int, amount_yuan: str, from_account_id: int,
-                      confirmed: bool = False) -> dict:
+                      confirmed: bool = False,
+                      idempotency_key: str | None = None) -> dict:
     """[HIGH·两步] 申购理财。confirmed=False 返回待确认单；
-    ⚠️ 用户同意后再以 confirmed=True 真正扣款。风险超限会直接拒绝。"""
+    ⚠️ 用户同意后再以 confirmed=True 真正扣款。风险超限会直接拒绝；
+    未完成风险测评时仅可申购 R1（现金管理类），R2 及以上须先做测评。
+    idempotency_key: 编排层传入的重放键，同键重放直接拒绝，不重复扣款。"""
     return _wealth.subscribe_product(product_id, _yuan(amount_yuan),
-                                     from_account_id, confirmed)
+                                     from_account_id, confirmed, idempotency_key)
 
 
 @mcp.tool

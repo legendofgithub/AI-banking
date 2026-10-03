@@ -12,7 +12,7 @@ from bank_core.events import EventService
 from bank_core.ledger import LedgerError, LedgerService
 from bank_core.money import cents_to_yuan, yuan_to_cents
 from bank_core.seed import seed
-from bank_core.wealth import WealthService
+from bank_core.wealth import WealthError, WealthService
 
 
 # ----------------------------------------------------------------- 基础设施
@@ -301,3 +301,161 @@ def test_add_contact_validation(seeded_db):
     with pytest.raises(LedgerError, match="手机号"):
         led.add_contact("赵六", "138abc8000")    # 含字母
     assert led.resolve_contact(name="赵六") == []
+
+
+# ------------------------------------------------- 理财适当性闸门 / 幂等(评审修复 2026-10-03)
+# 三条都是"评委一问就穿"的资金安全缺口,断言一律对账数据库终态。
+
+def _checking_acct(conn, user_id: int = 1):
+    return conn.execute(
+        "SELECT * FROM accounts WHERE user_id=? AND type='checking' ORDER BY id",
+        (user_id,)).fetchone()
+
+
+def _bal(conn, account_id: int) -> int:
+    return conn.execute("SELECT balance_cents FROM accounts WHERE id=?",
+                        (account_id,)).fetchone()["balance_cents"]
+
+
+def _product_at(conn, risk_level: int, max_min_cents: int = 1_000_000):
+    """取指定风险等级里起购最低的一款产品(不硬编码 id,换种子也不会失效)。"""
+    return conn.execute(
+        "SELECT * FROM wealth_products WHERE risk_level=? AND min_subscribe_cents<=? "
+        "ORDER BY min_subscribe_cents LIMIT 1", (risk_level, max_min_cents)).fetchone()
+
+
+def test_wealth_gate_blocks_without_risk_profile(seeded_db):
+    """无测评用户限购 R1:R2+ 在建单阶段就被拒,余额分文不动。
+
+    修复前判据是 `if profile and ...`——profile 为 None 时整条闸门短路,实测
+    新注册用户(无测评)可直接买入 R5 产品并成功扣款。
+    """
+    conn = seeded_db
+    acct = _checking_acct(conn)
+    conn.execute("DELETE FROM risk_profiles WHERE user_id=1")
+    conn.commit()
+    w = WealthService(conn, 1)
+    before = _bal(conn, acct["id"])
+
+    def _holdings(*product_ids: int) -> int:
+        q = ",".join("?" * len(product_ids))
+        return conn.execute(
+            f"SELECT COUNT(*) n FROM wealth_holdings WHERE user_id=1 "
+            f"AND product_id IN ({q})", product_ids).fetchone()["n"]
+
+    p2, p5 = _product_at(conn, 2), _product_at(conn, 5)
+    holdings_before = _holdings(p2["id"], p5["id"])
+
+    for p in (p2, p5):
+        # confirmed=True 与 False 都必须被拦:建单阶段就拒,用户看不到确认卡
+        with pytest.raises(WealthError, match="风险测评"):
+            w.subscribe_product(p["id"], 100_000, acct["id"], confirmed=True)
+        with pytest.raises(WealthError, match="风险测评"):
+            w.subscribe_product(p["id"], 100_000, acct["id"], confirmed=False)
+    assert _bal(conn, acct["id"]) == before
+    assert _holdings(p2["id"], p5["id"]) == holdings_before  # 一笔都没买成
+
+    # R1 现金管理类仍可正常申购(闸门不能误伤低风险刚需)
+    r1 = _product_at(conn, 1)
+    res = w.subscribe_product(r1["id"], 10_000, acct["id"], confirmed=True)
+    assert res["status"] == "executed"
+    assert _bal(conn, acct["id"]) == before - 10_000
+
+
+def test_wealth_gate_honours_profile_level(seeded_db):
+    """有测评仍按 C 等级上限拦:C3 拒 R5,但 R2 放行。"""
+    conn = seeded_db
+    acct = _checking_acct(conn)
+    conn.execute("UPDATE risk_profiles SET level='C3' WHERE user_id=1")
+    conn.commit()
+    w = WealthService(conn, 1)
+
+    with pytest.raises(WealthError, match="超出"):
+        w.subscribe_product(_product_at(conn, 5)["id"], 100_000, acct["id"],
+                            confirmed=True)
+    r2 = _product_at(conn, 2)
+    before = _bal(conn, acct["id"])
+    assert w.subscribe_product(r2["id"], 100_000, acct["id"],
+                               confirmed=True)["status"] == "executed"
+    assert _bal(conn, acct["id"]) < before
+
+
+def test_wealth_subscribe_idempotent_replay(seeded_db):
+    """同键重放拒绝且余额只扣一次;换键(用户换说法再买一笔)必须放行。
+
+    修复前 external_ref 恒为 f"wealth:sub:{product_id}:{ts}",带秒级时间戳 →
+    UNIQUE 约束形同虚设,同一条指令重放会再扣一次款。
+    """
+    conn = seeded_db
+    acct = _checking_acct(conn)
+    w = WealthService(conn, 1)
+    p = _product_at(conn, 1)
+
+    def _holdings() -> int:
+        return conn.execute("SELECT COUNT(*) n FROM wealth_holdings WHERE user_id=1 "
+                            "AND product_id=?", (p["id"],)).fetchone()["n"]
+
+    before = _bal(conn, acct["id"])
+    holdings_before = _holdings()
+    key = "agent-wealth-unittest0001"
+
+    assert w.subscribe_product(p["id"], 20_000, acct["id"], confirmed=True,
+                               idempotency_key=key)["status"] == "executed"
+    after_first = _bal(conn, acct["id"])
+    assert after_first == before - 20_000
+
+    with pytest.raises(WealthError, match="幂等命中"):
+        w.subscribe_product(p["id"], 20_000, acct["id"], confirmed=True,
+                            idempotency_key=key)
+    assert _bal(conn, acct["id"]) == after_first          # 重放零扣款
+
+    # 换键 = 新的一笔,必须能买成
+    w.subscribe_product(p["id"], 20_000, acct["id"], confirmed=True,
+                        idempotency_key="agent-wealth-unittest0002")
+    assert _bal(conn, acct["id"]) == after_first - 20_000
+
+    # 该键只对应一条扣款流水;持仓恰好新增 2 笔(不是 3 笔)
+    assert conn.execute("SELECT COUNT(*) n FROM transactions WHERE external_ref=?",
+                        (f"wealth:sub:{key}",)).fetchone()["n"] == 1
+    assert _holdings() == holdings_before + 2
+
+
+def test_wealth_redeem_ref_is_deterministic(seeded_db):
+    """赎回 external_ref 用 holding_id(去掉秒级时间戳),二次赎回被拒、不重复入账。"""
+    conn = seeded_db
+    w = WealthService(conn, 1)
+    row = conn.execute("SELECT * FROM wealth_holdings WHERE user_id=1 AND status='holding' "
+                       "ORDER BY id LIMIT 1").fetchone()
+    assert row is not None, "种子数据缺少可赎回持仓"
+    acct = _checking_acct(conn)
+    before = _bal(conn, acct["id"])
+
+    assert w.redeem_product(row["id"], confirmed=True)["status"] == "executed"
+    ref = conn.execute("SELECT external_ref FROM transactions WHERE tx_type='redeem' "
+                       "ORDER BY id DESC LIMIT 1").fetchone()["external_ref"]
+    assert ref == f"wealth:red:{row['id']}"               # 不含时间戳
+    credited = _bal(conn, acct["id"])
+    assert credited > before
+
+    with pytest.raises(WealthError, match="已赎回"):
+        w.redeem_product(row["id"], confirmed=True)
+    assert _bal(conn, acct["id"]) == credited             # 二次赎回零入账
+
+
+def test_set_card_limits_writes_audit(seeded_db):
+    """铁律 4 全量审计:set_card_limits 此前只写 change_log、漏了 audit_log,
+    是全库唯一没有审计留痕的写操作。"""
+    conn = seeded_db
+    card = conn.execute("SELECT * FROM cards WHERE user_id=1 AND status='active' "
+                        "ORDER BY id LIMIT 1").fetchone()
+    assert card is not None, "种子数据缺少活跃卡片"
+
+    def _audited() -> list[str]:
+        return [r["tool"] for r in
+                conn.execute("SELECT tool FROM audit_log").fetchall()]
+
+    assert "set_card_limits" not in _audited()
+    LedgerService(conn, 1).set_card_limits(card["id"], daily_limit_cents=800_000)
+    assert "set_card_limits" in _audited()
+    assert conn.execute("SELECT daily_limit_cents d FROM cards WHERE id=?",
+                        (card["id"],)).fetchone()["d"] == 800_000
