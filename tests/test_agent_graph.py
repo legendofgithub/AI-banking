@@ -1107,3 +1107,191 @@ def test_card_lost_requires_double_gate(tmp_path):
             assert "set_card_status" in _audited_tools(db)
 
     run(scenario_confirm())
+
+
+# ------------------------------------------------- 评审修复(2026-10-03):理财三缺口
+# 1) compare_products 传参名错(ids vs product_ids)→ 静默空对比却照播"已生成";
+# 2) 申购 external_ref 带秒级 ts → 同指令重放会二次扣款;
+# 3) 风险闸门写成 `if profile and ...` → 无测评用户(新注册)可裸购 R5。
+
+_W_QUERY_JSON = json.dumps(
+    {"action": "query", "keyword": None, "product_id": None, "amount_yuan": None,
+     "holding_id": None, "p_type": None, "assess_answer": None}, ensure_ascii=False)
+
+
+def _w_subscribe_json(keyword: str, amount: str) -> str:
+    return json.dumps(
+        {"action": "subscribe", "keyword": keyword, "product_id": None,
+         "amount_yuan": amount, "holding_id": None, "p_type": None,
+         "assess_answer": None}, ensure_ascii=False)
+
+
+def test_wealth_compare_passes_product_ids(tmp_path):
+    """对比理财产品:compare_products 必须收到 product_ids 且返回真实产品。
+
+    这是"对比理财产品"原本坏掉却查不出来的根因——传的是 {"ids": ...},pydantic
+    直接报 missing/unexpected,异常被兜成 {"error": ...} 又被静默吞成空列表,
+    于是照样播报"对比结果已生成"。本用例把参数名钉死,顺带断言结果非空。
+    """
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "wealth"}',
+            _W_QUERY_JSON,
+            "两款产品的对比结果已生成。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "w4"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("帮我对比一下理财产品")]}, cfg)
+            assert not r1.get("__interrupt__")  # 只读场景无闸门
+            snap = await graph.aget_state(cfg)
+            calls = _traced(snap.values, "compare_products")
+            assert calls, "对比意图必须调用 compare_products"
+            assert "product_ids" in calls[0]["args"], calls[0]["args"]
+            assert "ids" not in calls[0]["args"], "参数名必须叫 product_ids"
+            assert calls[0]["ok"] is True, calls[0]["error"]
+
+            notice = snap.values.get("notice") or {}
+            assert notice.get("kind") == "wealth_compare"
+            products = notice.get("products") or []
+            assert len(products) >= 2, f"对比结果不能为空: {notice}"
+            assert {p.get("name") for p in products} == {"余额+货币基金", "稳健纯债基金"}
+            assert _balance(db) == DEFAULT_BALANCE  # 只读零动钱
+            assert _count(db, "transfer_orders") == 0
+
+    run(scenario())
+
+
+def test_wealth_compare_failure_is_visible(tmp_path, monkeypatch):
+    """对比工具失败时必须走可见的 bank_error,不再降级成"空对比 + 照播成功"。"""
+    from agent.bank import BankTools
+
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    real_call = BankTools.call
+
+    async def flaky(self, name, /, **args):
+        if name == "compare_products":
+            return {"error": "2 validation errors for call[compare_products]"}
+        return await real_call(self, name, **args)
+
+    monkeypatch.setattr(BankTools, "call", flaky)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "wealth"}',
+            _W_QUERY_JSON,
+            "产品对比没能取到数据。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "w5"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("帮我对比一下理财产品")]}, cfg)
+            assert not r1.get("__interrupt__")
+            snap = await graph.aget_state(cfg)
+            notice = snap.values.get("notice") or {}
+            assert notice.get("kind") == "bank_error", notice
+            assert notice.get("where") == "compare_products"
+            assert "validation errors" in str(notice.get("error"))
+            # 轨迹里如实记下失败(ok=False),不是"成功但空"
+            calls = _traced(snap.values, "compare_products")
+            assert calls and calls[0]["ok"] is False
+            assert _balance(db) == DEFAULT_BALANCE
+
+    run(scenario())
+
+
+def test_wealth_subscribe_blocked_without_assessment(tmp_path):
+    """无测评用户申购 R2:bank 侧适当性闸门直接拒——不进闸门、零扣款、
+    notice 定性为 wealth_need_assess(不是泛化 bank_error)。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("DELETE FROM risk_profiles WHERE user_id=1")
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "wealth"}',
+            _w_subscribe_json("稳健纯债基金", "5000"),
+            "你还没有风险测评记录。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "w6"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("我要申购5000元的稳健纯债基金")]}, cfg)
+            # 关键:建单阶段就被拒,用户看不到确认卡(不会误以为"只差一步确认")
+            assert not r1.get("__interrupt__"), "被适当性拒绝的申购不该弹确认卡"
+            snap = await graph.aget_state(cfg)
+            notice = snap.values.get("notice") or {}
+            assert notice.get("kind") == "wealth_need_assess", notice
+            assert "风险测评" in str(notice.get("error"))
+            tools_traced = {c["tool"] for c in snap.values.get("bank_calls", [])}
+            assert "confirm_transfer_order" not in tools_traced
+            assert _balance(db) == DEFAULT_BALANCE        # 零动钱
+            assert len(_holding_rows(db)) == 1            # 只有播种那一笔
+
+    run(scenario())
+
+
+def test_wealth_subscribe_replay_not_double_charged(tmp_path):
+    """同一会话原样重发同一条申购指令:闸门照走,但 bank 侧幂等命中 → 不二次扣款。
+
+    修复前 external_ref 带秒级时间戳,UNIQUE 约束形同虚设,重放会再扣一次。
+    """
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    text = "我要申购1000元的余额+货币基金"
+    sub_json = _w_subscribe_json("余额+货币基金", "1000")
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            # 第 1 轮:路由 → 抽取 → 播报
+            '{"intent": "wealth"}', sub_json, "申购已完成。",
+            # 第 2 轮(原样重放):路由 → 抽取 → 播报
+            '{"intent": "wealth"}', sub_json, "这笔申购此前已经执行过了。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "w7"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage(text)]}, cfg)
+            key1 = _interrupt_payload(r1)["order"]
+            assert "idempotency_key" not in key1, "内部幂等键不得泄漏进前端卡片载荷"
+            r2 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert "申购" in _ai_text(r2)
+            after_first = _balance(db)
+            assert after_first == DEFAULT_BALANCE - 100_000  # 恰好扣 1000 元
+            holdings_after_first = len(_holding_rows(db))
+
+            # 原样重放同一条指令(同 thread + 同台词 → 同幂等键)
+            r3 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage(text)]}, cfg)
+            assert _interrupt_payload(r3)["type"] == "confirm_wealth"
+            r4 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert not r4.get("__interrupt__")
+            assert _balance(db) == after_first, "同指令重放不得二次扣款"
+            assert len(_holding_rows(db)) == holdings_after_first
+            snap = await graph.aget_state(cfg)
+            assert (snap.values.get("notice") or {}).get("kind") == "wealth_duplicate"
+            subs = _traced(snap.values, "subscribe_product")
+            keys = {c["args"].get("idempotency_key") for c in subs}
+            assert len(keys) == 1 and None not in keys, "两次必须是同一个幂等键"
+
+    run(scenario())
+
+
+def test_wealth_idempotency_key_changes_with_wording(tmp_path):
+    """用户换一种说法再买一笔 → 指令原文不同 → 新键,必须真的能买成。"""
+    from agent.graph import _wealth_idempotency_key
+
+    base = dict(kind="sub", thread_id="t", target_id=1, amount_cents=100_000,
+                from_account_id=1)
+    assert (_wealth_idempotency_key(turn_text="买1000元货基", **base)
+            == _wealth_idempotency_key(turn_text="买1000元货基", **base))
+    assert (_wealth_idempotency_key(turn_text="买1000元货基", **base)
+            != _wealth_idempotency_key(turn_text="再买1000元货基", **base))
+    assert _wealth_idempotency_key(
+        turn_text="买1000元货基", **base).startswith("agent-wealth-")

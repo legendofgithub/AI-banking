@@ -110,9 +110,15 @@ class WealthService:
         return out
 
     def subscribe_product(self, product_id: int, amount_cents: int,
-                          from_account_id: int, confirmed: bool = False) -> dict:
+                          from_account_id: int, confirmed: bool = False,
+                          idempotency_key: str | None = None) -> dict:
         """申购。confirmed=False 只返回"待确认单"（Agent 拿给用户确认）；
-        confirmed=True 才真正扣款建仓。风险等级超限直接拒绝。"""
+        confirmed=True 才真正扣款建仓。风险等级超限直接拒绝。
+
+        idempotency_key: 编排层生成的重放键（与 create_transfer_order 同一约定）。
+        同一条指令重放 → 同键 → 命中已有流水并拒绝重复扣款；换一种说法
+        （「再买1000」）算新键，视为新一笔，互不误伤。
+        """
         product = self.conn.execute("SELECT * FROM wealth_products WHERE id=?",
                                     (product_id,)).fetchone()
         if not product:
@@ -120,8 +126,18 @@ class WealthService:
         if amount_cents < product["min_subscribe_cents"]:
             raise WealthError(
                 f"低于起购金额 {cents_to_yuan(product['min_subscribe_cents'])} 元")
+        # 适当性闸门（评审修复 2026-10-03）：原写法 `if profile and ...` 在 profile
+        # 为 None 时整条闸门短路——实测「新注册用户（无测评）直接买入 R5 产品」成功扣款。
+        # 改为：无测评一律限购 R1（现金管理类），R2 及以上必须先过测评；有测评仍按
+        # C 等级上限拦。判断放在 confirmed 分支之前，故建单阶段就会被拦，不出现确认卡。
         profile = self.get_risk_profile()
-        if profile and product["risk_level"] > _LEVEL_TO_RISK[profile["level"]]:
+        if not profile:
+            if product["risk_level"] > 1:
+                raise WealthError(
+                    f"尚未完成风险测评,按适当性要求暂不能申购 R{product['risk_level']} "
+                    f"产品「{product['name']}」;请先完成风险测评"
+                    f"(对我说「做风险测评」),通过后即可按你的等级选品。")
+        elif product["risk_level"] > _LEVEL_TO_RISK[profile["level"]]:
             raise WealthError(
                 f"产品风险 R{product['risk_level']} 超出您的风险承受等级 "
                 f"{profile['level']}（最高可购 R{_LEVEL_TO_RISK[profile['level']]}）")
@@ -136,6 +152,18 @@ class WealthService:
             raise WealthError("账户不存在")
         if acct["balance_cents"] < amount_cents:
             raise WealthError("余额不足")
+        ts = now_iso()
+        # 幂等键（评审修复 2026-10-03）：原来 external_ref 恒为
+        # f"wealth:sub:{product_id}:{ts}"——带了秒级时间戳，UNIQUE 约束形同虚设，
+        # 同一条指令重放会再扣一次款。有编排层键时改用键（同键 → 撞已存在流水）；
+        # 无键（直接调工具的调用方）保留原行为，不改变既有语义。
+        ref = (f"wealth:sub:{idempotency_key}" if idempotency_key
+               else f"wealth:sub:{product_id}:{ts}")
+        if idempotency_key:
+            prev = self.conn.execute(
+                "SELECT id FROM transactions WHERE external_ref=?", (ref,)).fetchone()
+            if prev:
+                raise WealthError("该申购此前已执行过（幂等命中），本次未重复扣款")
         try:
             self.conn.execute("BEGIN IMMEDIATE")
             fee = amount_cents * product["subscription_fee_bps"] // 10000
@@ -143,7 +171,6 @@ class WealthService:
             new_balance = acct["balance_cents"] - amount_cents
             self.conn.execute("UPDATE accounts SET balance_cents=? WHERE id=?",
                               (new_balance, from_account_id))
-            ts = now_iso()
             cur = self.conn.execute(
                 """INSERT INTO transactions
                    (account_id, ts, direction, amount_cents, balance_after_cents,
@@ -151,13 +178,20 @@ class WealthService:
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (from_account_id, ts, "out", amount_cents, new_balance,
                  "subscribe", product["name"], "理财申购",
-                 f"申购{product['name']}", f"wealth:sub:{product_id}:{ts}"))
+                 f"申购{product['name']}", ref))
             self.conn.execute(
                 """INSERT INTO wealth_holdings
                    (user_id, product_id, principal_cents, est_value_cents,
                     status, subscribed_at) VALUES (?,?,?,?, 'holding', ?)""",
                 (self.user_id, product_id, net, net, ts))
             self.conn.commit()
+        except sqlite3.IntegrityError as exc:
+            # 并发/竞态兜底：external_ref UNIQUE 才是最后一道防线，前面的 SELECT
+            # 只是为了让常见路径给出干净话术、不必进事务。
+            self.conn.rollback()
+            if idempotency_key:
+                raise WealthError("该申购此前已执行过（幂等命中），本次未重复扣款") from exc
+            raise
         except Exception:
             self.conn.rollback()
             raise
@@ -176,7 +210,13 @@ class WealthService:
         return result
 
     def redeem_product(self, holding_id: int, confirmed: bool = False) -> dict:
-        """全额赎回（演示简化）。"""
+        """全额赎回（演示简化）。
+
+        幂等性来自持仓状态机本身：赎回后 status='redeemed'，第二次调用在入口就被
+        "持仓不存在或已赎回"拦下，不存在重复入账。评审修复（2026-10-03）另把
+        external_ref 里的秒级 ts 去掉——holding_id 已是天然唯一键，带上 ts 会让
+        UNIQUE 约束失效，留着是隐患。
+        """
         h = self.conn.execute(
             "SELECT h.*, p.name, p.redemption_fee_bps FROM wealth_holdings h "
             "JOIN wealth_products p ON p.id=h.product_id WHERE h.id=? AND h.user_id=?",
@@ -206,11 +246,15 @@ class WealthService:
                     tx_type, counterparty, category, memo, external_ref)
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (acct["id"], ts, "in", net, new_balance, "redeem", h["name"],
-                 "理财赎回", f"赎回{h['name']}", f"wealth:red:{holding_id}:{ts}"))
+                 "理财赎回", f"赎回{h['name']}", f"wealth:red:{holding_id}"))
             self.conn.execute(
                 "UPDATE wealth_holdings SET status='redeemed', redeemed_at=? WHERE id=?",
                 (ts, holding_id))
             self.conn.commit()
+        except sqlite3.IntegrityError as exc:
+            # external_ref UNIQUE 兜底（竞态下同一持仓被并发赎回）
+            self.conn.rollback()
+            raise WealthError("该持仓已赎回，未重复入账") from exc
         except Exception:
             self.conn.rollback()
             raise
