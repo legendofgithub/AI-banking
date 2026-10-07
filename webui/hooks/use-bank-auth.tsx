@@ -30,6 +30,13 @@ export function getStoredToken(): string {
   return window.localStorage.getItem(TOKEN_KEY) ?? "";
 }
 
+/** 登录态请求头:会话 token 一律走 x-bank-token 头,绝不进 URL query
+ * (query 会明文落服务端 access log,2026-10-07 审计后全链路改头)。 */
+export function bankAuthHeaders(): Record<string, string> {
+  const token = getStoredToken();
+  return token ? { "x-bank-token": token } : {};
+}
+
 /** 登录/注册成功后落库:token + 昵称 + 用户 ID(后端返回结构原样可传) */
 export function storeBankAuth(
   token: string,

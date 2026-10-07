@@ -24,7 +24,6 @@ import {
   SidebarMenu,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { getStoredToken } from "@/hooks/use-bank-auth";
 import type { Chat } from "@/lib/db/schema";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
@@ -88,10 +87,9 @@ export function getChatHistoryPaginationKey(
 
   if (pageIndex === 0) {
     // 会话目录来自 agent 后端(服务端持久化);接口固定返回 hasMore=false,
-    // 上面那个守卫自然终止分页。已登录时附带 bank-token。
+    // 上面那个守卫自然终止分页。登录态由全局 fetcher 带 x-bank-token 头。
     const agentBase = `${typeof window === "undefined" ? "http://127.0.0.1" : `${window.location.protocol}//${window.location.hostname}`}:${process.env.NEXT_PUBLIC_AGENT_API_PORT ?? "8800"}`;
-    const token = getStoredToken();
-    return `${agentBase}/api/threads?limit=${PAGE_SIZE}${token ? `&token=${encodeURIComponent(token)}` : ""}`;
+    return `${agentBase}/api/threads?limit=${PAGE_SIZE}`;
   }
 
   return null;

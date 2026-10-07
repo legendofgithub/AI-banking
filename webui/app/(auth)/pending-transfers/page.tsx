@@ -18,7 +18,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { bankAgentBase, useBankAuth } from "@/hooks/use-bank-auth";
+import {
+  bankAgentBase,
+  bankAuthHeaders,
+  useBankAuth,
+} from "@/hooks/use-bank-auth";
 
 interface PendingOrder {
   amount_yuan: string;
@@ -145,9 +149,9 @@ export default function PendingTransfersPage() {
       return;
     }
     try {
-      const res = await fetch(
-        `${bankAgentBase()}/api/pending-orders?token=${encodeURIComponent(token)}`
-      );
+      const res = await fetch(`${bankAgentBase()}/api/pending-orders`, {
+        headers: bankAuthHeaders(),
+      });
       const json = (await res.json().catch(() => null)) as {
         orders?: PendingOrder[];
       } | null;

@@ -148,6 +148,32 @@ def test_register_rejects_duplicate_id_card(bank):
                       login_password="Passw0rd!", pay_password="123456")
 
 
+def test_id_card_unique_index_blocks_race(bank):
+    """索引兜底:绕过"先查后插"直接 SQL 塞两条同证件号,第二条必须被
+    部分唯一索引挡下(一证一户的硬约束不依赖应用层检查;老用户空串不受限)。"""
+    import sqlite3 as _s
+    bank.execute(
+        "INSERT INTO users (name, phone, id_card, email, created_at) "
+        "VALUES ('测试1','13900009901','110101198509128888','',"
+        "'2026-10-07T00:00:00')")
+    bank.commit()
+    # 第二条同证件号:即便绕过应用层"先查后插",索引也直接拒绝
+    with pytest.raises(_s.IntegrityError):
+        bank.execute(
+            "INSERT INTO users (name, phone, id_card, email, created_at) "
+            "VALUES ('测试2','13900009902','110101198509128888','',"
+            "'2026-10-07T00:00:01')")
+    bank.rollback()
+    # 空串(老演示用户)不受部分索引限制,可多条共存
+    bank.execute(
+        "INSERT INTO users (name, phone, id_card, email, created_at) "
+        "VALUES ('老用户甲','13900000001','','','2026-01-01T00:00:00')")
+    bank.execute(
+        "INSERT INTO users (name, phone, id_card, email, created_at) "
+        "VALUES ('老用户乙','13900000002','','','2026-01-01T00:00:00')")
+    bank.commit()
+
+
 def test_register_rejects_duplicate_identifier(bank):
     kw = dict(real_name="王五", id_card="110101199003077774",
               phone="13900002222",

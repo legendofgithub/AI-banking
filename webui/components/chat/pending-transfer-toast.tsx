@@ -13,7 +13,11 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useActiveChat } from "@/hooks/use-active-chat";
-import { bankAgentBase, useBankAuth } from "@/hooks/use-bank-auth";
+import {
+  bankAgentBase,
+  bankAuthHeaders,
+  useBankAuth,
+} from "@/hooks/use-bank-auth";
 
 interface PendingOrder {
   amount_yuan: string;
@@ -38,9 +42,9 @@ export function PendingTransferToast() {
       return;
     }
     try {
-      const res = await fetch(
-        `${bankAgentBase()}/api/pending-orders?token=${encodeURIComponent(token)}`
-      );
+      const res = await fetch(`${bankAgentBase()}/api/pending-orders`, {
+        headers: bankAuthHeaders(),
+      });
       const json = (await res.json().catch(() => null)) as {
         orders?: PendingOrder[];
       } | null;
