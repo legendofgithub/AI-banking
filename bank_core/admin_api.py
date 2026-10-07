@@ -294,13 +294,9 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
         except LedgerError as e:
             return _err(e)
 
-    @app.delete("/api/contacts/{contact_id}")
-    def delete_contact(contact_id: int, user_id: int | None = None):
-        try:
-            with admin_scope():
-                return _Svcs(_uid(user_id)).ledger.delete_contact(contact_id)
-        except LedgerError as e:
-            return _err(e)
+    # 权限边界(2026-10-01 定):管理员对用户联系人=只读+代客录入,不提供
+    # 删除——个人数据不容后台销毁,删除权属用户本人(将来经对话工具+闸门)。
+    # 原先的 DELETE /api/contacts/{id} 连同 ledger.delete_contact 一并移除。
 
     # ------------------------------------------------------------ 卡片维护
     @app.get("/api/cards")

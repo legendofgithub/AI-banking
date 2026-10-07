@@ -374,9 +374,10 @@ input.mono{font-family:var(--mono)}
     <h3>联系人列表</h3>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>姓名</th><th>手机号</th><th>关系</th><th>备注</th><th>操作</th></tr></thead>
+        <thead><tr><th>姓名</th><th>手机号</th><th>关系</th><th>备注</th></tr></thead>
         <tbody id="contactsBody"></tbody>
       </table>
+      <p class="hint">管理员对用户联系人为只读+代客录入，不可删除（用户个人数据不容销毁；删除权属用户本人）</p>
     </div>
   </div>
 </section>
@@ -827,7 +828,7 @@ async function loadChange(){
 
 /* ---------- 4. 联系人 ---------- */
 async function loadContacts(){
-  $('#contactsBody').innerHTML = loadingRow(5);
+  $('#contactsBody').innerHTML = loadingRow(4);
   const d = await api(withUser('/api/contacts'));
   $('#contactsBody').innerHTML = (d.contacts || []).map(c => `
     <tr>
@@ -835,8 +836,7 @@ async function loadContacts(){
       <td class="mono">${esc(c.phone)}</td>
       <td>${c.relation ? esc(c.relation) : '<span class="muted">—</span>'}</td>
       <td class="muted">${c.note ? esc(c.note) : '—'}</td>
-      <td><button class="btn mini danger js-del-contact" data-id="${esc(c.id)}" data-name="${esc(c.name)}">删除</button></td>
-    </tr>`).join('') || emptyRow(5);
+    </tr>`).join('') || emptyRow(4);
 }
 
 /* ---------- 5. 卡片 ---------- */
@@ -1072,16 +1072,7 @@ $('#contactForm').addEventListener('submit', async e => {
   } catch (err) { toast(err.message, 'err'); }
 });
 
-// 联系人：删除（委托）
-$('#contactsBody').addEventListener('click', async e => {
-  const btn = e.target.closest('.js-del-contact'); if (!btn) return;
-  if (!confirm(`确认删除联系人「${btn.dataset.name}」？删除后不可恢复。`)) return;
-  try {
-    await api(withUser(`/api/contacts/${btn.dataset.id}`), { method: 'DELETE' });
-    toast('联系人已删除');
-    TAB_LOADERS.contacts();
-  } catch (err) { toast(err.message, 'err'); }
-});
+// 联系人：管理员只读+代客录入，删除入口已按权限边界移除（不可销毁用户个人数据）
 
 // 卡片：锁定 / 解锁 / 挂失（二次强确认）/ 限额调整（prompt）
 $('#cardsBody').addEventListener('click', async e => {
