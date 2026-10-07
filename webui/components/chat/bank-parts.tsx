@@ -1,6 +1,12 @@
 "use client";
 
-import { type ChangeEvent, type ReactNode, useCallback, useState } from "react";
+import {
+  type ChangeEvent,
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useState,
+} from "react";
 import { useActiveChat } from "@/hooks/use-active-chat";
 
 /*
@@ -227,7 +233,10 @@ function ConfirmButtons({ payRequired = false }: { payRequired?: boolean }) {
           maxLength={6}
           onChange={handlePayChange}
           placeholder="支付密码"
-          type="password"
+          /* 不用 type=password:Chromium 会弹"保存密码/同步已暂停"系统
+             提示(实测 Edge 演示时强干扰);text+text-security 同为圆点遮罩 */
+          style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+          type="text"
           value={payPassword}
         />
       ) : null}
@@ -814,7 +823,8 @@ export function SubscriptionCancelCard({
         maxLength={6}
         onChange={handleLocalChange}
         placeholder="支付密码"
-        type="password"
+        style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+        type="text"
         value={payPassword}
       />
       <button

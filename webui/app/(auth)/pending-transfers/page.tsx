@@ -10,6 +10,7 @@
 import Link from "next/link";
 import {
   type ChangeEvent,
+  type CSSProperties,
   type FormEvent,
   useCallback,
   useEffect,
@@ -115,7 +116,11 @@ function OrderRow({
                 maxLength={6}
                 onChange={handleChange}
                 placeholder="6 位数字"
-                type="password"
+                /* 支付密码不用 type=password:Chromium 会弹"保存密码/同步
+                   已暂停"系统提示,比赛演示强干扰;text+text-security 同为
+                   圆点遮罩且零弹窗 */
+                style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+                type="text"
                 value={payPassword}
               />
             </div>
