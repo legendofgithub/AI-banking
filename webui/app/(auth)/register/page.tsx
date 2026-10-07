@@ -2,7 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ChangeEvent, type FormEvent, useCallback, useState } from "react";
+import {
+  type ChangeEvent,
+  type CSSProperties,
+  type FormEvent,
+  useCallback,
+  useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -147,12 +153,12 @@ export default function RegisterPage() {
     try {
       const res = await fetch(`${bankAgentBase()}/api/auth/register`, {
         body: JSON.stringify({
-          real_name: realName.trim(),
-          id_card: idCard.trim(),
-          phone: trimmedPhone,
           email: trimmedEmail,
+          id_card: idCard.trim(),
           login_password: password,
           pay_password: payPassword,
+          phone: trimmedPhone,
+          real_name: realName.trim(),
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -303,7 +309,10 @@ export default function RegisterPage() {
             onChange={handlePayPasswordChange}
             placeholder="支付密码"
             required
-            type="password"
+            /* 支付密码不用 type=password:避免浏览器弹"保存密码/同步
+               已暂停"系统提示;text+text-security 同为圆点遮罩 */
+            style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+            type="text"
             value={payPassword}
           />
           <p className="text-xs text-muted-foreground">
@@ -321,7 +330,8 @@ export default function RegisterPage() {
             onChange={handlePayPasswordConfirmChange}
             placeholder="再次输入支付密码"
             required
-            type="password"
+            style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+            type="text"
             value={payPasswordConfirm}
           />
           {payConfirmMismatch ? (
