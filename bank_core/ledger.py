@@ -155,23 +155,9 @@ class LedgerService:
                                            "contact_id": out["id"]})
         return out
 
-    def delete_contact(self, contact_id: int) -> dict:
-        """删除联系人（管理端维护用）。拒绝删除有未完结转账单的联系人无此约束——
-        演示库联系人只被订单按 id 引用，删除后历史单据仍可追溯姓名。"""
-        row = self.conn.execute(
-            "SELECT * FROM contacts WHERE id=? AND user_id=?",
-            (contact_id, self.user_id)).fetchone()
-        if not row:
-            raise LedgerError("联系人不存在")
-        self.conn.execute("DELETE FROM contacts WHERE id=?", (contact_id,))
-        self.conn.commit()
-        result = {"contact_id": contact_id, "name": row["name"], "deleted": True}
-        audit(self.conn, "delete_contact", {"contact_id": contact_id},
-              {"name": row["name"]}, risk="MED")
-        record_change(self.conn, self.user_id, category="contact", action="delete",
-                      target=row["name"],
-                      detail={"phone": row["phone"], "contact_id": contact_id})
-        return result
+    # 权限边界:联系人无删除方法(2026-10-01 起,原 delete_contact 已移除)。
+    # 管理员只可查/代客录入——用户个人数据不容后台销毁,管理员权限不得
+    # 大于用户本人;将来用户侧删除走对话工具+敏感操作闸门。
 
     # ------------------------------------------------------------------ 转账
 

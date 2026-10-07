@@ -132,7 +132,9 @@ def test_adjust_minus_3000_roundtrip(client):
     assert ov["accounts"][0]["balance_yuan"] == "7000.00"
 
 
-def test_admin_contact_crud(client):
+def test_admin_contact_add_and_delete_forbidden(client):
+    """权限边界:管理员可代客录入联系人,但删除入口已移除——
+    个人数据不容后台销毁(接口不存在,数据原样保留)。"""
     r = client.post("/api/contacts",
                     json={"name": "王芳", "phone": "13700001111", "note": "后台录入"})
     assert r.status_code == 200
@@ -141,13 +143,11 @@ def test_admin_contact_crud(client):
                       ).json()["records"]
     assert recs[0]["operator"] == "admin"
     assert recs[0]["action"] == "add"
+    # 删除路由不存在(405),联系人原样保留
     d = client.delete(f"/api/contacts/{cid}")
-    assert d.status_code == 200
-    recs = client.get("/api/change-records", params={"category": "contact"}
-                      ).json()["records"]
-    assert recs[0]["action"] == "delete"
+    assert d.status_code == 405
     names = [c["name"] for c in client.get("/api/contacts").json()["contacts"]]
-    assert "王芳" not in names
+    assert "王芳" in names
 
 
 def test_admin_card_lock(client):
