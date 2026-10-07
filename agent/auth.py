@@ -145,7 +145,9 @@ def register(conn: sqlite3.Connection, *, real_name: str, id_card: str,
         conn.commit()
     except sqlite3.IntegrityError as exc:
         conn.rollback()
-        raise AuthError("注册失败：账号已存在") from exc
+        # 唯一约束三处:auth_users.identifier(手机号)、users.id_card(一证一户
+        # 部分唯一索引,先查后插的竞态兜底)、accounts 主键——统一转友好提示
+        raise AuthError("注册失败:该手机号或身份证号已注册,请直接登录") from exc
     return {"user_id": uid, "nickname": real_name, "real_name": real_name,
             "identifier": phone, "identifier_type": "phone",
             "id_card": id_card, "email": email}

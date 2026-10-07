@@ -6,6 +6,7 @@ import { type ClassValue, clsx } from 'clsx';
 import { formatISO } from 'date-fns';
 import { twMerge } from 'tailwind-merge';
 import type { DBMessage, Document } from '@/lib/db/schema';
+import { bankAuthHeaders } from '@/hooks/use-bank-auth';
 import { ChatbotError, type ErrorCode } from './errors';
 import type { ChatMessage, ChatTools, CustomUIDataTypes } from './types';
 
@@ -13,8 +14,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// SWR 统一走这里:自动带登录会话头(x-bank-token),token 绝不进 URL query
+// ——query 会明文落 8800 access log(2026-10-07 审计后全链路改头)
 export const fetcher = async (url: string) => {
-  const response = await fetch(url);
+  const response = await fetch(url, { headers: bankAuthHeaders() });
 
   if (!response.ok) {
     const { code, cause } = await response.json();

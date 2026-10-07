@@ -126,15 +126,8 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   // 会话历史来自 agent 后端(服务端 SQLite 持久化):刷新/换浏览器都能恢复现场,
   // 与聊天 transport 同源同端口策略(跟随页面主机,避免代理差异)。
-  // 已登录时附带 bank-token,后端按登录用户隔离/归属校验。
-  const historyUrl = (() => {
-    const params = new URLSearchParams({ thread_id: chatId });
-    const token = getStoredToken();
-    if (token) {
-      params.set("token", token);
-    }
-    return `${agentBase}/api/history?${params.toString()}`;
-  })();
+  // 登录态由全局 fetcher 带 x-bank-token 头(见 lib/utils.ts),URL 不带 token。
+  const historyUrl = `${agentBase}/api/history?thread_id=${encodeURIComponent(chatId)}`;
   const { data: chatData, isLoading } = useSWR(
     isNewChat ? null : historyUrl,
     fetcher,

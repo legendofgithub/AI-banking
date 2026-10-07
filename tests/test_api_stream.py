@@ -195,7 +195,8 @@ def test_history_and_threads(tmp_path):
         _post_chat(client, "再说点什么", "t-hist", token=_tok)
         _post_chat(client, "另一个会话", "t-other", token=_tok)
 
-        r = client.get("/api/history", params={"thread_id": "t-hist", "token": _tok})
+        r = client.get("/api/history", params={"thread_id": "t-hist"},
+                        headers={"x-bank-token": _tok})
         assert r.status_code == 200
         msgs = r.json()["messages"]
         roles = [m["role"] for m in msgs]
@@ -205,10 +206,11 @@ def test_history_and_threads(tmp_path):
         assert texts[1] == "你好呀" and texts[3] == "第二句回复"
 
         # 未知 thread → 空历史(不报错,前端按新会话处理)
-        r2 = client.get("/api/history", params={"thread_id": "no-such", "token": _tok})
+        r2 = client.get("/api/history", params={"thread_id": "no-such"},
+                         headers={"x-bank-token": _tok})
         assert r2.status_code == 200 and r2.json()["messages"] == []
 
-        r3 = client.get("/api/threads", params={"token": _tok})
+        r3 = client.get("/api/threads", headers={"x-bank-token": _tok})
         assert r3.status_code == 200
         body = r3.json()
         assert body["hasMore"] is False
@@ -227,12 +229,12 @@ def test_thread_title_truncation_and_touch(tmp_path):
     with client:
         long_text = "这是一条特别长的开场白" * 5  # 55 字
         _post_chat(client, long_text, "t-title", token=_tok)
-        r = client.get("/api/threads", params={"token": _tok})
+        r = client.get("/api/threads", headers={"x-bank-token": _tok})
         title = r.json()["chats"][0]["title"]
         assert title.startswith("这是一条特别长的开场白") and title.endswith("…")
         assert len(title) <= 31
         _post_chat(client, "第二条消息", "t-title", token=_tok)
-        r2 = client.get("/api/threads", params={"token": _tok})
+        r2 = client.get("/api/threads", headers={"x-bank-token": _tok})
         assert r2.json()["chats"][0]["title"] == title  # 标题不变
 
 
@@ -246,16 +248,16 @@ def test_history_shows_pending_gate_question(tmp_path):
     with client:
         _post_chat(client, "给张三转 500 元", "api-gq", token=_tok)
         msgs = client.get("/api/history",
-                          params={"thread_id": "api-gq",
-                                      "token": _tok}).json()["messages"]
+                          params={"thread_id": "api-gq"},
+                           headers={"x-bank-token": _tok}).json()["messages"]
         texts = [m["parts"][0]["text"] for m in msgs]
         assert texts[0] == "给张三转 500 元"
         assert texts[-1].startswith("请确认转账")  # 闸门问题可见,不再是"没理人"
 
         _post_chat(client, "888888", "api-gq", token=_tok)
         msgs2 = client.get("/api/history",
-                           params={"thread_id": "api-gq",
-                                      "token": _tok}).json()["messages"]
+                           params={"thread_id": "api-gq"},
+                           headers={"x-bank-token": _tok}).json()["messages"]
         texts2 = [m["parts"][0]["text"] for m in msgs2]
         assert any("已向张三" in t for t in texts2)
         # 无连续重复消息(补写的问题在 resume 回流后被去重)
@@ -368,7 +370,7 @@ def test_pending_orders_and_page_confirm(tmp_path):
         assert _balance(db) == DEFAULT_BALANCE  # 建单不动钱
 
         # 弹窗数据源:当前用户悬空单可见
-        r = client.get("/api/pending-orders", params={"token": tok})
+        r = client.get("/api/pending-orders", headers={"x-bank-token": tok})
         assert r.status_code == 200
         orders = r.json()["orders"]
         assert any(o["order_id"] == order_id and o["to_name"] == "张三"
@@ -377,7 +379,7 @@ def test_pending_orders_and_page_confirm(tmp_path):
 
         # 未登录/无效 token → 空列表(不泄露他人订单)
         assert client.get("/api/pending-orders",
-                          params={"token": "x" * 32}).json()["orders"] == []
+                          headers={"x-bank-token": "x" * 32}).json()["orders"] == []
 
         # 页面确认:密码错 → 拒绝且订单不动
         r = client.post("/api/orders/confirm",
@@ -396,7 +398,7 @@ def test_pending_orders_and_page_confirm(tmp_path):
 
         # 确认后弹窗数据源不再含该单
         orders2 = client.get("/api/pending-orders",
-                             params={"token": tok}).json()["orders"]
+                             headers={"x-bank-token": tok}).json()["orders"]
         assert all(o["order_id"] != order_id for o in orders2)
 
         # 已执行单重复确认 → 状态不可确认

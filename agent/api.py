@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
@@ -297,14 +297,17 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 "db": db, "model": app.state.model_desc}
 
     @app.get("/api/history")
-    async def history(thread_id: str, token: str | None = None) -> dict:
+    async def history(thread_id: str,
+                      x_bank_token: str | None = Header(default=None)) -> dict:
         """单个会话的完整消息(前端刷新后恢复现场用)。
 
         数据来源 = LangGraph 检查点里该 thread 的 messages(服务端 SQLite 持久化,
         与 Open WebUI 等成熟方案同思路:历史在服务端,任何浏览器打开都能恢复)。
+        会话 token 走 x-bank-token 请求头(2026-10-07 前是 query 参数,会明文落
+        access log,已全链路改头)。
         """
         # 归属校验:登录用户可看观光(0)与自己的会话;未登录只能看观光会话
-        me = auth_mod.resolve_token(app.state.auth_conn, token)
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
         allowed = {0, me["user_id"]} if me else {0}
         cur = await app.state.threads.execute(
             "SELECT user_id FROM threads WHERE thread_id=?", (thread_id,))
@@ -385,21 +388,23 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         return {"ok": True}
 
     @app.get("/api/auth/me")
-    async def auth_me(token: str) -> dict:
-        me = auth_mod.resolve_token(app.state.auth_conn, token)
+    async def auth_me(x_bank_token: str | None = Header(default=None)) -> dict:
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
         if not me:
             raise HTTPException(status_code=401, detail="未登录或会话过期")
         return me
 
     # ------------------------------------------------ 悬空转账提醒(弹窗+落地页)
     @app.get("/api/pending-orders")
-    async def pending_orders(token: str) -> dict:
+    async def pending_orders(
+            x_bank_token: str | None = Header(default=None)) -> dict:
         """当前登录用户名下待确认/已排程的转账单(右下角强制提醒弹窗数据源)。
 
         pending_confirm=建单后悬空待确认;scheduled=定时未到期(到期由
         run_due_tasks 转成待确认)。观光/未登录返回空列表。
+        token 走 x-bank-token 头,不进 access log。
         """
-        me = auth_mod.resolve_token(app.state.auth_conn, token)
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
         if not me:
             return {"orders": []}
         rows = app.state.auth_conn.execute(
@@ -446,12 +451,14 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         return {"ok": True, "order_id": req.order_id, "status": done["status"]}
 
     @app.get("/api/threads")
-    async def threads(limit: int = 100, token: str | None = None) -> dict:
+    async def threads(limit: int = 100,
+                      x_bank_token: str | None = Header(default=None)) -> dict:
         """会话目录(侧边栏):按最后活跃倒序。
 
-        带登录 token 只看自己的会话;观光(无 token)看观光会话(user_id=0)。
+        带登录 token(x-bank-token 头)只看自己的会话;观光(无 token)看
+        观光会话(user_id=0)。
         """
-        me = auth_mod.resolve_token(app.state.auth_conn, token)
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
         owner = me["user_id"] if me else 0
         limit = max(1, min(limit, 200))
         cur = await app.state.threads.execute(

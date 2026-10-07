@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS users (
     email      TEXT NOT NULL DEFAULT '',  -- 邮箱（注册选填）
     created_at TEXT NOT NULL
 );
+-- 一证一户硬约束(部分索引:老用户空串不受限)。"先查后插"的注册检查
+-- 存在并发竞态,索引是最后防线——撞上抛 IntegrityError 由注册层转友好提示
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_id_card
+    ON users(id_card) WHERE id_card != '';
 
 CREATE TABLE IF NOT EXISTS accounts (
     id            INTEGER PRIMARY KEY,
@@ -300,6 +304,14 @@ def migrate_users_kyc(conn: sqlite3.Connection) -> None:
         if col not in cols:
             conn.execute(
                 f"ALTER TABLE users ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+    # 一证一户唯一索引(SCHEMA 里有同一条,这里是老库补建;库里已有重复
+    # 证件号时告警跳过而非崩服——数据问题留给人工清理)
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_id_card "
+            "ON users(id_card) WHERE id_card != ''")
+    except sqlite3.IntegrityError as exc:  # pragma: no cover - 脏数据兜底
+        print(f"[migrate] 跳过 id_card 唯一索引(存在重复证件号,请清理): {exc}")
     conn.commit()
 
 
