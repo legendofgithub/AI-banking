@@ -24,6 +24,7 @@ data/
 scripts_eval_*.log
 scripts_eval_*.stderr
 *.log
+logs/
 .tmp_notes/
 .playwright-mcp/
 nul

@@ -475,3 +475,90 @@ def test_subscription_list_and_cancel_frames(tmp_path):
         ).fetchone()[0]
         conn.close()
         assert status == "cancelled"
+
+
+# ------------------------------------- 支付密码 4 次尝试限制(待确认转账页)
+
+def _confirm(client, tok, order_id, pw):
+    return client.post("/api/orders/confirm",
+                       json={"token": tok, "order_id": order_id,
+                             "pay_password": pw})
+
+
+def test_pay_password_four_strikes_lock(tmp_path):
+    """4 错锁定/成功清零/锁后正确密码也拒/管理员解锁恢复。"""
+    import sqlite3 as _s
+    client, db, tok = _client(tmp_path, [
+        '{"intent": "transfer"}',
+        '{"payee": "张三", "amount_yuan": "500", "when": "now"}',
+        '{"intent": "transfer"}',
+        '{"payee": "张三", "amount_yuan": "300", "when": "now"}',
+        '{"intent": "transfer"}',
+        '{"payee": "张三", "amount_yuan": "200", "when": "now"}',
+        '{"intent": "transfer"}',
+        '{"payee": "张三", "amount_yuan": "100", "when": "now"}',
+    ])
+    with client:
+        # 建三笔悬空单(用三个 thread 各建一笔)
+        oids = []
+        for i, amt in enumerate(("500", "300", "200")):
+            r = _post_chat(client, f"给张三转 {amt} 元", f"lock-t{i}", token=tok)
+            card = _find_data(_frames(r.text), "data-transfer-confirmation")
+            assert card is not None
+            oids.append(card["data"]["order_id"])
+
+        def user_row():
+            conn = _s.connect(db)
+            row = conn.execute(
+                "SELECT pay_fail_count, transfer_locked FROM users WHERE id=1"
+            ).fetchone()
+            conn.close()
+            return tuple(row)
+
+        # A) 错 1-2 次:提示剩余次数,不锁
+        r1 = _confirm(client, tok, oids[0], "000001")
+        assert r1.status_code == 400 and "1/4" in r1.json()["error"]
+        r2 = _confirm(client, tok, oids[0], "000002")
+        assert r2.status_code == 400 and "2/4" in r2.json()["error"]
+        assert user_row() == (2, 0)
+        # B) 第 3 次输对:计数清零(爆破者无法累积窗口)
+        r3 = _confirm(client, tok, oids[0], "888888")
+        assert r3.status_code == 200
+        assert user_row() == (0, 0)
+        # C) 重新连续 4 错:第 4 次触发锁定(403)
+        for i in range(3):
+            rr = _confirm(client, tok, oids[1], "999999")
+            assert rr.status_code == 400
+        r4 = _confirm(client, tok, oids[1], "999998")
+        assert r4.status_code == 403 and "锁定" in r4.json()["error"]
+        assert user_row() == (4, 1)
+        # D) 锁定后:正确密码也拒绝(403),订单不动
+        r5 = _confirm(client, tok, oids[1], "888888")
+        assert r5.status_code == 403
+        assert _order(db, oids[1])["status"] == "pending_confirm"
+        # E) 锁定波及一切转账入口(ledger 层统一卡点:对话建单/页面确认同源)
+        import pytest as _pt
+        from bank_core.ledger import LedgerError, LedgerService
+        conn2 = _s.connect(db)
+        conn2.row_factory = _s.Row
+        acct_id = conn2.execute(
+            "SELECT id FROM accounts WHERE user_id=1 AND type='checking'"
+        ).fetchone()[0]
+        svc = LedgerService(conn2, user_id=1)
+        with _pt.raises(LedgerError, match="锁定"):
+            svc.create_transfer_order(acct_id, 10_000, to_name="张三",
+                                      to_account_tail="0001",
+                                      idempotency_key="lock-e2e-1")
+        with _pt.raises(LedgerError, match="锁定"):
+            svc.confirm_transfer_order(oids[2])
+        conn2.close()
+        # F) 管理员解锁(8789 同库):计数清零,转账恢复
+        from bank_core.admin_api import create_admin_app
+        from fastapi.testclient import TestClient as _TC
+        with _TC(create_admin_app(db_path=db)) as admin:
+            ru = admin.post("/api/transfer-unlock", params={"user_id": 1})
+            assert ru.status_code == 200 and ru.json()["unlocked"] is True
+        assert user_row() == (0, 0)
+        r7 = _confirm(client, tok, oids[1], "888888")
+        assert r7.status_code == 200
+        assert _order(db, oids[1])["status"] == "executed"

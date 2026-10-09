@@ -434,6 +434,11 @@ input.mono{font-family:var(--mono)}
 <section id="tab-orders" class="panel">
   <div class="card">
     <h3>转账订单</h3>
+    <div id="lockBanner" class="toolbar" style="display:none;border:1px solid #d9534f;background:#fdecea;color:#8a1c1c;border-radius:8px;">
+      <strong>⚠️ 转账功能已锁定</strong>
+      <span id="lockInfo"></span>
+      <button type="button" class="btn primary" id="btnUnlock">解除锁定（管理员）</button>
+    </div>
     <div class="toolbar">
       <label>状态
         <select id="orderStatus">
@@ -907,9 +912,34 @@ async function loadPlans(){
 }
 
 /* ---------- 8. 转账订单（含订阅扣款只读视图） ---------- */
+/** 转账锁横幅:users 接口带 transfer_locked;锁着才显示,解锁按钮走
+    /api/transfer-unlock(仅管理员通道,用户侧无此入口)。 */
+async function refreshLockBanner(){
+  try {
+    const ud = await api('/api/users?within=all');
+    const urow = (ud.users || []).find(x => String(x.user_id) === String(currentUser?.user_id));
+    const banner = $('#lockBanner');
+    if (urow && urow.transfer_locked) {
+      $('#lockInfo').textContent =
+        `该用户在待确认转账页连续输错支付密码 ${urow.pay_fail_count ?? 4} 次，转账功能已被锁定`;
+      banner.style.display = '';
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch (e) { /* users 拉取失败不阻断订单页 */ }
+}
+$('#btnUnlock')?.addEventListener('click', async () => {
+  if (!confirm('确认解除该用户的转账功能锁定？错误计数将一并清零。')) return;
+  try {
+    const r = await api(withUser('/api/transfer-unlock'), { method: 'POST' });
+    toast(r.unlocked ? '已解除转账锁定' : (r.note || '未锁定'));
+    refreshLockBanner();
+  } catch (err) { toast(err.message, 'err'); }
+});
 async function loadOrders(){
   $('#ordersBody').innerHTML = loadingRow(7);
   $('#subsBody').innerHTML = loadingRow(5);
+  refreshLockBanner();
   const st = $('#orderStatus').value;
   const [od, sd] = await Promise.all([
     api(withUser(st ? `/api/orders?status=${encodeURIComponent(st)}` : '/api/orders')),

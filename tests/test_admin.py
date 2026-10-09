@@ -218,3 +218,19 @@ def test_records_scoped_by_user(rec_env, client):
     u2 = client.get("/api/money-records", params={"user_id": 2}).json()["records"]
     assert len(u1) == 1 and u1[0]["nickname"] == "陈明"
     assert u2 == []
+
+
+def test_admin_transfer_unlock(client):
+    """转账锁解锁通道:未锁用户幂等返回未锁定;users 列表带锁状态字段。
+
+    (4 错置锁 → 解锁 → 转账恢复的完整闭环在 tests/test_api_stream.py
+    test_pay_password_four_strikes_lock 里以同库双 TestClient 覆盖。)
+    """
+    r = client.post("/api/transfer-unlock", params={"user_id": 1})
+    assert r.status_code == 200
+    assert r.json() == {"user_id": 1, "unlocked": False,
+                        "note": "该用户转账功能未锁定"}
+    # users 列表带锁状态字段(横幅数据源)
+    u = client.get("/api/users").json()["users"][0]
+    assert u["transfer_locked"] is False
+    assert "pay_fail_count" in u

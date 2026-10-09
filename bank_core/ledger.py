@@ -190,12 +190,24 @@ class LedgerService:
                "from_account_id": from_account_id}, result, risk="READ")
         return result
 
+    def _check_transfer_lock(self) -> None:
+        """转账功能锁:待确认转账页连续 4 次支付密码错误即锁定,只允许
+        管理员在管理台解除(ledger 层是全链路唯一卡点——对话建单/页面确认/
+        联动执行全部经由这两个方法,锁在此处即全线生效)。"""
+        row = self.conn.execute(
+            "SELECT transfer_locked FROM users WHERE id=?", (self.user_id,)
+        ).fetchone()
+        if row and row["transfer_locked"]:
+            raise LedgerError(
+                "转账功能已锁定（连续支付密码错误），请联系管理员解除后再次操作")
+
     def create_transfer_order(self, from_account_id: int, amount_cents: int,
                               to_contact_id: int | None = None, to_name: str = "",
                               to_account_tail: str = "", memo: str = "",
                               scheduled_at: str | None = None,
                               idempotency_key: str | None = None) -> dict:
         """建单（不动钱）。返回 pending_confirm / scheduled 订单。"""
+        self._check_transfer_lock()
         acct = self.conn.execute(
             "SELECT * FROM accounts WHERE id=? AND user_id=?",
             (from_account_id, self.user_id),
@@ -257,6 +269,7 @@ class LedgerService:
 
     def confirm_transfer_order(self, order_id: int) -> dict:
         """确认执行（真正动钱）。余额/限额/状态在此二次校验。"""
+        self._check_transfer_lock()
         conn = self.conn
         try:
             conn.execute("BEGIN IMMEDIATE")
