@@ -13,7 +13,7 @@
 1. **改完就 commit**:每完成一个功能/修复,生成一个 Git commit(本仓库 2026-10-01 才建立,
    别再回到"零快照裸奔"状态)。commit 前确认 `git status` 里没有 `.env.local`、`*.sqlite`。
 2. **改完必须过测试**:改动要配套新增/更新测试,并跑全量
-   `.venv/Scripts/python.exe -m pytest tests -q`(当前 133 个,全绿才能交付)。
+   `.venv/Scripts/python.exe -m pytest tests -q`(当前 146 个,全绿才能交付)。
    跨层改动(闸门/卡片/播报)先跑 `pytest tests/test_contract.py -q` 确认没破坏接口契约。
 3. **Python 一律用 venv**:`.venv/Scripts/python.exe`。裸 pip 指向不存在的 Python 3.14(损坏);
    系统 Python312 没装项目依赖(服务用它能起来是历史环境假象,重启必失败)。
@@ -63,13 +63,18 @@ data/         运行库 bank.db 等(不入库,可重播种)
   字节会让 `pip install -r requirements.txt` 直接抛 UnicodeDecodeError、**一个包都装不上**
   (2026-10-09 实测:全新克隆必踩)。要写说明请写在 README/AGENTS.md 里,别写进这两个文件。
 - 裸 pip 坏。**GitHub 推拉走 SSH:443**(`~/.ssh/config` 已把 github.com 指到 ssh.github.com:443,
-  remote 为 `git@github.com:legendofgithub/AI-banking.git` 私有库);HTTPS 对 github.com 时通时断,
+  remote 为 `git@github.com:legendofgithub/AI-banking.git`,仓库 2026-10-09 已转公开,
+  clone 走 https 零门槛、推码仍用 SSH);HTTPS 对 github.com 时通时断,
   push 超时就换 SSH 路线,别死磕 https。
 - `pnpm install` 必须加 `--registry=https://registry.npmmirror.com`。
 - 重播种(重置演示数据)前先停占用 bank.db 的服务(Windows 下库文件被占用)。
+  (`启动演示.bat` 只在 `data\bank.db` **不存在**时自动播种,不存在占用冲突。)
 - ZCode 内嵌浏览器(IAB)点按钮常超时:验证用 `elementFromPoint` 确认可点后,
   `form.requestSubmit()` / `el.click()`(evaluate)兜底,效果等价。
 - **LLM 配置以 `webui/.env.local` 为准**(`ZAI_BASE_URL`/`ZAI_API_KEY`/`ZAI_MODEL`)。
+  该文件缺失时 `启动演示.bat` 会调 `scripts/setup_env.py` 一次式生成(AUTH_SECRET 本机
+  随机 + 提示粘贴 Key;队友 clone 后唯一必填项就是这一个 Key)。任何 `.env*` 变体都被
+  `.gitignore` 通配拦截(仅 `.env.example` 例外),守卫测试 `tests/test_env_template.py`。
   2026-10-09 智谱账户欠费(429 code 1113「余额不足」),已切到 DeepSeek 端点。
   踩坑:环境变量里可能残留过期的 Key/端点,而 8800 只读进程环境——**只换 Key 不换
   `ZAI_BASE_URL` 会变成"DeepSeek 的 Key 打到智谱端点"这种必挂组合**;`启动演示.bat`

@@ -9,7 +9,17 @@
 ## 快速开始
 
 ```bash
-# Windows (Git Bash)
+# Windows(Git Bash)—— 装依赖(一次性)
+py -3.12 -m venv .venv
+.venv/Scripts/python.exe -m pip install -r requirements.txt
+cd webui && pnpm install --registry=https://registry.npmmirror.com && cd ..
+
+# 一键路线:首次运行会自动生成 webui/.env.local(全程只差粘贴一个 LLM API Key,
+# AUTH_SECRET 本机随机)并自动播种演示库;之后每次运行都是全量重启当前代码。
+# (启动演示.bat 需在 cmd/资源管理器里运行;Git Bash 下用 cmd //c 启动演示.bat)
+启动演示.bat
+
+# —— 或手动分步 ——
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 
@@ -95,7 +105,7 @@ LangGraph 编排层（agent/，已在跑：70 节点 / 10 路由意图 / 9 类�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 133 个用例全绿(2026-10-09)
+.venv/Scripts/python.exe -m pytest tests -q      # 146 个用例全绿(2026-10-09)
 
 tests/test_bank_core.py     23 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
                             AA 对账、挂失不可逆、理财风险闸门(含无测评限购 R1)、
@@ -111,4 +121,7 @@ tests/test_e2e_transfer.py   5 个 —— 端到端 A~E(立即/同名/超限/定
 tests/test_llm_autoselect.py 5 个 —— 模型自动选型与缓存
 tests/test_contract.py       5 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
                             线协议词表、播报白名单),多人并行开发的"合同测试"
+tests/test_env_template.py  13 个 —— "clone 后只填一个 Key"契约守卫:.gitignore
+                            通配拦截所有 .env 变体(git check-ignore 实测)、
+                            模板键齐全且默认值可用、setup_env.py 随机密钥/防覆盖
 ```

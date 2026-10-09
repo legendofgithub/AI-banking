@@ -9,10 +9,15 @@ webui/node_modules/
 webui/.next/
 webui/out/
 
-# ===== 密钥(绝不入库) =====
-webui/.env.local
+# ===== 密钥(绝不入库)—— 任何 .env 变体一律拦截,仅模板 .env.example 例外 =====
+# 背景(2026-10-09 仓库转公开):队友把 Key 填进任何名字的 env 变体
+# (.env.local/.env.production/webui/.env.xxx)都必须被拦下,防手滑提交。
+# 守卫测试:tests/test_env_template.py 用 git check-ignore 实测本节规则。
 .env
-.env.local
+.env.*
+!.env.example
+webui/.env*
+!webui/.env.example
 
 # ===== 运行时数据库/数据(演示库可随时重播种) =====
 data/
