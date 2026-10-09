@@ -58,6 +58,10 @@ data/         运行库 bank.db 等(不入库,可重播种)
 
 ## 环境坑速查
 
+- **`requirements.txt` / `requirements.lock.txt` 必须保持纯 ASCII(不许写中文注释)**:
+  pip 用系统 locale 编码读 requirements 文件,中文 Windows(cp936/GBK)下含非 ASCII
+  字节会让 `pip install -r requirements.txt` 直接抛 UnicodeDecodeError、**一个包都装不上**
+  (2026-10-09 实测:全新克隆必踩)。要写说明请写在 README/AGENTS.md 里,别写进这两个文件。
 - 裸 pip 坏。**GitHub 推拉走 SSH:443**(`~/.ssh/config` 已把 github.com 指到 ssh.github.com:443,
   remote 为 `git@github.com:legendofgithub/AI-banking.git` 私有库);HTTPS 对 github.com 时通时断,
   push 超时就换 SSH 路线,别死磕 https。
