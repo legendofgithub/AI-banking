@@ -412,3 +412,66 @@ def test_pending_orders_and_page_confirm(tmp_path):
                         json={"token": tok, "order_id": 99999,
                               "pay_password": "888888"})
         assert r.status_code == 404
+
+
+# ------------------------------------------------- 订阅场景 SSE 帧(六场景收官)
+
+def _seed_subs(db) -> None:
+    import sqlite3 as _s
+    from datetime import datetime
+    conn = _s.connect(db)
+    conn.executemany(
+        """INSERT INTO subscriptions
+           (user_id, merchant_name, category, amount_cents, period_days,
+            next_charge_date, status, detected_at)
+           VALUES (1,?,?,?,?,?,?,?)""",
+        [("腾讯视频VIP", "订阅", 3000, 31, "2026-10-09", "active",
+          "2026-09-01T00:00:00"),
+         ("Keep会员", "订阅", 1900, 31, "2026-10-06", "active",
+          "2026-09-01T00:00:00")])
+    conn.commit()
+    conn.close()
+
+
+def test_subscription_list_and_cancel_frames(tmp_path):
+    """查订阅→data-subscription-list 卡片帧;取消→确认卡+密码闸门→执行。"""
+    client, db, tok = _client(tmp_path, [
+        '{"intent": "subscription"}',
+        '{"action": "list", "merchant": null}',
+        "订阅清单已列出。",
+        '{"intent": "subscription"}',
+        '{"action": "cancel", "merchant": "腾讯视频VIP"}',
+        "已取消腾讯视频VIP的自动扣费。",
+    ])
+    _seed_subs(db)
+    with client:
+        # 1) 查订阅:列表卡帧(active 2 项+月/年合计),无闸门
+        r1 = _post_chat(client, "帮我看看订阅都花多少钱", "api-sub", token=tok)
+        frames1 = _frames(r1.text)
+        card = _find_data(frames1, "data-subscription-list")
+        assert card is not None, f"缺订阅列表卡: {[f['type'] for f in frames1]}"
+        items = card["data"]["items"]
+        assert [i["merchant_name"] for i in items] == ["Keep会员", "腾讯视频VIP"]
+        assert card["data"]["annual_total_yuan"] and card["data"]["monthly_total_yuan"]
+        assert _find_data(frames1, "data-gate-pending") is None
+
+        # 2) 取消:确认卡帧 + 支付密码闸门
+        r2 = _post_chat(client, "取消腾讯视频VIP的自动扣费", "api-sub", token=tok)
+        frames2 = _frames(r2.text)
+        cancel = _find_data(frames2, "data-subscription-cancel")
+        assert cancel is not None
+        assert cancel["data"]["merchant_name"] == "腾讯视频VIP"
+        assert cancel["data"]["pay_required"] is True
+        gate = _find_data(frames2, "data-gate-pending")
+        assert gate is not None and gate["data"]["gate_type"] == "confirm_sub_cancel"
+
+        # 3) 支付密码确认 → 取消落库
+        r3 = _post_chat(client, "888888", "api-sub", token=tok)
+        assert "取消" in _joined_text(_frames(r3.text))
+        import sqlite3 as _s2
+        conn = _s2.connect(db)
+        status = conn.execute(
+            "SELECT status FROM subscriptions WHERE merchant_name='腾讯视频VIP'"
+        ).fetchone()[0]
+        conn.close()
+        assert status == "cancelled"

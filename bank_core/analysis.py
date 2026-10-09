@@ -291,6 +291,7 @@ class AnalysisService:
         for r in rows:
             out.append({
                 "id": r["id"], "merchant": r["merchant_name"], "status": r["status"],
+                "category": r["category"],
                 "amount_yuan": cents_to_yuan(r["amount_cents"]),
                 "period_days": r["period_days"], "next_charge_date": r["next_charge_date"],
                 "annual_cost_yuan": cents_to_yuan(round(365 / r["period_days"]
@@ -316,6 +317,12 @@ class AnalysisService:
                   "status": "cancelled",
                   "note": "代扣协议已解除，下一期不再扣款"}
         audit(self.conn, "cancel_subscription", {"sub_id": sub_id}, result, risk="MED")
+        # 双库留痕(2026-10-07 补):对话链路取消代扣也要进管理台修改记录
+        from .recorder import record_change
+        record_change(self.conn, self.user_id, category="subscription",
+                      action="cancel", target=row["merchant_name"],
+                      detail={"sub_id": sub_id,
+                              "amount_cents": row["amount_cents"]})
         return result
 
 

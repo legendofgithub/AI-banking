@@ -87,6 +87,14 @@ class CardSlots(TypedDict, total=False):
     card_type: str | None             # debit | credit(apply 用)
     daily_limit_yuan: str | None      # 新日限额,"元"的数字字符串
     per_tx_limit_yuan: str | None     # 新单笔限额
+
+
+class SubscriptionSlots(TypedDict, total=False):
+    """订阅/代扣抽取槽位(查清单只读;取消过 confirm_sub_cancel 支付密码闸门)。"""
+    action: str | None                # list | cancel
+    merchant: str | None              # 取消目标商户名(列表不需要)
+    sub_id: int | None                # 匹配到的订阅 id(s_pick 确定性解析)
+    sub: dict | None                  # 取消闸门复述视图(商户/每期金额/下次扣费/年省)
     status_target: str | None         # locked | active | lost(挂失不可逆,双闸)
     card_view: dict | None            # 闸门卡片视图(kind/card_id/尾号/类型/当前值/目标值)
 
@@ -145,6 +153,11 @@ class AgentState(TypedDict, total=False):
     # ---- 卡片管理(k_ 前缀节点) ----
     card: CardSlots                    # 卡片抽取槽位 + 闸门卡片视图(card_view)
     card_missing: list[str]            # 待补项(action/card/card_type/limits/status_target)
+
+    # ---- 订阅/代扣(s_ 前缀节点) ----
+    sub: SubscriptionSlots             # 订阅抽取槽位(列表/取消)
+    sub_missing: list[str]             # 待补项(action/merchant);非空 → 反问
+    sub_view: dict | None              # 列表卡片视图(api 在 s_list 节点更新时发帧)
 
     # ---- 播报与留痕 ----
     notice: dict | None                # 播报依据的事实 {"kind": ..., ...}

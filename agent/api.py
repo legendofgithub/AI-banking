@@ -84,7 +84,7 @@ STREAM_HEADER_VALUE = "v1"  # 依据:ai-sdk.dev stream-protocol(自定义后端�
 # 不播报其他节点的消息(如 t_gate 复放的问题文本),避免与闸门卡片重复。
 ANNOUNCE_NODES = frozenset({"t_report", "sb_report", "ss_report", "c_report",
                             "l_report", "b_report", "w_report", "k_report",
-                            "chat"})
+                            "s_report", "chat"})
 
 TEXT_CHUNK_SIZE = 96  # 文本切片粒度(字节近似;假模型无 token 流,切片仅为产生增量帧)
 
@@ -602,6 +602,13 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                                     if isinstance(m, AIMessage) and m.content:
                                         for f in _text_frames(str(m.content)):
                                             yield f
+                            elif node == "s_list" and isinstance(update, dict) \
+                                    and update.get("sub_view"):
+                                # 订阅清单只读无闸门:列表卡随节点更新直接下发
+                                # (与闸门卡不同,它不占 interrupt,刷新恢复时由
+                                # /api/history 的文本播报兜底)
+                                yield _frame({"type": "data-subscription-list",
+                                              "data": update["sub_view"]})
             except TimeoutError:
                 yield _frame({"type": "error",
                               "errorText": f"本轮处理超时(>{TURN_DEADLINE_S:.0f}秒),"
@@ -680,6 +687,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             return [_frame({"type": "data-card-confirmation",
                             "data": {"kind": view.get("kind"), "card": view,
                                      "pay_required": bool(payload.get("pay_required"))}})]
+        if ptype == "confirm_sub_cancel":
+            # 订阅取消闸门:data-subscription-cancel 金色卡(商户/每期金额/
+            # 下次扣费/年省);pay_required 时前端渲染支付密码框
+            sub = payload.get("sub") or {}
+            return [_frame({"type": "data-subscription-cancel",
+                            "data": {**sub, "pay_required": bool(payload.get("pay_required"))}})]
         if ptype == "ask_slot":
             return [_frame({"type": "data-ask-slot",
                             "data": {"missing": payload.get("missing") or []}})]
