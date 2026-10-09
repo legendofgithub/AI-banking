@@ -1,26 +1,26 @@
 {
-  "generated_at": "2026-09-27T17:42:07",
-  "model": "glm-5.3-flash",
+  "generated_at": "2026-10-09T09:08:04",
+  "model": "deepseek-chat",
   "set": "full",
   "threshold": 0.8,
-  "pass": 19,
-  "total": 23,
-  "success_rate": 0.8261,
+  "pass": 22,
+  "total": 25,
+  "success_rate": 0.88,
   "metrics": {
-    "avg_rounds": 2.35,
-    "avg_bank_calls": 3.3,
-    "avg_seconds": 23.6
+    "avg_rounds": 2.36,
+    "avg_bank_calls": 3.84,
+    "avg_seconds": 10.2
   },
-  "total_seconds": 542.7,
+  "total_seconds": 255.4,
   "groups": [
     {
       "group": "转账",
       "total": 8,
       "pass": 6,
       "success_rate": 0.75,
-      "avg_rounds": 2.88,
-      "avg_bank_calls": 4.75,
-      "avg_seconds": 29.3,
+      "avg_rounds": 3.0,
+      "avg_bank_calls": 5.75,
+      "avg_seconds": 14.1,
       "scenarios": [
         "transfer_simple",
         "transfer_cancel",
@@ -39,7 +39,7 @@
       "success_rate": 0.5,
       "avg_rounds": 2.5,
       "avg_bank_calls": 1.0,
-      "avg_seconds": 20.6,
+      "avg_seconds": 6.3,
       "scenarios": [
         "aa_create",
         "settle_flow"
@@ -52,7 +52,7 @@
       "success_rate": 1.0,
       "avg_rounds": 3.0,
       "avg_bank_calls": 1.0,
-      "avg_seconds": 11.3,
+      "avg_seconds": 5.8,
       "scenarios": [
         "contact_add"
       ]
@@ -64,7 +64,7 @@
       "success_rate": 1.0,
       "avg_rounds": 1.0,
       "avg_bank_calls": 0.0,
-      "avg_seconds": 6.2,
+      "avg_seconds": 4.7,
       "scenarios": [
         "chat_fallback"
       ]
@@ -75,8 +75,8 @@
       "pass": 3,
       "success_rate": 1.0,
       "avg_rounds": 3.0,
-      "avg_bank_calls": 5.33,
-      "avg_seconds": 39.1,
+      "avg_bank_calls": 6.0,
+      "avg_seconds": 13.2,
       "scenarios": [
         "linkage_create",
         "linkage_due",
@@ -90,7 +90,7 @@
       "success_rate": 1.0,
       "avg_rounds": 1.0,
       "avg_bank_calls": 1.0,
-      "avg_seconds": 11.9,
+      "avg_seconds": 5.5,
       "scenarios": [
         "bill_monthly",
         "bill_anomaly"
@@ -99,11 +99,11 @@
     {
       "group": "理财",
       "total": 3,
-      "pass": 2,
-      "success_rate": 0.6667,
-      "avg_rounds": 2.0,
-      "avg_bank_calls": 3.33,
-      "avg_seconds": 24.1,
+      "pass": 3,
+      "success_rate": 1.0,
+      "avg_rounds": 2.33,
+      "avg_bank_calls": 4.67,
+      "avg_seconds": 10.9,
       "scenarios": [
         "wealth_recommend",
         "wealth_subscribe",
@@ -116,17 +116,30 @@
       "pass": 3,
       "success_rate": 1.0,
       "avg_rounds": 1.67,
-      "avg_bank_calls": 2.33,
-      "avg_seconds": 12.0,
+      "avg_bank_calls": 3.0,
+      "avg_seconds": 7.7,
       "scenarios": [
         "card_list",
         "card_limit",
         "card_lock"
       ]
+    },
+    {
+      "group": "订阅",
+      "total": 2,
+      "pass": 2,
+      "success_rate": 1.0,
+      "avg_rounds": 1.5,
+      "avg_bank_calls": 2.0,
+      "avg_seconds": 6.5,
+      "scenarios": [
+        "subscription_list",
+        "subscription_cancel"
+      ]
     }
   ],
   "failure_tags": {
-    "业务断言不符(DB/notice 终态)": 4
+    "业务断言不符(DB/notice 终态)": 3
   },
   "scenarios": [
     {
@@ -134,10 +147,10 @@
       "desc": "立即转账:闸门确认→扣款10元",
       "ok": true,
       "rounds": 2,
-      "bank_calls": 5,
-      "seconds": 16.9,
+      "bank_calls": 6,
+      "seconds": 14.1,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\transfer_simple\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\transfer_simple\\bank.db",
       "turns": [
         {
           "text": "给张三转10元",
@@ -156,9 +169,9 @@
       "ok": true,
       "rounds": 2,
       "bank_calls": 5,
-      "seconds": 14.7,
+      "seconds": 11.7,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\transfer_cancel\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\transfer_cancel\\bank.db",
       "turns": [
         {
           "text": "给张三转10元",
@@ -177,9 +190,9 @@
       "ok": true,
       "rounds": 1,
       "bank_calls": 3,
-      "seconds": 19.8,
+      "seconds": 8.8,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\transfer_overlimit\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\transfer_overlimit\\bank.db",
       "turns": [
         {
           "text": "给张三转60000元",
@@ -195,10 +208,10 @@
       "desc": "缺槽反问→补齐→确认→executed",
       "ok": true,
       "rounds": 4,
-      "bank_calls": 5,
-      "seconds": 20.2,
+      "bank_calls": 6,
+      "seconds": 15.3,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\transfer_clarify\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\transfer_clarify\\bank.db",
       "turns": [
         {
           "text": "转账",
@@ -219,9 +232,9 @@
       "ok": true,
       "rounds": 2,
       "bank_calls": 1,
-      "seconds": 11.4,
+      "seconds": 5.7,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\aa_create\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\aa_create\\bank.db",
       "turns": [
         {
           "text": "发起AA，火锅300元，我和张三、老王均摊",
@@ -240,9 +253,9 @@
       "ok": true,
       "rounds": 3,
       "bank_calls": 1,
-      "seconds": 11.3,
+      "seconds": 5.8,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\contact_add\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\contact_add\\bank.db",
       "turns": [
         {
           "text": "添加收款人",
@@ -262,9 +275,9 @@
       "ok": true,
       "rounds": 1,
       "bank_calls": 0,
-      "seconds": 6.2,
+      "seconds": 4.7,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\chat_fallback\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\chat_fallback\\bank.db",
       "turns": [
         {
           "text": "你好，介绍下你自己",
@@ -280,10 +293,10 @@
       "desc": "闸门两问封顶:自动取消,绝不executed",
       "ok": true,
       "rounds": 3,
-      "bank_calls": 5,
-      "seconds": 15.5,
+      "bank_calls": 7,
+      "seconds": 15.4,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\gate_hedge\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\gate_hedge\\bank.db",
       "turns": [
         {
           "text": "给张三转10元",
@@ -302,10 +315,10 @@
       "desc": "同指令重发:duplicate_order,不二次扣款",
       "ok": false,
       "rounds": 3,
-      "bank_calls": 5,
-      "seconds": 25.3,
+      "bank_calls": 6,
+      "seconds": 15.1,
       "reason": "notice.kind 应为 duplicate_order,实际 None(notice={})",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\transfer_duplicate\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\transfer_duplicate\\bank.db",
       "turns": [
         {
           "text": "给张三转10元",
@@ -327,11 +340,11 @@
       "name": "transfer_disambiguate",
       "desc": "同名消歧:尾号2222",
       "ok": false,
-      "rounds": 6,
-      "bank_calls": 6,
-      "seconds": 70.0,
+      "rounds": 7,
+      "bank_calls": 8,
+      "seconds": 21.0,
       "reason": "两个同名王芳应触发选人反问(pick_contact)",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\transfer_disambiguate\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\transfer_disambiguate\\bank.db",
       "turns": [
         {
           "text": "添加收款人",
@@ -350,6 +363,7 @@
           "text": "给王芳转账5元",
           "status": "end",
           "interrupts": [
+            "confirm_transfer",
             "confirm_transfer"
           ]
         }
@@ -362,10 +376,10 @@
       "desc": "定时转账:scheduled、到期才扣",
       "ok": true,
       "rounds": 2,
-      "bank_calls": 4,
-      "seconds": 52.1,
+      "bank_calls": 5,
+      "seconds": 11.2,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\scheduled_transfer\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\scheduled_transfer\\bank.db",
       "turns": [
         {
           "text": "明天早上9点给张三转50元",
@@ -384,9 +398,9 @@
       "ok": false,
       "rounds": 3,
       "bank_calls": 1,
-      "seconds": 29.8,
+      "seconds": 6.9,
       "reason": "notice.kind 应为 split_progress,实际 None(notice={})",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\settle_flow\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\settle_flow\\bank.db",
       "turns": [
         {
           "text": "发起AA，火锅300元，我和张三、老王均摊",
@@ -410,9 +424,9 @@
       "ok": true,
       "rounds": 2,
       "bank_calls": 5,
-      "seconds": 39.9,
+      "seconds": 11.0,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\linkage_create\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\linkage_create\\bank.db",
       "turns": [
         {
           "text": "我爱人生日在9月26日，帮我留1000元，生日前2天订300元鲜花和200元蛋糕",
@@ -430,10 +444,10 @@
       "desc": "联动到期:鲜花确认购买(300元流水),蛋糕跳过不动",
       "ok": true,
       "rounds": 5,
-      "bank_calls": 8,
-      "seconds": 36.2,
+      "bank_calls": 10,
+      "seconds": 19.9,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\linkage_due\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\linkage_due\\bank.db",
       "turns": [
         {
           "text": "我爱人生日在9月26日，帮我留1000元，生日前2天订300元鲜花和200元蛋糕",
@@ -460,9 +474,9 @@
       "ok": true,
       "rounds": 2,
       "bank_calls": 3,
-      "seconds": 41.2,
+      "seconds": 8.8,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\linkage_cancel\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\linkage_cancel\\bank.db",
       "turns": [
         {
           "text": "我爱人生日在9月26日，帮我留1000元，生日前2天订300元鲜花和200元蛋糕",
@@ -481,9 +495,9 @@
       "ok": true,
       "rounds": 1,
       "bank_calls": 1,
-      "seconds": 9.8,
+      "seconds": 5.5,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\bill_monthly\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\bill_monthly\\bank.db",
       "turns": [
         {
           "text": "看看我上个月的账单报告",
@@ -500,9 +514,9 @@
       "ok": true,
       "rounds": 1,
       "bank_calls": 1,
-      "seconds": 14.1,
+      "seconds": 5.5,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\bill_anomaly\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\bill_anomaly\\bank.db",
       "turns": [
         {
           "text": "查一下我最近三个月有没有异常交易",
@@ -519,9 +533,9 @@
       "ok": true,
       "rounds": 1,
       "bank_calls": 2,
-      "seconds": 17.8,
+      "seconds": 6.4,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\wealth_recommend\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\wealth_recommend\\bank.db",
       "turns": [
         {
           "text": "帮我推荐一些稳健的理财产品",
@@ -537,10 +551,10 @@
       "desc": "理财申购:闸门确认→持仓新增、活期恰减1000、两步调用False→True",
       "ok": true,
       "rounds": 2,
-      "bank_calls": 4,
-      "seconds": 16.4,
+      "bank_calls": 5,
+      "seconds": 10.6,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\wealth_subscribe\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\wealth_subscribe\\bank.db",
       "turns": [
         {
           "text": "我要申购1000元的安享定期90天",
@@ -556,12 +570,12 @@
     {
       "name": "wealth_redeem_cancel",
       "desc": "赎回取消:闸门取消→持仓仍在、余额保持申购后水平",
-      "ok": false,
-      "rounds": 3,
-      "bank_calls": 4,
-      "seconds": 38.0,
-      "reason": "notice.kind 应为 wealth_cancelled,实际 None(notice={})",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\wealth_redeem_cancel\\bank.db",
+      "ok": true,
+      "rounds": 4,
+      "bank_calls": 7,
+      "seconds": 15.8,
+      "reason": "",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\wealth_redeem_cancel\\bank.db",
       "turns": [
         {
           "text": "我要申购1000元的安享定期90天",
@@ -573,11 +587,13 @@
         {
           "text": "把刚才买的理财赎回了",
           "status": "end",
-          "interrupts": []
+          "interrupts": [
+            "confirm_wealth"
+          ]
         }
       ],
       "group": "理财",
-      "failure_tag": "业务断言不符(DB/notice 终态)"
+      "failure_tag": ""
     },
     {
       "name": "card_list",
@@ -585,9 +601,9 @@
       "ok": true,
       "rounds": 1,
       "bank_calls": 1,
-      "seconds": 9.3,
+      "seconds": 5.2,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\card_list\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\card_list\\bank.db",
       "turns": [
         {
           "text": "看看我名下的银行卡",
@@ -603,10 +619,10 @@
       "desc": "调限额:闸门确认→daily_limit_cents=800000",
       "ok": true,
       "rounds": 2,
-      "bank_calls": 3,
-      "seconds": 13.1,
+      "bank_calls": 4,
+      "seconds": 9.2,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\card_limit\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\card_limit\\bank.db",
       "turns": [
         {
           "text": "把我第一张卡的每日限额调到8000元",
@@ -624,10 +640,10 @@
       "desc": "锁卡:闸门确认(单闸,非挂失)→status=locked",
       "ok": true,
       "rounds": 2,
-      "bank_calls": 3,
-      "seconds": 13.7,
+      "bank_calls": 4,
+      "seconds": 8.7,
       "reason": "",
-      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-u_mdarxe\\card_lock\\bank.db",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\card_lock\\bank.db",
       "turns": [
         {
           "text": "暂时锁定我的第一张卡",
@@ -638,6 +654,46 @@
         }
       ],
       "group": "卡片",
+      "failure_tag": ""
+    },
+    {
+      "name": "subscription_list",
+      "desc": "订阅清单:list_subscriptions,卡片与库逐项对账,只读零闸门零动钱",
+      "ok": true,
+      "rounds": 1,
+      "bank_calls": 1,
+      "seconds": 5.3,
+      "reason": "",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\subscription_list\\bank.db",
+      "turns": [
+        {
+          "text": "帮我看看我都有哪些自动扣费，一年要花多少钱",
+          "status": "end",
+          "interrupts": []
+        }
+      ],
+      "group": "订阅",
+      "failure_tag": ""
+    },
+    {
+      "name": "subscription_cancel",
+      "desc": "取消代扣:支付密码闸门→status=cancelled,不误伤其余订阅、零动钱",
+      "ok": true,
+      "rounds": 2,
+      "bank_calls": 3,
+      "seconds": 7.8,
+      "reason": "",
+      "db": "C:\\Users\\asus\\AppData\\Local\\Temp\\eval-agent-m5mxiead\\subscription_cancel\\bank.db",
+      "turns": [
+        {
+          "text": "取消腾讯视频VIP的自动扣费",
+          "status": "end",
+          "interrupts": [
+            "confirm_sub_cancel"
+          ]
+        }
+      ],
+      "group": "订阅",
       "failure_tag": ""
     }
   ]
