@@ -30,7 +30,9 @@ export function prettyModelName(id: string): string {
   return id
     .split("-")
     .map((part, i) =>
-      i === 0 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1)
+      i === 0
+        ? part.toUpperCase()
+        : part.charAt(0).toUpperCase() + part.slice(1)
     )
     .join("-");
 }
@@ -40,7 +42,7 @@ export function prettyModelName(id: string): string {
 export function inferCapabilities(id: string): ModelCapabilities {
   const vision =
     id.endsWith("v") || /-v\d/.test(id) || /-v-/.test(id) || id.endsWith("vl");
-  return { tools: true, vision, reasoning: true };
+  return { reasoning: true, tools: true, vision };
 }
 
 export function describeModel(id: string): string {
@@ -71,12 +73,13 @@ export function toChatModel(id: string): ChatModel {
 
 export type ModelAvailability = "healthy" | "impacted" | "unknown";
 
-// 智谱端点没有 per-model 健康检查接口;已配置的模型一律按 healthy 处理,
-// 避免聊天过程中弹出误导性的 gateway 降级提示。
-export async function getModelAvailability(
+// 端点没有 per-model 健康检查接口;已配置的模型一律按 healthy 处理,
+// 避免聊天过程中弹出误导性的 gateway 降级提示。(保留 Promise 返回类型
+// 兼容调用方 await;函数体内无异步操作,故不加 async。)
+export function getModelAvailability(
   modelId: string
 ): Promise<ModelAvailability> {
-  return modelId ? "healthy" : "unknown";
+  return Promise.resolve(modelId ? "healthy" : "unknown");
 }
 
 // 默认选型(与后端 pick_default_model 同规则):清单已按新→旧排序,

@@ -1,8 +1,8 @@
 import {
   type ChatModel,
-  type ModelCapabilities,
   DEFAULT_CHAT_MODEL,
   FALLBACK_CHAT_MODELS,
+  type ModelCapabilities,
   toChatModel,
   ZAI_BASE_URL_DEFAULT,
 } from "./models";
@@ -36,7 +36,9 @@ export async function getZaiChatModels(
       headers: { Authorization: `Bearer ${apiKey}` },
       // 用户自填 Key 时绕过 Next 数据缓存(缓存键不含鉴权头,会把 A 的
       // 清单错发给 B);部署方环境变量路径保留 1h 缓存。
-      ...(keyOverride ? { cache: "no-store" as const } : { next: { revalidate: 3600 } }),
+      ...(keyOverride
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: 3600 } }),
     });
     if (!res.ok) {
       return FALLBACK_CHAT_MODELS;
