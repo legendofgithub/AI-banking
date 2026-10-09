@@ -424,13 +424,25 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
     async def order_confirm(req: OrderConfirmIn):
         """页面直连确认(弹窗"去确认"落地页):token 定用户 → 支付密码核验
         → confirm_transfer_order 收尾。与对话闸门同一套安全规则(两步走+
-        支付密码),只是入口从聊天卡换成网页;operator 默认记 'agent'。"""
+        支付密码),只是入口从聊天卡换成网页;operator 默认记 'agent'。
+
+        防暴力破解(2026-10-09):支付密码仅 4 次尝试机会,连续 4 错即锁定
+        该账户的转账功能(建单/确认全线拒绝,ledger 层统一卡点),成功一次
+        即清零计数;解锁仅管理员在管理台操作。
+        """
         me = auth_mod.resolve_token(app.state.auth_conn, req.token)
         if not me:
             return JSONResponse(status_code=401, content={"error": "未登录或会话过期"})
+        uid = me["user_id"]
+        row = app.state.auth_conn.execute(
+            "SELECT transfer_locked, pay_fail_count FROM users WHERE id=?",
+            (uid,)).fetchone()
+        if row and row["transfer_locked"]:
+            return JSONResponse(status_code=403, content={
+                "error": "转账功能已锁定（连续支付密码错误），请联系管理员解除"})
         order = app.state.auth_conn.execute(
             "SELECT status FROM transfer_orders WHERE id=? AND user_id=?",
-            (req.order_id, me["user_id"])).fetchone()
+            (req.order_id, uid)).fetchone()
         if not order:
             return JSONResponse(status_code=404, content={"error": "订单不存在"})
         if order["status"] == "scheduled":
@@ -441,10 +453,27 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 status_code=400,
                 content={"error": f"订单状态为 {order['status']},不可确认"})
         if not auth_mod.verify_pay_password(app.state.auth_conn,
-                                            me["user_id"], req.pay_password):
-            return JSONResponse(status_code=400, content={"error": "支付密码不正确"})
+                                            uid, req.pay_password):
+            fails = int(row["pay_fail_count"] or 0) + 1
+            if fails >= 4:
+                app.state.auth_conn.execute(
+                    "UPDATE users SET pay_fail_count=?, transfer_locked=1 "
+                    "WHERE id=?", (fails, uid))
+                app.state.auth_conn.commit()
+                return JSONResponse(status_code=403, content={
+                    "error": "已连续输错 4 次支付密码,转账功能已锁定,请联系管理员解除"})
+            app.state.auth_conn.execute(
+                "UPDATE users SET pay_fail_count=? WHERE id=?", (fails, uid))
+            app.state.auth_conn.commit()
+            return JSONResponse(status_code=400, content={
+                "error": f"支付密码不正确（已错 {fails}/4 次,连续 4 次将锁定转账功能）"})
+        # 密码正确:计数清零(证明持有人在场,不给爆破者累积窗口)
+        if row and row["pay_fail_count"]:
+            app.state.auth_conn.execute(
+                "UPDATE users SET pay_fail_count=0 WHERE id=?", (uid,))
+            app.state.auth_conn.commit()
         try:
-            svc = LedgerService(app.state.auth_conn, user_id=me["user_id"])
+            svc = LedgerService(app.state.auth_conn, user_id=uid)
             done = svc.confirm_transfer_order(req.order_id)
         except LedgerError as e:
             return JSONResponse(status_code=400, content={"error": str(e)})

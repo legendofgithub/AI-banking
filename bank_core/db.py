@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS users (
     phone      TEXT NOT NULL,
     id_card    TEXT NOT NULL DEFAULT '',  -- 身份证号（注册必录；老用户为空串）
     email      TEXT NOT NULL DEFAULT '',  -- 邮箱（注册选填）
+    transfer_locked INTEGER NOT NULL DEFAULT 0,  -- 转账功能锁(连续4次支付密码错误;仅管理员可解除)
+    pay_fail_count  INTEGER NOT NULL DEFAULT 0,  -- 待确认转账页连续支付密码错误次数(成功清零)
     created_at TEXT NOT NULL
 );
 -- 一证一户硬约束(部分索引:老用户空串不受限)。"先查后插"的注册检查
@@ -300,10 +302,13 @@ def migrate_users_kyc(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
     if not cols:
         return  # 库还没建 users 表（executescript 尚未跑过），交给 init_db
-    for col in ("id_card", "email"):
+    for col, ddl in (("id_card", "TEXT NOT NULL DEFAULT ''"),
+                     ("email", "TEXT NOT NULL DEFAULT ''"),
+                     ("transfer_locked", "INTEGER NOT NULL DEFAULT 0"),
+                     ("pay_fail_count", "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols:
             conn.execute(
-                f"ALTER TABLE users ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+                f"ALTER TABLE users ADD COLUMN {col} {ddl}")
     # 一证一户唯一索引(SCHEMA 里有同一条,这里是老库补建;库里已有重复
     # 证件号时告警跳过而非崩服——数据问题留给人工清理)
     try:

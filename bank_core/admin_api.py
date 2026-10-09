@@ -136,6 +136,7 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             cutoff = (datetime.now() - timedelta(days=days)).isoformat(
                 timespec="seconds")
         sql = """SELECT u.id, u.name, u.phone, u.id_card, u.email, u.created_at,
+                        u.transfer_locked, u.pay_fail_count,
                         (SELECT COUNT(*) FROM accounts a WHERE a.user_id=u.id) accounts_n,
                         (SELECT COALESCE(SUM(a.balance_cents),0) FROM accounts a
                           WHERE a.user_id=u.id) balance_cents,
@@ -179,6 +180,8 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             "user_id": r["id"], "nickname": r["name"], "phone": r["phone"],
             "id_card_masked": mask_id_card(r["id_card"]),
             "email_masked": mask_identifier(r["email"]) if r["email"] else "",
+            "transfer_locked": bool(r["transfer_locked"]),
+            "pay_fail_count": r["pay_fail_count"],
             "auth": _auth_of(r["id"]),
             "created_at": r["created_at"], "accounts": r["accounts_n"],
             "total_balance_yuan": cents_to_yuan(r["balance_cents"]),
@@ -398,6 +401,31 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
                 return _Svcs(_uid(user_id)).ledger.cancel_transfer_order(order_id)
         except LedgerError as e:
             return _err(e)
+
+    @app.post("/api/transfer-unlock")
+    def transfer_unlock(user_id: int | None = None):
+        """解除转账功能锁(连续 4 次支付密码错误的唯一解除通道,权限边界:
+        只属于管理员;用户侧无论对话还是页面都没有解锁入口)。同时清零错误
+        计数,双库留痕(operator=admin)。"""
+        uid = _uid(user_id)
+        row = conn.execute(
+            "SELECT transfer_locked, pay_fail_count FROM users WHERE id=?",
+            (uid,)).fetchone()
+        if not row["transfer_locked"]:
+            return {"user_id": uid, "unlocked": False,
+                    "note": "该用户转账功能未锁定"}
+        conn.execute(
+            "UPDATE users SET transfer_locked=0, pay_fail_count=0 WHERE id=?",
+            (uid,))
+        conn.commit()
+        audit(conn, "transfer_unlock", {"user_id": uid},
+              {"unlocked": True}, risk="HIGH")
+        with admin_scope():
+            record_change(conn, uid, category="admin",
+                          action="transfer_unlock", target=str(uid),
+                          detail={"prev_fail_count": row["pay_fail_count"]})
+        return {"user_id": uid, "unlocked": True,
+                "note": "转账功能已解锁,错误计数已清零"}
 
     @app.get("/api/subscriptions")
     def subscriptions(user_id: int | None = None) -> dict:
