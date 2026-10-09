@@ -1,7 +1,15 @@
-# requirements.lock.txt —— 当前验证环境(Windows/Python 3.12.9 venv)的精确依赖快照。
-# 生成:.venv/Scripts/python.exe -m pip freeze > requirements.lock.txt(2026-09-20,评审修复轮)
-# 用途:可复现安装(计划 §8 锁版本):python -m pip install -r requirements.lock.txt
-# 注意:fastmcp 必须停在 3.x(见 requirements.txt 注释);升级前先读 M1 踩坑记录。
+# requirements.lock.txt -- exact dependency snapshot of the verified environment
+# (Windows / Python 3.12.9 venv).
+# Generated: .venv/Scripts/python.exe -m pip freeze > requirements.lock.txt (2026-09-20)
+# Purpose: reproducible install (plan section 8):
+#   .venv/Scripts/python.exe -m pip install -r requirements.lock.txt
+#
+# !! KEEP THIS FILE PURE ASCII -- DO NOT ADD NON-ASCII CHARACTERS !!
+# See the header of requirements.txt: on Chinese Windows (cp936/GBK) pip cannot even
+# read a requirements file containing non-ASCII bytes, so a fresh clone would fail to
+# install. If you regenerate this file, re-check that it stays ASCII-only.
+#
+# Note: fastmcp must stay on 3.x (see requirements.txt); read the M1 notes before upgrading.
 aiofile==3.12.3
 aiosqlite==0.22.1
 annotated-doc==0.0.5
