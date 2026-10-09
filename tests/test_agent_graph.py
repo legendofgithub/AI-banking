@@ -1295,3 +1295,117 @@ def test_wealth_idempotency_key_changes_with_wording(tmp_path):
             != _wealth_idempotency_key(turn_text="再买1000元货基", **base))
     assert _wealth_idempotency_key(
         turn_text="买1000元货基", **base).startswith("agent-wealth-")
+
+
+# ---------------------------------------------------------------- 订阅/代扣(s_ 管线)
+
+_SUB_SEED = [
+    # (id, merchant, category, amount_cents, period_days, next_charge, status)
+    (1, "腾讯视频VIP", "订阅", 3000, 31, "2026-10-09", "active"),
+    (2, "Keep会员", "订阅", 1900, 31, "2026-10-06", "active"),
+    (3, "中国移动", "通讯", 12800, 31, "2026-10-04", "active"),
+    (4, "旧会员", "订阅", 990, 31, "2026-09-01", "cancelled"),
+]
+
+
+def _seed_subscriptions(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        """INSERT INTO subscriptions
+           (id, user_id, merchant_name, category, amount_cents, period_days,
+            next_charge_date, status, detected_at)
+           VALUES (?,1,?,?,?,?,?,?,?)""",
+        [(i, m, c, a, p, n, s, "2026-09-01T00:00:00")
+         for (i, m, c, a, p, n, s) in _SUB_SEED])
+    conn.commit()
+    conn.close()
+
+
+def test_subscription_list_shows_card_view(tmp_path):
+    """查订阅:只读无闸门,发列表卡视图(active 3 项,已取消不出现),含月/年合计。"""
+    db = _mk_db(tmp_path)
+    _seed_subscriptions(db)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "subscription"}',
+            json.dumps({"action": "list", "merchant": None}, ensure_ascii=False),
+            "订阅清单已列出。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "s1"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("帮我看看订阅都花多少钱")]},
+                cfg)
+            assert not r.get("__interrupt__")  # 只读场景不停闸门
+            view = r["sub_view"]
+            names = [i["merchant_name"] for i in view["items"]]
+            assert names == ["中国移动", "Keep会员", "腾讯视频VIP"]  # 按扣费日排序
+            assert all(i["period_text"] == "月" for i in view["items"])
+            tencent = next(i for i in view["items"]
+                           if i["merchant_name"] == "腾讯视频VIP")
+            assert tencent["amount_yuan"] == "30.00"
+            assert tencent["annual_yuan"] == "353.23"  # 365/31*3000
+            # 年合计 = 各项年化之和;月合计 = 年/12
+            annual_cents = sum(round(365 / 31 * a)
+                               for a in (3000, 1900, 12800))
+            assert view["annual_total_yuan"] == f"{annual_cents / 100:.2f}"
+            assert view["monthly_total_yuan"] == f"{round(annual_cents / 12) / 100:.2f}"
+
+    run(scenario())
+
+
+def test_subscription_cancel_gate_then_execute(tmp_path):
+    """取消代扣:定位商户→支付密码闸门→取消落库;错密码不改状态。"""
+    db = _mk_db(tmp_path)
+    _seed_subscriptions(db)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "subscription"}',
+            json.dumps({"action": "cancel", "merchant": "腾讯视频"}, ensure_ascii=False),
+            "已取消。",
+            '{"intent": "subscription"}',
+            json.dumps({"action": "cancel", "merchant": "腾讯视频"}, ensure_ascii=False),
+            "没有找到该商户的自动扣费。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "s2"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("取消腾讯视频的自动扣费")]},
+                cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "confirm_sub_cancel"
+            assert payload["pay_required"] is True
+            sub = payload["sub"]
+            assert sub["merchant_name"] == "腾讯视频VIP"   # 模糊匹配命中全名
+            assert sub["amount_yuan"] == "30.00"
+            assert sub["annual_yuan"] == "353.23"
+            assert sub["sub_id"] == 1
+
+            # 错密码:闸门自环重问,不取消
+            r2 = await graph.ainvoke(Command(resume="000000"), cfg)
+            p2 = _interrupt_payload(r2)
+            assert p2["type"] == "confirm_sub_cancel"
+            assert _sub_status(db, 1) == "active"
+
+            # 对密码:取消落库 + 播报
+            r3 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert "取消" in _ai_text(r3)
+            assert _sub_status(db, 1) == "cancelled"
+            # 已取消的不再被匹配:再取消同名 → not_found 收尾
+            r4 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("再取消腾讯视频的自动扣费")]}, cfg)
+            assert not r4.get("__interrupt__")
+            assert "没有找到" in _ai_text(r4)
+
+    run(scenario())
+
+
+def _sub_status(db: Path, sub_id: int) -> str:
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute(
+            "SELECT status FROM subscriptions WHERE id=?", (sub_id,)
+        ).fetchone()[0]
+    finally:
+        conn.close()

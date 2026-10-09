@@ -101,7 +101,7 @@ MAX_GATE_ASKS = 2
 # ===================================================================== 提示词
 
 ROUTER_SYS = """你是银行智能助手的意图分类器。只输出一个 JSON 对象,不要任何多余文字:
-{"intent": "transfer | split_bill | split_settle | contact_add | linkage | bill_analysis | wealth | card | chat"}
+{"intent": "transfer | split_bill | split_settle | contact_add | linkage | bill_analysis | wealth | card | subscription | chat"}
 
 判定规则:
 - 转账/汇款/付钱/打款/定时转 → transfer
@@ -112,7 +112,8 @@ ROUTER_SYS = """你是银行智能助手的意图分类器。只输出一个 JSO
 - 看账单/消费统计/分类占比/月报/收支总结/异常可疑交易 → bill_analysis
 - 理财/产品/申购/赎回/持仓/风险测评 → wealth
 - 卡片/银行卡/挂失/锁卡/解锁/限额/办卡 → card
-- 其他(问候、闲聊、订阅代扣等) → chat"""
+- 订阅/会员/自动扣费/代扣/续费/退订(查订阅花销、取消会员自动扣费) → subscription
+- 其他(问候、闲聊) → chat"""
 
 EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对话】,输出完整转账槽位 JSON,不要任何多余文字:
 {"payee": "收款人姓名或称呼|null", "payee_phone": "11位手机号|null",
@@ -203,12 +204,22 @@ CARD_EXTRACT_SYS = """你是卡片业务抽取器。结合【已有槽位】与�
 REPORT_SYS = """你是银行助手播报员。严格依据【事实】用 1-3 句中文向用户播报结果。
 禁止编造、修改、推算任何数字与状态;事实里有错误或拦截原因就如实转述;事实里没有的信息不要补充。"""
 
+SUB_EXTRACT_SYS = """你是订阅/代扣业务抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
+{"action": "list|cancel|null", "merchant": "商户/会员名称|null"}
+
+规则:
+- 看订阅/查订阅/订阅花了多少钱/有哪些会员/自动扣费清单/周期扣费/年化成本 → list
+- 取消/退订/关闭/停止/不要 某个会员或自动扣费 → cancel,merchant 尽量取全商户名
+  (如"腾讯视频VIP";用户只说了"腾讯视频"也原样填,系统去库里模糊匹配);
+- 用户点订阅卡片「取消代扣」按钮发出的「取消XX的自动扣费」→ cancel,merchant=XX;
+- 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
+
 CHAT_SYS = """你是"练功假银行"的智能助手(大赛演示沙箱)。当前版本(M2)支持:
 智能转账(含定时)、AA 收款、收款人录入(引导用户提供姓名+手机号+备注,每组存一行)、
 跨场景联动(生日/纪念日准备:预留预算、提前订购提醒、到期逐项确认)、
 账单分析(月报/分类统计/消费Top/异常检测)、理财(推荐/风险测评/申购/赎回,动钱必经确认)、
-卡片管理(查询/办卡/限额/锁定解锁挂失,挂失需双重确认)。
-订阅/代扣管理即将上线,请礼貌说明并引导用户使用已支持功能;
+卡片管理(查询/办卡/限额/锁定解锁挂失,挂失需双重确认)、
+订阅/代扣管理(查订阅清单与年化成本、取消自动扣费)。
 想体验联动可以说「帮我准备生日」。你不得执行或承诺任何未经确认的资金操作。"""
 
 # ===================================================================== 播报兜底文案(确定性,LLM 失效时用)
@@ -236,6 +247,10 @@ _FALLBACK_TEXT = {
     "linkage_plan_done": "联动计划的所有准备事项都完成了。",
     "linkage_progress": "联动计划的到期事项已处理完本轮。",
     "no_due_plan": "没有找到可处理的到期联动计划。",
+    "sub_list": "订阅清单已列出,详见上方卡片。",
+    "sub_cancelled": "自动扣费已取消,下一期起不再扣款。",
+    "sub_cancel_kept": "好的,已保留该订阅的自动扣费,不做任何变更。",
+    "sub_not_found": "没有找到这个商户的自动扣费。想看全部订阅可以说「查我的订阅」。",
     # ---- 账单分析(只读) ----
     "bill_report": "账单分析已完成,数字均来自银行工具返回。",
     # ---- 理财 ----
@@ -921,6 +936,24 @@ def _card_view_of(c: dict) -> dict:
     return dict(c.get("card_view") or {})
 
 
+def _sub_slot_question(missing: list[str]) -> str:
+    if "merchant" in missing:
+        return "想取消哪个商户的自动扣费?请回复商户名(如:腾讯视频VIP),或说「查我的订阅」看清单。"
+    return "想查看订阅清单,还是取消某个自动扣费?"
+
+
+def _sub_confirm_question(s: dict) -> str:
+    v = s.get("sub") or {}
+    return (f"确认取消「{v.get('merchant_name')}」的自动扣费?"
+            f"每期 ¥{v.get('amount_yuan')}({v.get('period_text')}),"
+            f"下次扣费 {v.get('next_charge_date')},取消后每年可省 ¥{v.get('annual_yuan')}。")
+
+
+def _sub_view_of(s: dict) -> dict:
+    """confirm_sub_cancel 闸门载荷的 sub 视图(前端 data-subscription-cancel 契约)。"""
+    return dict(s.get("sub") or {})
+
+
 # ===================================================================== 节点工厂
 # 四条管线的 gate/clarify 控制流逐行同构,差异(问题文案/载荷/取消 notice)走参数。
 
@@ -1059,7 +1092,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         intent = (parsed or {}).get("intent")
         if intent not in ("transfer", "split_bill", "split_settle",
                           "contact_add", "linkage", "bill_analysis", "wealth",
-                          "card", "chat"):
+                          "card", "subscription", "chat"):
             intent = "chat"  # 解析失败/未知 → 安全兜底,不碰银行
         # 本轮触发指令原文:幂等键的组成部分(同文本重放=同一笔;换说法=新一笔)
         turn_text = next((m.content for m in reversed(state["messages"])
@@ -2274,6 +2307,133 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     async def k_report(state: AgentState) -> dict:
         return await _announce(state)
 
+    # ---------------------------------------------------------------- 订阅/代扣(s_ 前缀)
+    # 六场景收官:查清单(只读,发 data-subscription-list 卡片)与
+    # 取消代扣(破坏性,过 confirm_sub_cancel 支付密码闸门再调工具)。
+
+    def _period_text(days: int) -> str:
+        if days == 1:
+            return "天"
+        if 28 <= days <= 31:
+            return "月"
+        if days in (360, 365, 366):
+            return "年"
+        return f"{days}天"
+
+    async def _sub_rows(calls: list) -> list[dict] | None:
+        """拉订阅清单(只取 active);工具失败返回 None(轨迹已记)。"""
+        res = await tools.call("list_subscriptions")
+        calls.append(_jr("list_subscriptions", {}, res))
+        if _has_error(res) or not isinstance(res, list):
+            return None
+        return [r for r in res if r.get("status") == "active"]
+
+    async def s_extract(state: AgentState) -> dict:
+        history = state["messages"]
+        extra = ("【已有槽位】" + json.dumps(state.get("sub") or {},
+                                            ensure_ascii=False)
+                 + "\n请输出抽取结果。")
+        parsed = json_from_content(await ask_llm(SUB_EXTRACT_SYS, history, extra)) or {}
+        draft: dict = dict(state.get("sub") or {})
+        prev_action = draft.get("action")
+        for key in ("action", "merchant"):
+            if parsed.get(key) is not None:
+                draft[key] = str(parsed[key]).strip() or None
+        if parsed.get("action") and parsed["action"] != prev_action:
+            draft.pop("sub_id", None)   # 换动作清上一动作的定位
+        missing: list[str] = []
+        action = draft.get("action")
+        if action not in ("list", "cancel"):
+            missing.append("action")
+        if action == "cancel" and not draft.get("merchant"):
+            missing.append("merchant")
+        return {"sub": draft, "sub_missing": missing}
+
+    s_clarify = _make_clarify_node("sub_missing", _sub_slot_question)
+
+    async def s_list(state: AgentState) -> dict:
+        calls: list[dict] = []
+        rows = await _sub_rows(calls)
+        if rows is None:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "list_subscriptions",
+                               "error": calls[-1].get("error") or "订阅查询失败"}}
+        items = [{
+            "merchant_name": r.get("merchant"),
+            "category": r.get("category") or "订阅",
+            "amount_yuan": r.get("amount_yuan"),
+            "period_text": _period_text(int(r.get("period_days") or 30)),
+            "next_charge_date": r.get("next_charge_date"),
+            "annual_yuan": r.get("annual_cost_yuan"),
+        } for r in rows]
+        annual_cents = sum(_cents(i["annual_yuan"]) or 0 for i in items)
+        view = {"items": items,
+                "monthly_total_yuan": cents_to_yuan(round(annual_cents / 12)),
+                "annual_total_yuan": cents_to_yuan(annual_cents),
+                "hint": "以上为自动识别的周期性扣费,点「取消代扣」可随时终止协议"}
+        return {"bank_calls": calls, "sub_view": view,
+                "notice": {"kind": "sub_list", "n": len(items),
+                           "annual_total_yuan": view["annual_total_yuan"]}}
+
+    async def s_pick(state: AgentState) -> dict:
+        """按商户名定位要取消的订阅:精确 > 唯一包含;定位不到走播报收尾。"""
+        draft = state.get("sub") or {}
+        want = str(draft.get("merchant") or "").strip()
+        calls: list[dict] = []
+        rows = await _sub_rows(calls)
+        if rows is None:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "list_subscriptions",
+                               "error": calls[-1].get("error") or "订阅查询失败"}}
+        hit = next((r for r in rows if r.get("merchant") == want), None)
+        if hit is None:
+            contains = [r for r in rows if want and want in str(r.get("merchant") or "")]
+            if len(contains) == 1:
+                hit = contains[0]
+        if hit is None:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "sub_not_found", "merchant": want}}
+        sub_view = {
+            "sub_id": int(hit["id"]),
+            "merchant_name": hit.get("merchant"),
+            "category": hit.get("category") or "订阅",
+            "amount_yuan": hit.get("amount_yuan"),
+            "period_text": _period_text(int(hit.get("period_days") or 30)),
+            "next_charge_date": hit.get("next_charge_date"),
+            "annual_yuan": hit.get("annual_cost_yuan"),
+        }
+        return {"bank_calls": calls,
+                "sub": {**draft, "sub_id": sub_view["sub_id"], "sub": sub_view}}
+
+    # 取消闸门:支付密码级(代扣协议变更属敏感操作,与挂失/限额同级)
+    s_gate = _make_gate_node(
+        "confirm_sub_cancel", "sub", "sub", _sub_confirm_question, _sub_view_of,
+        notice_of_no=lambda subject, view: {
+            "kind": "sub_cancel_kept", "merchant": view.get("merchant_name")},
+        notice_of_giveup=lambda subject: {"kind": "sub_cancel_kept"},
+        pay_required=True, tools=tools)
+
+    async def s_exec(state: AgentState) -> dict:
+        draft = state.get("sub") or {}
+        sub_id = draft.get("sub_id")
+        if sub_id is None:
+            return {"notice": {"kind": "sub_not_found"}}
+        res = await tools.call("cancel_subscription", subscription_id=int(sub_id))
+        calls = [_jr("cancel_subscription", {"subscription_id": sub_id}, res)]
+        err = _has_error(res)
+        if err:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "cancel_subscription",
+                               "error": err}}
+        v = draft.get("sub") or {}
+        return {"bank_calls": calls,
+                "notice": {"kind": "sub_cancelled",
+                           "merchant": v.get("merchant_name"),
+                           "annual_yuan": v.get("annual_yuan")}}
+
+    async def s_report(state: AgentState) -> dict:
+        return await _announce(state)
+
     # ---------------------------------------------------------------- 闲聊兜底
 
     async def auth_guard(state: AgentState) -> dict:
@@ -2515,6 +2675,27 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             return "k_report"
         return "k_lost_gate"
 
+    def after_s_extract(state: AgentState) -> str:
+        if state.get("sub_missing"):
+            return "s_clarify"
+        return ("s_list" if (state.get("sub") or {}).get("action") == "list"
+                else "s_pick")
+
+    def after_s_clarify(state: AgentState) -> str:
+        return "s_report" if state.get("notice") else "s_extract"
+
+    def after_s_pick(state: AgentState) -> str:
+        # 没定位到商户(notice 已设)→ 直接播报;定位到 → 进支付密码闸门
+        return "s_report" if state.get("notice") else "s_gate"
+
+    def after_s_gate(state: AgentState) -> str:
+        decision = state.get("decision")
+        if decision == "yes":
+            return "s_exec"
+        if decision == "no":
+            return "s_report"   # notice=sub_cancel_kept 已由闸门设好
+        return "s_gate"
+
     # ---------------------------------------------------------------- 组装
 
     g = StateGraph(AgentState)
@@ -2547,6 +2728,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                      ("k_limits", k_limits), ("k_status", k_status),
                      ("k_gate", k_gate), ("k_lost_gate", k_lost_gate),
                      ("k_exec", k_exec), ("k_report", k_report),
+                     ("s_extract", s_extract), ("s_clarify", s_clarify),
+                     ("s_list", s_list), ("s_pick", s_pick),
+                     ("s_gate", s_gate), ("s_exec", s_exec),
+                     ("s_report", s_report),
                      ("auth_guard", auth_guard), ("chat", chat)]:
         g.add_node(name, fn)
 
@@ -2557,7 +2742,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         "split_settle": "ss_extract", "contact_add": "c_extract",
         "l_extract": "l_extract", "l_due": "l_due",
         "bill_analysis": "b_extract", "wealth": "w_extract",
-        "card": "k_extract", "chat": "chat"})
+        "card": "k_extract", "subscription": "s_extract", "chat": "chat"})
     g.add_conditional_edges("t_extract", after_extract, ["t_clarify", "t_resolve"])
     g.add_conditional_edges("t_clarify", after_clarify, ["t_extract", "t_report"])
     g.add_conditional_edges("t_resolve", after_resolve,
@@ -2641,6 +2826,17 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                             ["k_exec", "k_report", "k_lost_gate"])
     g.add_edge("k_exec", "k_report")
     g.add_edge("k_report", END)
+    # ---- 订阅/代扣 ----
+    g.add_conditional_edges("s_extract", after_s_extract,
+                            ["s_clarify", "s_list", "s_pick"])
+    g.add_conditional_edges("s_clarify", after_s_clarify,
+                            ["s_extract", "s_report"])
+    g.add_edge("s_list", "s_report")
+    g.add_conditional_edges("s_pick", after_s_pick, ["s_report", "s_gate"])
+    g.add_conditional_edges("s_gate", after_s_gate,
+                            ["s_exec", "s_report", "s_gate"])
+    g.add_edge("s_exec", "s_report")
+    g.add_edge("s_report", END)
     g.add_edge("auth_guard", "t_report")
     g.add_edge("chat", END)
 

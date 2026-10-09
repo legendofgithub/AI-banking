@@ -2,7 +2,6 @@
 
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
-import { useRouter } from "next/navigation";
 import { memo, useCallback } from "react";
 import { suggestions } from "@/lib/constants";
 import type { ChatMessage } from "@/lib/types";
@@ -16,16 +15,9 @@ type SuggestedActionsProps = {
 };
 
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
-  const router = useRouter();
   const suggestedActions = suggestions;
   const handleSuggestionClick = useCallback(
     (suggestion: string) => {
-      // 临时(前端先行):订阅/代扣场景的配套后台未接入,点卡跳纯前端
-      // 演示页验收交互;编排层订阅意图上线后删掉这个分支恢复直发消息。
-      if (suggestion === "订阅/代扣管理") {
-        router.push("/preview/subscriptions");
-        return;
-      }
       window.history.pushState(
         {},
         "",
@@ -36,7 +28,7 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
         role: "user",
       });
     },
-    [chatId, router, sendMessage]
+    [chatId, sendMessage]
   );
 
   return (
