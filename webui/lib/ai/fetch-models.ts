@@ -77,11 +77,12 @@ export async function resolveChatModel(selected: string): Promise<string> {
   return models[0]?.id ?? DEFAULT_CHAT_MODEL;
 }
 
-// 标题生成用小快模型:优先 flash/turbo/air,没有就用清单第一个
+// 标题生成用小快模型:优先 flash/turbo/air,DeepSeek 端点优先 deepseek-chat,
+// 没有就用清单第一个
 export async function pickTitleModelId(): Promise<string> {
   const models = await getZaiChatModels();
   return (
-    models.find((m) => /flash|turbo|air/.test(m.id))?.id ??
+    models.find((m) => /flash|turbo|air|^deepseek-chat$/.test(m.id))?.id ??
     models[0]?.id ??
     DEFAULT_CHAT_MODEL
   );

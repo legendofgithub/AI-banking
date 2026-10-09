@@ -18,10 +18,11 @@ export type ChatModel = {
 };
 
 // 兜底清单:仅在 /api/models 拉取失败(未配 key、断网、端点异常)时使用,
-// 保证界面依然能选能发。正常情况以智谱端点的实时清单为准,不在这里追新模型。
+// 保证界面依然能选能发。正常情况以端点的实时清单为准,不在这里追新模型。
+// deepseek-chat 在前:当前部署方配置为 DeepSeek 端点(2026-10-09 起智谱欠费)。
 export const FALLBACK_CHAT_MODELS: ChatModel[] = [
+  toChatModel("deepseek-chat"),
   toChatModel("glm-4.6"),
-  toChatModel("glm-4.5-air"),
 ];
 
 // 模型 id -> 展示名:glm-5.3-flash -> GLM-5.3-Flash
@@ -52,6 +53,9 @@ export function describeModel(id: string): string {
   if (/air/.test(id)) {
     return "Lightweight model with tool use";
   }
+  if (/deepseek-chat/.test(id)) {
+    return "Fast and cheap model with tool use";
+  }
   return "Zhipu GLM chat model";
 }
 
@@ -61,7 +65,7 @@ export function toChatModel(id: string): ChatModel {
     description: describeModel(id),
     id,
     name: prettyModelName(id),
-    provider: "zhipuai",
+    provider: id.startsWith("deepseek") ? "deepseek" : "zhipuai",
   };
 }
 
@@ -76,7 +80,9 @@ export async function getModelAvailability(
 }
 
 // 默认选型(与后端 pick_default_model 同规则):清单已按新→旧排序,
-// 优先 flash/turbo 级(编排对话要快),否则第一个。
+// 优先 flash/turbo 级(编排对话要快),DeepSeek 端点时优先 deepseek-chat
+// (reasoner 是深思模型,慢且输出思考过程,不适合编排抽取),否则第一个。
+const FAST_MODEL_RE = /flash|turbo|^deepseek-chat$/;
 export function pickDefaultModel(models: ChatModel[]): ChatModel | undefined {
-  return models.find((m) => /flash|turbo/.test(m.id)) ?? models[0];
+  return models.find((m) => FAST_MODEL_RE.test(m.id)) ?? models[0];
 }
