@@ -264,9 +264,13 @@
 
 **场景覆盖收官。** 赛题六大场景中五个已编排入图并有真实 LLM 剧本覆盖：智能转账（含定时/AA/同名消歧/幂等防重放）、账单分析（月报/异常检测）、理财操作（按风险等级推荐/申购/赎回，动钱必过 `confirm_wealth` 闸门）、卡片管理（查询/限额/锁定，写操作过 `confirm_card` 闸门）、跨场景联动（建计划/到期逐项闸门/取消）。**订阅/代扣管理是唯一未编排场景**（router 将其归 chat，CHAT_SYS 明确"即将上线"并引导）；银行侧订阅数据与挖掘（`detect_subscriptions`）已在账单分析里间接可用。
 
+> 后续进展（2026-10-09，commit `d6be42b`）：**订阅/代扣已编排入图，六场景满贯**。新增 `s_*` 七个节点（`s_extract`/`s_clarify`/`s_list`/`s_pick`/`s_gate`/`s_exec`/`s_report`）、第 10 个路由意图 `subscription`、第 9 种闸门 `confirm_sub_cancel`（取消代扣走支付密码），复用既有 3 个 MCP 工具；前端假数据演示页已删除，`data-subscription-list`/`data-subscription-cancel` 两张卡接入真实链路。上句"唯一未编排场景"自该 commit 起失效。
+
 **评估集扩展至 23 剧本。** scripts/eval_agent.py 由 15 扩到 23，新增账单/理财/卡片 8 个剧本（16-23）：bill_monthly（月报恰为上月、零闸门零动钱）、bill_anomaly（`detect_anomalies` ≈90 天窗口、零动钱）、wealth_recommend（推荐按种子 C3 测评带 `max_risk_level=3` 过滤、回复非空）、wealth_subscribe（申购种子真实低风险产品"安享定期90天"1000 元→闸门确认→持仓新增、活期恰减 1000、`bank_calls` 两步 `confirmed False→True`、扣费按工具返回 fee_yuan 核对）、wealth_redeem_cancel（同 thread 承接申购→赎回闸门给"取消"→持仓仍在、余额保持申购后水平、只建单一次 False）、card_list（`list_cards`、零动钱）、card_limit（第一张卡日限额 8000 元→闸门确认→`cards.daily_limit_cents=800000`、单笔限额不动）、card_lock（锁定第一张卡→单闸确认（非挂失无双闸）→`status=locked`、其他卡不动）。报告按八组汇总（转账/AA/联系人/闲聊/联动/账单/理财/卡片）。
 
-**最终数据**（`--set full` 23 剧本，2026-09-27 17:31）：**22/23 通过，成功率 95.65%（阈值 80%，达标）**，平均轮次 2.43、平均工具调用 3.57、平均耗时 24.6s、总耗时 566.4s。分组：**账单 2/2、理财 3/3、卡片 3/3、AA 2/2、联动 3/3、联系人 1/1、闲聊 1/1 全绿**，转账 7/8。完整数据见 scripts/eval_report.md 与 scripts/eval_results.json。
+**最终数据**（`--set full` 23 剧本，`scripts/eval_results.json` 记录于 2026-09-27T17:42:07，模型 glm-5.3-flash）：**19/23 通过，成功率 82.61%（阈值 80%，达标）**，平均轮次 2.35、平均工具调用 3.30、平均耗时 23.6s、总耗时 542.7s；4 条失败同一归因「业务断言不符（DB/notice 终态）」。分组：**账单 2/2、卡片 3/3、联动 3/3、联系人 1/1、闲聊 1/1 全绿**，转账 6/8、AA 1/2、理财 2/3。完整数据见 scripts/eval_report.md 与 scripts/eval_results.json。
+
+> 口径说明（2026-10-09 校正）：本节此前记的「22/23、95.65%、平均轮次 2.43、总耗时 566.4s」在仓库内**没有任何凭据支持**，与 `eval_results.json` 冲突，已按唯一凭据改正。另注：该轮评估跑于 2026-09-27，**早于**登录注册/支付密码闸（09-28）、理财适当性闸门与幂等修复（10-04）、订阅/代扣编排接入（10-09）三批改动，且 23 个剧本里**尚无订阅剧本**——即这不是当前代码的质量数字，重跑前请勿对外引用。
 
 **收官轮修复记录（2026-09-27，三处，均不降断言强度）**：
 - **评估器 stderr 超帽（实现 bug）**：外层检查器给 stderr 设 262144 字节上限，而每个银行工具调用各自新起一个 MCP stdio 会话，FastMCP 子进程每次启动都向 stderr 打 banner/更新提示/INFO（23 剧本 ≈102 个会话 ≈268KB，直接把全量评估判成"执行异常"）。eval_agent.py 在 main() 里 `FASTMCP_SHOW_SERVER_BANNER=false`+`FASTMCP_LOG_LEVEL=CRITICAL`（子进程经 agent/bank.py 继承 env），实测 stderr 268920 字节 → **0 字节**。
