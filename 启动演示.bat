@@ -27,6 +27,31 @@ for /l %%r in (1,1,2) do (
     timeout /t 2 /nobreak >nul
 )
 
+rem ================= 1.5) 首次运行自举 =================
+rem 需求(2026-10-09,仓库已公开):队友 clone 后只填一个 API Key 就能跑。
+rem - venv 缺失            → 友好报错(比一堆 traceback 强),指路 README §7.2
+rem - webui\.env.local 缺失 → 调 scripts/setup_env.py 一次式生成
+rem   (AUTH_SECRET 本机随机、提示粘贴 Key;生成物被 .gitignore 拦截,无泄露通道)
+rem - data\bank.db 缺失    → 自动播种 12 个月演示数据(bank_core.db 自建 data 目录;
+rem   此时刚停完旧服务,库文件无占用,不违反"重播种前先停服务"的铁律)
+if not exist "%PY%" (
+    echo [错误] 找不到 %PY% —— 请先创建虚拟环境并装依赖:
+    echo        py -3.12 -m venv .venv
+    echo        .venv\Scripts\python.exe -m pip install -r requirements.txt
+    echo        详见 README 或 docs\协作与接口契约.md 第七节
+    pause
+    exit /b 1
+)
+if not exist "webui\.env.local" (
+    echo.
+    echo [首次运行] webui\.env.local 不存在,进入一次式配置(全程只差粘贴一个 API Key^)...
+    %PY% scripts\setup_env.py
+)
+if not exist "data\bank.db" (
+    echo [首次运行] 演示库 data\bank.db 不存在,播种 12 个月种子数据...
+    %PY% -m bank_core.seed
+)
+
 rem ================= 2) 后端三服务 =================
 rem 必须用 venv 解释器(AGENTS.md 铁律 3:系统 Python312 没装项目依赖)
 rem
