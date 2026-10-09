@@ -3,6 +3,8 @@
 > 任何 AI 会话开始前先读这份。项目背景与路线决策见
 > [docs/AI-Banking-Agent-产品研发计划.md](docs/AI-Banking-Agent-产品研发计划.md),
 > 生产化差距与答辩证据见 [docs/production-readiness.md](docs/production-readiness.md)。
+> **多人并行开发(分工/接口契约/分支规范/上手步骤)见
+> [docs/协作与接口契约.md](docs/协作与接口契约.md)** —— 按层切分工,接口契约不许单方面改。
 > 2026 深圳国际金融科技大赛 · AI Banking Agent 赛道:对话式银行助手,六大场景
 > (转账/账单/订阅/理财/卡片/跨场景联动),演示主用户陈明。
 
@@ -11,7 +13,8 @@
 1. **改完就 commit**:每完成一个功能/修复,生成一个 Git commit(本仓库 2026-10-01 才建立,
    别再回到"零快照裸奔"状态)。commit 前确认 `git status` 里没有 `.env.local`、`*.sqlite`。
 2. **改完必须过测试**:改动要配套新增/更新测试,并跑全量
-   `.venv/Scripts/python.exe -m pytest tests -q`(当前 128 个,全绿才能交付)。
+   `.venv/Scripts/python.exe -m pytest tests -q`(当前 133 个,全绿才能交付)。
+   跨层改动(闸门/卡片/播报)先跑 `pytest tests/test_contract.py -q` 确认没破坏接口契约。
 3. **Python 一律用 venv**:`.venv/Scripts/python.exe`。裸 pip 指向不存在的 Python 3.14(损坏);
    系统 Python312 没装项目依赖(服务用它能起来是历史环境假象,重启必失败)。
 4. **动钱链路改动手动验证**:涉及转账/支付密码/注册登录的改动,除了 pytest,必须在浏览器里
