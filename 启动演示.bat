@@ -41,8 +41,10 @@ if exist "webui\.env.local" (
         if /i "%%a"=="ZAI_BASE_URL" set "ZAI_BASE_URL=%%b"
         if /i "%%a"=="ZAI_MODEL"    set "ZAI_MODEL=%%b"
     )
-    echo [配置] ZAI_* 取自 webui\.env.local  端点=%ZAI_BASE_URL%  模型=%ZAI_MODEL%
 )
+rem 踩坑:cmd 对 if/for 括号块是"整块先解析再执行",块内 %VAR% 在解析期就展开,
+rem 所以这行回显必须放在块外,否则永远打印空值(会被误判成回填失败)。
+if not "%ZAI_BASE_URL%"=="" echo [配置] ZAI_* 取自 webui\.env.local  端点=%ZAI_BASE_URL%  模型=%ZAI_MODEL%
 if "%ZAI_API_KEY%"=="" (
     echo [警告] 未找到 ZAI_API_KEY —— 对话会报"未配置 API Key"。
     echo        请在 webui\.env.local 里配置,或在 webui 界面设置里填 BYOK Key。
