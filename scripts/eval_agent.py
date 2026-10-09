@@ -26,7 +26,7 @@ flash 级,当前 glm-5.3-flash),验证「提示词 + 真实抽取 + 确定性编
 用法:
     python scripts/eval_agent.py --set smoke   # 2 个剧本(第1+第5),开发自验
     python scripts/eval_agent.py --set quick   # 前 6 个,编排层闸门用
-    python scripts/eval_agent.py --set full    # 全部 23 个(12 基础 + 3 联动 + 8 账单/理财/卡片)
+    python scripts/eval_agent.py --set full    # 全部 25 个(12 基础 + 3 联动 + 8 账单/理财/卡片 + 2 订阅)
     python scripts/eval_agent.py --only linkage_create,linkage_due  # 定向跑(自验)
 
 并发说明:剧本串行执行(并发=1,任务书上界 2 以内);单剧本失败记录后继续。
@@ -167,6 +167,7 @@ class Ctx:
     db: Path
     base_balance: int                  # 账户1(活期)基线,分
     base_balance2: int = 0             # 账户2(理财专户)基线,分(联动锁定单断言用)
+    base_orders: int = 0               # 转账单基线张数(种子自带 1 张「林悦家用」定时单)
     values: dict = field(default_factory=dict)  # 最终 aget_state().values(notice/bank_calls/…)
     turns: list[dict] = field(default_factory=list)  # [{text, interrupts, status}]
 
@@ -677,10 +678,20 @@ def _assert_wealth_subscribe(ctx: Ctx) -> None:
         if c.get("args", {}).get("product_id") != 2 \
                 or _cents_or_zero(c.get("args", {}).get("amount_yuan")) != 100_000:
             _fail(f"两次调用都应 product_id=2/金额1000元,实际 {c.get('args')}")
+    # 幂等键口径(2026-10-04 起):external_ref = f"wealth:sub:{幂等键}",键由编排层
+    # 生成(agent-wealth- 前缀);旧口径 wealth:sub:{product_id}:{ts} 已废除。
+    # 两次调用必须携带同一个键(建单时生成、确认时原样复用),否则重放拦不住。
+    keys = {c.get("args", {}).get("idempotency_key") for c in subs}
+    if len(keys) != 1 or None in keys:
+        _fail(f"两次 subscribe_product 必须携带同一个非空幂等键,实际 {keys}")
+    only_key = str(keys.pop())
+    if not only_key.startswith("agent-wealth-"):
+        _fail(f"幂等键应为编排层生成的 agent-wealth- 前缀,实际 {only_key!r}")
     txs = _rows(ctx.db,
-                "SELECT * FROM transactions WHERE external_ref LIKE 'wealth:sub:2:%'")
+                "SELECT * FROM transactions WHERE external_ref=?",
+                (f"wealth:sub:{only_key}",))
     if len(txs) != 1 or txs[0]["amount_cents"] != 100_000 or txs[0]["direction"] != "out":
-        _fail(f"申购扣款流水应恰一条 out/100000分,实际 {txs}")
+        _fail(f"申购扣款流水应恰一条 out/100000分 且 external_ref 等于幂等键,实际 {txs}")
 
 
 def _assert_wealth_redeem_cancel(ctx: Ctx) -> None:
@@ -754,6 +765,131 @@ def _assert_card_lock(ctx: Ctx) -> None:
     if others != {2: "locked", 3: "active"}:
         _fail(f"不该误动其他卡(2=locked/3=active 是种子态),实际 {others}")
     _assert_balances_frozen(ctx)
+
+
+# ------------------------------------------------------------ 订阅/代扣剧本(24-25)断言
+# 2026-10-09 扩展:六场景满贯后补上订阅评估覆盖(s_ 管线,commit d6be42b)。
+# 种子库由 seed.py 的 detect_subscriptions() 挖掘出 8 条 active 订阅,
+# 断言一律与 subscriptions 表逐项对账,不硬编码商户清单与金额。
+
+SUB_CANCEL_MERCHANT = "腾讯视频VIP"   # 种子真实的月度周期扣费(README 涨价戏眼)
+
+
+def _change_rows(db: Path, category: str) -> list[dict]:
+    """管理台修改记录库(与银行库同目录的 change_log.sqlite);不存在按空。"""
+    path = db.parent / "change_log.sqlite"
+    if not path.exists():
+        return []
+    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM change_records WHERE category=?", (category,)).fetchall()]
+    finally:
+        conn.close()
+
+
+def _assert_subscription_list(ctx: Ctx) -> None:
+    """查订阅清单:只读——list_subscriptions 恰一次、零闸门、零动钱;
+
+    卡片逐项与 subscriptions 表对账,月/年合计按同一公式复算(不贴播报措辞)。
+    """
+    _kind_is(ctx, "sub_list")
+    calls = _calls(ctx, "list_subscriptions")
+    if len(calls) != 1:
+        _fail(f"list_subscriptions 应恰被调 1 次,实际 {len(calls)} 次:{ctx.bank_call_tools}")
+    if ctx.interrupts():
+        _fail(f"只读查订阅不该有任何 interrupt,实际 {ctx.interrupts()}")
+    rows = _rows(ctx.db, "SELECT * FROM subscriptions WHERE status='active' ORDER BY id")
+    if not rows:
+        _fail("种子库应有 active 订阅(seed.py 会跑 detect_subscriptions)")
+    view = ctx.values.get("sub_view") or {}
+    items = view.get("items") or []
+    # 顺序不约束(list_subscriptions 按扣费日排),但集合必须一一对应:
+    # 用排序后列表比对,既查漏/查多,也查重复项。
+    got_names = sorted(str(i.get("merchant_name")) for i in items)
+    want_names = sorted(r["merchant_name"] for r in rows)
+    if got_names != want_names:
+        _fail(f"卡片商户应与 active 订阅一一对应,卡片={got_names},库={want_names}")
+    if ctx.notice.get("n") != len(rows):
+        _fail(f"notice.n 应为 {len(rows)},实际 {ctx.notice.get('n')!r}")
+    by_name = {i["merchant_name"]: i for i in items}
+    annual_cents = 0
+    for r in rows:
+        item = by_name[r["merchant_name"]]
+        if _cents_or_zero(item.get("amount_yuan")) != r["amount_cents"]:
+            _fail(f"{r['merchant_name']} 卡片金额应为 {r['amount_cents']} 分,"
+                  f"实际 {item.get('amount_yuan')!r}")
+        want_annual = round(365 / r["period_days"] * r["amount_cents"])
+        annual_cents += want_annual
+        if _cents_or_zero(item.get("annual_yuan")) != want_annual:
+            _fail(f"{r['merchant_name']} 年化应为 {want_annual} 分,"
+                  f"实际 {item.get('annual_yuan')!r}")
+    if _cents_or_zero(view.get("annual_total_yuan")) != annual_cents:
+        _fail(f"年合计应为 {annual_cents} 分,实际 {view.get('annual_total_yuan')!r}")
+    if _cents_or_zero(view.get("monthly_total_yuan")) != round(annual_cents / 12):
+        _fail(f"月合计应为 {round(annual_cents / 12)} 分,"
+              f"实际 {view.get('monthly_total_yuan')!r}")
+    if ctx.notice.get("annual_total_yuan") != view.get("annual_total_yuan"):
+        _fail("notice 与卡片的年合计必须一致(播报与卡片不许两套数)")
+    _assert_balances_frozen(ctx)
+
+
+def _assert_subscription_cancel(ctx: Ctx) -> None:
+    """取消代扣:confirm_sub_cancel 支付密码闸门 → status=cancelled。
+
+    资金安全侧断言:取消代扣不动钱(余额冻结、零新转账单),且不误伤其余订阅。
+    """
+    _kind_is(ctx, "sub_cancelled")
+    gates = ctx.interrupts("confirm_sub_cancel")
+    if len(gates) != 1:
+        _fail(f"应恰好出现 1 次 confirm_sub_cancel 闸门,实际 {len(gates)} 次:"
+              f"{[p.get('type') for p in ctx.interrupts()]}")
+    gate = gates[0]
+    if not gate.get("pay_required"):
+        _fail(f"取消代扣属敏感操作,闸门应要求支付密码,实际 {gate!r}")
+    rows = _rows(ctx.db, "SELECT * FROM subscriptions WHERE merchant_name=?",
+                 (SUB_CANCEL_MERCHANT,))
+    if len(rows) != 1:
+        _fail(f"种子库应有恰好 1 条 {SUB_CANCEL_MERCHANT},实际 {len(rows)} 条")
+    target = rows[0]
+    if target["status"] != "cancelled":
+        _fail(f"{SUB_CANCEL_MERCHANT} 终态应为 cancelled,实际 {target['status']!r}")
+    sub_view = gate.get("sub") or {}
+    if sub_view.get("merchant_name") != SUB_CANCEL_MERCHANT:
+        _fail(f"闸门复述商户应为 {SUB_CANCEL_MERCHANT},"
+              f"实际 {sub_view.get('merchant_name')!r}")
+    # 闸门复述的金额/年化必须来自库内事实,不许拍脑袋
+    if _cents_or_zero(sub_view.get("amount_yuan")) != target["amount_cents"]:
+        _fail(f"闸门复述金额应为 {target['amount_cents']} 分,"
+              f"实际 {sub_view.get('amount_yuan')!r}")
+    want_annual = round(365 / target["period_days"] * target["amount_cents"])
+    if _cents_or_zero(sub_view.get("annual_yuan")) != want_annual:
+        _fail(f"闸门复述年化应为 {want_annual} 分,实际 {sub_view.get('annual_yuan')!r}")
+    if sub_view.get("sub_id") != target["id"]:
+        _fail(f"闸门载荷 sub_id 应为 {target['id']},实际 {sub_view.get('sub_id')!r}")
+    calls = _calls(ctx, "cancel_subscription")
+    if len(calls) != 1 or calls[0].get("args", {}).get("subscription_id") != target["id"]:
+        _fail(f"cancel_subscription 应恰一次且 subscription_id={target['id']},"
+              f"实际 {[c.get('args') for c in calls]}")
+    # 不误伤:其余订阅保持 active
+    alive = _rows(ctx.db, "SELECT merchant_name FROM subscriptions WHERE status='active'")
+    total = _rows(ctx.db, "SELECT COUNT(*) n FROM subscriptions")[0]["n"]
+    if len(alive) != total - 1:
+        _fail(f"取消 1 条后应剩 {total - 1} 条 active,实际 {len(alive)} 条:"
+              f"{[a['merchant_name'] for a in alive]}")
+    # 资金安全:取消代扣不动钱。注意种子自带 1 张「林悦 500 元家用」定时单,
+    # 故比基线张数,而不是断言"零转账单"。
+    orders = _orders(ctx.db)
+    if len(orders) != ctx.base_orders:
+        _fail(f"取消代扣不该新建转账单:基线 {ctx.base_orders} 张,实际 {len(orders)} 张")
+    _assert_balances_frozen(ctx)
+    # 管理台修改记录留痕(2026-10-07 补的双库留痕)
+    recs = [r for r in _change_rows(ctx.db, "subscription")
+            if r.get("action") == "cancel" and r.get("target") == SUB_CANCEL_MERCHANT]
+    if len(recs) != 1:
+        _fail(f"change_log 应有恰 1 条 subscription/cancel/{SUB_CANCEL_MERCHANT},"
+              f"实际 {len(recs)} 条")
 
 
 # ----------------------------------------------------------------- 剧本清单(顺序即 full 集;quick=前6,smoke=第1+第5)
@@ -843,6 +979,19 @@ def _card_lock_reply(payload: dict) -> str:
             return "锁定"
         return "锁定我的第一张卡"
     return "888888"
+
+
+def _sub_cancel_reply(payload: dict) -> str:
+    """取消代扣应答:缺槽补商户名;confirm_sub_cancel 闸门给支付密码。"""
+    ptype = payload.get("type")
+    if ptype == "ask_slot":
+        missing = payload.get("missing") or []
+        if "merchant" in missing:
+            return f"取消{SUB_CANCEL_MERCHANT}的自动扣费"
+        return "取消代扣"
+    if ptype == "confirm_sub_cancel":
+        return "888888"          # 支付密码闸门(与挂失/限额同级)
+    return "取消"
 
 
 def _build_scenarios() -> list[Scenario]:
@@ -973,6 +1122,16 @@ def _build_scenarios() -> list[Scenario]:
         Scenario("card_lock", [
             Turn("暂时锁定我的第一张卡", _card_lock_reply),
         ], _assert_card_lock, "锁卡:闸门确认(单闸,非挂失)→status=locked"),
+        # ---- 订阅/代扣(24-25):六场景满贯后补评估覆盖(2026-10-09) ----
+        Scenario("subscription_list", [
+            Turn("帮我看看我都有哪些自动扣费，一年要花多少钱",
+                 _clarify_only("查一下我的订阅清单和年化成本")),
+        ], _assert_subscription_list,
+            "订阅清单:list_subscriptions,卡片与库逐项对账,只读零闸门零动钱"),
+        Scenario("subscription_cancel", [
+            Turn(f"取消{SUB_CANCEL_MERCHANT}的自动扣费", _sub_cancel_reply),
+        ], _assert_subscription_cancel,
+            "取消代扣:支付密码闸门→status=cancelled,不误伤其余订阅、零动钱"),
     ]
 
 
@@ -1089,7 +1248,8 @@ async def _run_scenario(scn: Scenario, llm: Any, tmp_root: Path) -> dict:
                  "interrupts": [str(p.get("type")) for p in t["interrupts"]]}
                 for t in turns]
             scn.assert_fn(Ctx(db=db, base_balance=base_balance,
-                              base_balance2=base_balance2, values=values,
+                              base_balance2=base_balance2,
+                              base_orders=len(_orders(db)), values=values,
                               turns=turns))
         record["ok"] = True
     except TimeoutError:
@@ -1124,8 +1284,9 @@ GROUPS: dict[str, str] = {
     "wealth_recommend": "理财", "wealth_subscribe": "理财",
     "wealth_redeem_cancel": "理财",
     "card_list": "卡片", "card_limit": "卡片", "card_lock": "卡片",
+    "subscription_list": "订阅", "subscription_cancel": "订阅",
 }
-GROUP_ORDER = ["转账", "AA收款", "联系人", "闲聊", "联动", "账单", "理财", "卡片"]
+GROUP_ORDER = ["转账", "AA收款", "联系人", "闲聊", "联动", "账单", "理财", "卡片", "订阅"]
 
 
 def _failure_tag(rec: dict) -> str:
@@ -1310,7 +1471,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="真实 LLM 端到端评估:标准化剧本跑编排图,量化 agent 质量")
     parser.add_argument("--set", choices=("smoke", "quick", "full"), default="full",
-                        help="smoke=2 个(开发自验) quick=前6(闸门) full=全部23")
+                        help="smoke=2 个(开发自验) quick=前6(闸门) full=全部25")
     parser.add_argument("--only", default="",
                         help="逗号分隔剧本名,定向跑(自验用;与 --set 二选一,前者优先)")
     args = parser.parse_args()

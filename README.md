@@ -3,7 +3,7 @@
 > 2026 深圳国际金融科技大赛 · AI Banking Agent 赛道 ｜ 研发计划见 [docs/AI-Banking-Agent-产品研发计划.md](docs/AI-Banking-Agent-产品研发计划.md)
 
 `bank_core` 是整套系统的**银行能力层**：一间随时可重置的沙箱银行，含账本、卡片、
-理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 33 个工具，
+理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 42 个工具，
 供 LangGraph 编排层（或任何 MCP 客户端）调用。
 
 ## 快速开始
@@ -49,11 +49,11 @@ python -m venv .venv
 ## 架构定位
 
 ```
-LangGraph 编排层（下一阶段）
+LangGraph 编排层（agent/，已在跑：70 节点 / 10 路由意图 / 9 类人工闸门）
         │ MCP (stdio / http)
         ▼
 ┌──────────────────────────────────────────────┐
-│ mcp_server.py   33 个工具，标注 READ/LOW/MED/HIGH │
+│ mcp_server.py   42 个工具，标注 READ/LOW/MED/HIGH │
 ├──────────────────────────────────────────────┤
 │ ledger.py 账本·转账两步走·AA·卡片                │
 │ analysis.py 分类统计·月报·异常检测·订阅挖掘       │
@@ -68,11 +68,14 @@ LangGraph 编排层（下一阶段）
 
 1. **动钱两步走**：`create_transfer_order` 只建单（`pending_confirm`），
    `confirm_transfer_order` 才扣款；确认时二次校验余额、单笔/日累计限额
-2. **幂等防重放**：`idempotency_key` 重复建单直接返回已有订单
-3. **理财风险闸门**：产品风险等级超过用户 C 等级直接拒绝；申赎同样两步走
+2. **幂等防重放**：转账 `idempotency_key` 重复建单直接返回已有订单；
+   理财申购同款（编排层生成键、`transactions.external_ref` UNIQUE 兜底），
+   同指令重放拒绝二次扣款
+3. **理财风险闸门**：未做风险测评只能申购 R1（现金管理类），R2 及以上先测评；
+   有测评则超过 C 等级直接拒绝；申赎同样两步走
 4. **只建议不越权**：联动计划（`suggest_linkage`）只产出待确认步骤草稿；
    定时转账到期只转"待确认"，绝不自动扣款
-5. **全程审计**：每次工具调用入参/结果写 `audit_log`
+5. **全程审计**：每次工具调用入参/结果写 `audit_log`（写操作无遗漏；支付密码脱敏为 `***`）
 
 ## 种子数据里埋好的演示"戏眼"
 
@@ -88,7 +91,18 @@ LangGraph 编排层（下一阶段）
 ## 测试
 
 ```
-tests/test_bank_core.py —— 15 个用例
-覆盖：金额换算、转账两步走/余额不足/幂等/日限额、AA 对账、挂失不可逆、
-理财风险闸门、种子确定性、余额=入-出不变量、订阅/异常戏眼、月报勾稽、事件联动
+.venv/Scripts/python.exe -m pytest tests -q      # 126 个用例全绿(2026-10-09)
+
+tests/test_bank_core.py     23 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
+                            AA 对账、挂失不可逆、理财风险闸门(含无测评限购 R1)、
+                            申购幂等键、种子确定性、余额=入-出不变量、订阅/异常戏眼、
+                            月报勾稽、事件联动
+tests/test_agent_graph.py   26 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅)
+tests/test_api_stream.py    13 个 —— SSE 协议帧、确认卡片、会话目录、悬空单落地页
+tests/test_auth.py          19 个 —— 实名注册、密码策略、会话与支付密码核验
+tests/test_admin.py          9 个 —— 管理台资金/变更记录、调账、按用户隔离
+tests/test_review_fixes.py   8 个 —— 严格确认语义、犹豫答复绝不执行、幂等重放
+tests/test_linkage.py        9 个 —— 跨场景联动建/到期/取消与时间旅行
+tests/test_e2e_transfer.py   5 个 —— 端到端 A~E(立即/同名/超限/定时/AA)
+tests/test_llm_autoselect.py 5 个 —— 模型自动选型与缓存
 ```

@@ -11,7 +11,7 @@
 1. **改完就 commit**:每完成一个功能/修复,生成一个 Git commit(本仓库 2026-10-01 才建立,
    别再回到"零快照裸奔"状态)。commit 前确认 `git status` 里没有 `.env.local`、`*.sqlite`。
 2. **改完必须过测试**:改动要配套新增/更新测试,并跑全量
-   `.venv/Scripts/python.exe -m pytest tests -q`(当前 111 个,全绿才能交付)。
+   `.venv/Scripts/python.exe -m pytest tests -q`(当前 126 个,全绿才能交付)。
 3. **Python 一律用 venv**:`.venv/Scripts/python.exe`。裸 pip 指向不存在的 Python 3.14(损坏);
    系统 Python312 没装项目依赖(服务用它能起来是历史环境假象,重启必失败)。
 4. **动钱链路改动手动验证**:涉及转账/支付密码/注册登录的改动,除了 pytest,必须在浏览器里
@@ -23,12 +23,14 @@
 
 | 端口 | 服务 | 启动(在项目根目录) |
 |------|------|----------------------|
-| 3000 | webui 聊天前端(Next.js) | 已在跑;改前端代码实测无需重启 |
+| 3000 | webui 聊天前端(Next.js) | `next start` 生产模式;改前端代码需重新 build |
 | 8800 | agent API(LangGraph 编排+账号) | `.venv/Scripts/python.exe -m agent.api` |
 | 8788 | 演示网银(web_api) | `.venv/Scripts/python.exe -m bank_core.web_api` |
 | 8789 | 管理台 | `.venv/Scripts/python.exe -m bank_core.admin_api` |
 
 - 重启后端**必须用 venv python**(见铁律 3)。
+- 一键起停用 `启动演示.bat` / `停止演示.bat`。**启动脚本是全量重启**(先按 PID 停端口再起),
+  不是"已在跑就跳过"——Python 与 `next start` 都不热加载,跳过会让你对着旧代码演示。
 - 清理进程**先 netstat 查 PID 再按 PID 杀**,绝不 `taskkill /IM node.exe` 全杀(会误杀用户常驻的 webui)。
 - 内存紧张(16GB,常只剩 2-4GB):webui 用 `next build` + `next start`,**不要用 `next dev --turbo`**(必 OOM)。
 
@@ -60,6 +62,12 @@ data/         运行库 bank.db 等(不入库,可重播种)
 - 重播种(重置演示数据)前先停占用 bank.db 的服务(Windows 下库文件被占用)。
 - ZCode 内嵌浏览器(IAB)点按钮常超时:验证用 `elementFromPoint` 确认可点后,
   `form.requestSubmit()` / `el.click()`(evaluate)兜底,效果等价。
+- **LLM 配置以 `webui/.env.local` 为准**(`ZAI_BASE_URL`/`ZAI_API_KEY`/`ZAI_MODEL`)。
+  2026-10-09 智谱账户欠费(429 code 1113「余额不足」),已切到 DeepSeek 端点。
+  踩坑:环境变量里可能残留过期的 Key/端点,而 8800 只读进程环境——**只换 Key 不换
+  `ZAI_BASE_URL` 会变成"DeepSeek 的 Key 打到智谱端点"这种必挂组合**;`启动演示.bat`
+  已把 `ZAI_*` 三个变量一起从 `.env.local` 回填。验证: `curl http://127.0.0.1:8800/health`
+  的 `model` 字段应显示当前模型。
 
 ## 常用命令
 
@@ -72,4 +80,8 @@ data/         运行库 bank.db 等(不入库,可重播种)
 
 # 前端 e2e(转账全流程+截图)
 cd webui && node e2e-check.mjs
+
+# 真实 LLM 评估(25 剧本;先 export ZAI_BASE_URL/ZAI_API_KEY/ZAI_MODEL,
+# 否则 get_llm 直接抛"未配置 API Key")
+.venv/Scripts/python.exe scripts/eval_agent.py --set full
 ```
