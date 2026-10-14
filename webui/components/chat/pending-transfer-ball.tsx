@@ -139,6 +139,27 @@ export function PendingTransferBall({
     setSheetOpen(true);
   }, []);
 
+  // 气泡打开时,点按球/气泡以外的任何区域即收起气泡(点击照常落到页面上,
+  // 不吞手势);capture 阶段监听,保证在其它处理器之前完成"是否外部"判定
+  useEffect(() => {
+    if (!bubbleOpen) {
+      return;
+    }
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (
+        t?.closest(
+          '[data-testid="pending-ball"], [data-testid="pending-bubble"]'
+        )
+      ) {
+        return;
+      }
+      setBubbleOpen(false);
+    };
+    window.addEventListener("pointerdown", onDown, true);
+    return () => window.removeEventListener("pointerdown", onDown, true);
+  }, [bubbleOpen]);
+
   const goConfirm = useCallback(() => {
     setSheetOpen(false);
     onGoConfirm();
