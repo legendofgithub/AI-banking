@@ -22,7 +22,9 @@ import {
 const STORAGE_KEY = "zai-api-key";
 
 export function getStoredApiKey(): string {
-  if (typeof window === "undefined") return "";
+  if (typeof window === "undefined") {
+    return "";
+  }
   return window.localStorage.getItem(STORAGE_KEY) ?? "";
 }
 
@@ -45,6 +47,13 @@ export function ApiKeySettings() {
       setStatus("");
     }
   }, [open]);
+
+  const handleKeyChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setValue(e.target.value);
+    },
+    []
+  );
 
   const handleSave = useCallback(() => {
     const v = value.trim();
@@ -108,18 +117,20 @@ export function ApiKeySettings() {
           />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 p-3" side="top">
+      <PopoverContent
+        align="start"
+        className="w-[min(20rem,calc(100vw-1.5rem))] p-3"
+        side="top"
+      >
         <div className="flex flex-col gap-2">
           <div className="text-[13px] font-medium">智谱 API Key(可选)</div>
           <div className="text-xs leading-relaxed text-muted-foreground">
             填写后对话使用你自己的 Key;留空使用部署方配置。
-            {stored
-              ? ` 当前已配置:···${stored.slice(-4)}`
-              : " 当前未配置。"}
+            {stored ? ` 当前已配置:···${stored.slice(-4)}` : " 当前未配置。"}
           </div>
           <Input
             className="h-8 text-xs"
-            onChange={(e) => setValue(e.target.value)}
+            onChange={handleKeyChange}
             placeholder="粘贴 API Key,形如 id.secret"
             type="password"
             value={value}

@@ -82,11 +82,13 @@ export function PendingTransferToast() {
   return (
     <div
       aria-live="assertive"
-      className="fixed right-4 bottom-4 z-50 w-[min(92vw,360px)] rounded-2xl border border-amber-300/80 bg-gradient-to-br from-amber-50 to-yellow-50 p-4 shadow-[var(--shadow-float)] dark:border-amber-500/50 dark:from-amber-950/60 dark:to-yellow-950/40"
+      /* 手机端改顶部横幅:右下角卡片在窄屏会整片盖住聊天输入区(实测 375px 下
+         提醒卡宽 345px,输入框被拦截无法打字);桌面(md+)保持右下角原位 */
+      className="fixed inset-x-3 top-16 z-50 rounded-2xl border border-amber-300/80 bg-gradient-to-br from-amber-50 to-yellow-50 p-4 shadow-[var(--shadow-float)] dark:border-amber-500/50 dark:from-amber-950/60 dark:to-yellow-950/40 md:inset-x-auto md:right-4 md:bottom-4 md:top-auto md:w-[min(92vw,360px)]"
       role="alert"
     >
       <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5 text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+        <div className="flex min-w-0 items-center gap-1.5 text-[13px] font-semibold text-amber-700 dark:text-amber-300">
           <span aria-hidden>⚠️</span>
           {user?.nickname
             ? `${user.nickname},你有 ${pending.length} 笔转账未确认`
