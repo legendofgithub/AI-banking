@@ -142,7 +142,7 @@ try {
   }
   console.log("T4.2 悬浮球不遮挡输入区: 通过");
 
-  // T4.3 点按球 → 小气泡(N 笔待确认 + 查看详情)
+  // T4.3 点按球 → 小气泡(N 笔待确认 + 查看详情);点屏幕其他区域 → 收起
   await ball.click();
   const bubble = page.locator('[data-testid="pending-bubble"]');
   await bubble.waitFor({ timeout: 5000 });
@@ -151,6 +151,11 @@ try {
     throw new Error(`T4.3: 气泡文案异常: ${bubbleText}`);
   }
   console.log("T4.3 点按弹气泡: 通过");
+  await page.locator('[data-role="assistant"]').last().click();
+  await bubble.waitFor({ state: "hidden", timeout: 5000 });
+  await ball.click();
+  await bubble.waitFor({ timeout: 5000 });
+  console.log("T4.3b 点外部收起气泡、再点球重开: 通过");
 
   // T4.4 查看详情 → 半屏面板(含订单明细)
   await page.locator('[data-testid="pending-bubble-detail"]').click();
