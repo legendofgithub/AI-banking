@@ -118,3 +118,5 @@ watchfiles==1.2.0
 websockets==16.1.1
 xxhash==4.0.1
 zstandard==0.25.0
+qrcode==8.2
+pillow==12.3.0
