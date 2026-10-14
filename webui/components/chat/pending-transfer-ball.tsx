@@ -3,9 +3,9 @@
 /*
  * 手机端「待确认转账」悬浮球(md 以下渲染;桌面仍是右下角常驻卡片):
  * - 常态:吸附在屏幕左右边缘,只露半个球(黄色,带未确认笔数角标);
- * - 点按:球旁弹出小气泡「你有 N 笔转账待确认」+「查看详情」;
- * - 查看详情:底部弹起 50dvh 确认面板(订单明细 + 去确认入口);
- *   面板左上角朝右小箭头 = 收回为悬浮球;
+ * - 点按:球旁弹出小气泡「你有 N 笔转账待确认」+「查看详情」(点外部可收起);
+ * - 查看详情:屏幕正中央弹起确认卡(订单明细 + 去确认入口);
+ *   卡片左上角朝右小箭头 = 收回为悬浮球;
  * - 拖拽:球跟手;拖到屏幕中心附近 → 整球 + 动态渐变旋转;松手 →
  *   自动吸附到较近的左右边缘(带回弹/压扁动效),只露半球。
  * 悬空资金必须被处理的原设计不变:球不可关闭、不可划走,单子处理完自动消失。
@@ -18,11 +18,11 @@ import { ChevronRightIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
 export interface BallOrder {
@@ -254,21 +254,19 @@ export function PendingTransferBall({
         </div>
       ) : null}
 
-      {/* ---- 半屏确认面板(左上角朝右箭头 = 收回为悬浮球) ---- */}
-      <Sheet onOpenChange={setSheetOpen} open={sheetOpen}>
-        <SheetContent
-          className="h-[50dvh] rounded-t-2xl border-t border-amber-300/70 bg-gradient-to-b from-amber-50 to-yellow-50 dark:border-amber-500/40 dark:from-amber-950/60 dark:to-yellow-950/40"
+      {/* ---- 屏幕正中央确认卡(左上角朝右箭头 = 收回为悬浮球) ---- */}
+      <Dialog onOpenChange={setSheetOpen} open={sheetOpen}>
+        <DialogContent
+          className="max-h-[70dvh] gap-0 rounded-2xl border border-amber-300/70 bg-gradient-to-b from-amber-50 to-yellow-50 p-0 ring-amber-300/40 dark:border-amber-500/40 dark:from-amber-950/60 dark:to-yellow-950/40"
           data-testid="pending-sheet"
-          side="bottom"
-          style={{ paddingTop: 0 }}
         >
-          <SheetHeader className="px-5 pt-3 pb-1">
-            <SheetTitle className="flex items-center gap-2 text-[15px] font-semibold text-amber-800 dark:text-amber-300">
+          <DialogHeader className="px-5 pt-4 pb-1">
+            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-amber-800 dark:text-amber-300">
               <span aria-hidden>⚠️</span>
               待确认转账 · {pending.length} 笔
-            </SheetTitle>
-          </SheetHeader>
-          <div className="flex-1 overflow-y-auto px-5 pb-2">
+            </DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[40dvh] overflow-y-auto px-5 py-2">
             <div className="flex flex-col gap-1.5">
               {pending.slice(0, 5).map((o) => (
                 <div
@@ -299,7 +297,7 @@ export function PendingTransferBall({
               动钱等你亲自确认——需输入支付密码,此提醒不可关闭
             </div>
           </div>
-          <div className="px-5 pb-5">
+          <div className="px-5 pt-1 pb-5">
             <Button
               className="h-10 w-full bg-amber-500 font-medium text-white hover:bg-amber-600"
               data-testid="pending-sheet-go"
@@ -318,8 +316,8 @@ export function PendingTransferBall({
           >
             <ChevronRightIcon className="size-4" />
           </button>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
