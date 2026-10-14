@@ -1,8 +1,8 @@
 // 手机端端到端实测:375x812 视口走完「登录 → 打字转账 → 金色确认卡(含支付密码)
 // → 扣款成功」全流程,并断言两件事关手机可用性的硬指标:
 //   A. 页面无横向溢出(gold 卡右边界不超出视口);
-//   B. 待确认转账的常驻提醒不遮挡输入区(2026-10-14 修的 bug:右下角卡片在窄屏
-//      盖住整个输入框;现改为手机顶部横幅)。
+//   B. 待确认转账悬浮球完整交互链(贴边半球 → 点按气泡 → 半屏面板 →
+//      箭头收回 → 拖拽中心整球渐变 → 松手回吸),且不遮挡输入区。
 // 用法:cd webui && node e2e-mobile-check.mjs     (需 8800/3000 已起、LLM Key 已配)
 
 import { mkdirSync } from "node:fs";
@@ -89,11 +89,14 @@ try {
   // ---- T3 输支付密码 → 扣款成功 ----
   await page.fill('input[aria-label="支付密码"]', PAY_PASSWORD);
   await page.getByRole("button", { exact: true, name: "确认" }).click();
-  await page.waitForSelector("text=/成功|已转|完成/", { timeout: 60_000 });
+  // 播报词由 LLM 生成、时延不定(实测 DeepSeek 偶发超 60s),给足 90s 并放宽词表
+  await page.waitForSelector("text=/成功|已转|已执行|完成|已扣/", {
+    timeout: 90_000,
+  });
   await page.screenshot({ path: shot("mobile-t3_转账成功") });
   console.log("T3 支付密码确认后扣款成功播报: 通过");
 
-  // ---- T4 悬浮提醒不遮输入区(回归:曾有右下角卡片盖住输入框的 bug) ----
+  // ---- T4 待确认转账悬浮球(2026-10-14 v2:可拖拽悬浮球取代横幅) ----
   const userBefore = await page.locator('[data-role="user"]').count();
   await page.fill("textarea", "给张三转5元");
   await page.keyboard.press("Enter");
@@ -106,7 +109,22 @@ try {
   await newCard
     .locator('input[aria-label="支付密码"]')
     .waitFor({ timeout: 60_000 });
-  await page.waitForTimeout(1500); // 等常驻提醒轮询出现
+  await page.waitForTimeout(1500); // 等待提醒轮询出球
+
+  // T4.1 球已出现并吸附在屏幕边缘(只露半球)
+  const ball = page.locator('[data-testid="pending-ball"]');
+  await ball.waitFor({ timeout: 10_000 });
+  const box1 = await ball.boundingBox();
+  const visibleW = 375 - box1.x;
+  if (visibleW <= 10 || visibleW >= 50) {
+    throw new Error(
+      `T4.1: 悬浮球未贴边吸附(可见宽度 ${visibleW}px,期望约半球 10~50px)`
+    );
+  }
+  console.log(`T4.1 悬浮球贴边吸附(可见 ${visibleW.toFixed(0)}px): 通过`);
+  await page.screenshot({ path: shot("mobile-t4_悬浮球贴边") });
+
+  // T4.2 球不遮挡输入区
   const inputClickable = await page.evaluate(() => {
     const ta = document.querySelector("textarea");
     if (!ta) {
@@ -119,18 +137,61 @@ try {
     );
     return hit === ta || ta.contains(hit);
   });
-  await page.screenshot({ path: shot("mobile-t4_提醒横幅与输入区") });
   if (!inputClickable) {
-    throw new Error(
-      "T4: 待确认转账提醒遮挡输入区(elementFromPoint 未命中 textarea)"
-    );
+    throw new Error("T4.2: 悬浮球遮挡输入区(elementFromPoint 未命中 textarea)");
   }
-  console.log("T4 待确认提醒不遮挡输入区: 通过");
+  console.log("T4.2 悬浮球不遮挡输入区: 通过");
+
+  // T4.3 点按球 → 小气泡(N 笔待确认 + 查看详情)
+  await ball.click();
+  const bubble = page.locator('[data-testid="pending-bubble"]');
+  await bubble.waitFor({ timeout: 5000 });
+  const bubbleText = await bubble.innerText();
+  if (!/\d+ 笔转账待确认/.test(bubbleText)) {
+    throw new Error(`T4.3: 气泡文案异常: ${bubbleText}`);
+  }
+  console.log("T4.3 点按弹气泡: 通过");
+
+  // T4.4 查看详情 → 半屏面板(含订单明细)
+  await page.locator('[data-testid="pending-bubble-detail"]').click();
+  const sheet = page.locator('[data-testid="pending-sheet"]');
+  await sheet.waitFor({ timeout: 5000 });
+  if (!(await sheet.innerText()).includes("张三")) {
+    throw new Error("T4.4: 面板里没有待确认订单明细");
+  }
+  await page.screenshot({ path: shot("mobile-t4_半屏确认面板") });
+  console.log("T4.4 半屏确认面板(含订单明细): 通过");
+
+  // T4.5 左上角朝右箭头 → 收回为悬浮球
+  await page.locator('[data-testid="pending-sheet-collapse"]').click();
+  await sheet.waitFor({ state: "hidden", timeout: 5000 });
+  console.log("T4.5 左上角箭头收回为悬浮球: 通过");
+
+  // T4.6 拖到屏幕中心 → 整球动态渐变;松手 → 回吸边缘
+  const b = await ball.boundingBox();
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(187, 350, { steps: 10 });
+  const spinning = await page
+    .locator('[data-testid="pending-ball"] .pending-ball-spin')
+    .count();
+  await page.screenshot({ path: shot("mobile-t4_拖拽中心整球渐变") });
+  await page.mouse.up();
+  await page.waitForTimeout(500); // 等吸附过渡动画
+  const box2 = await ball.boundingBox();
+  const visible2 = 375 - box2.x;
+  if (spinning !== 1) {
+    throw new Error("T4.6: 拖到屏幕中心未出现整球动态渐变");
+  }
+  if (visible2 <= 10 || visible2 >= 50) {
+    throw new Error(`T4.6: 松手后未回吸边缘(可见宽度 ${visible2}px)`);
+  }
+  console.log("T4.6 拖拽: 中心整球渐变 + 松手回吸边缘: 通过");
 
   // ---- 清场:取消这笔待确认单,不留悬空资金 ----
   await page.waitForFunction(() => {
     const btns = [...document.querySelectorAll("button")];
-    const last = btns.filter((b) => b.textContent.trim() === "取消").pop();
+    const last = btns.filter((x) => x.textContent.trim() === "取消").pop();
     return Boolean(last && !last.disabled);
   });
   await newCard.getByRole("button", { exact: true, name: "取消" }).click();

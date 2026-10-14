@@ -220,6 +220,36 @@ textarea:focus-visible {
   }
 }
 
+/* ===== 手机端待确认转账悬浮球(pending-transfer-ball.tsx) ===== */
+/* 拖到屏幕中心:整球动态渐变旋转 */
+@keyframes pending-ball-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.pending-ball-spin {
+  animation: pending-ball-spin 1.6s linear infinite;
+}
+
+/* 松手吸附到屏幕边缘:压扁→回弹(撞墙感) */
+@keyframes pending-ball-land {
+  0% {
+    transform: scaleX(1);
+  }
+  35% {
+    transform: scaleX(0.7) scaleY(1.16);
+  }
+  70% {
+    transform: scaleX(1.14) scaleY(0.92);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+.pending-ball-land {
+  animation: pending-ball-land 450ms ease-out;
+}
+
 @layer utilities {
   :root {
     --foreground-rgb: 0, 0, 0;
