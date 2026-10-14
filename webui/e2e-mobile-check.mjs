@@ -157,15 +157,25 @@ try {
   await bubble.waitFor({ timeout: 5000 });
   console.log("T4.3b 点外部收起气泡、再点球重开: 通过");
 
-  // T4.4 查看详情 → 半屏面板(含订单明细)
+  // T4.4 查看详情 → 屏幕正中央确认卡(含订单明细,居中是硬断言)
   await page.locator('[data-testid="pending-bubble-detail"]').click();
   const sheet = page.locator('[data-testid="pending-sheet"]');
   await sheet.waitFor({ timeout: 5000 });
   if (!(await sheet.innerText()).includes("张三")) {
     throw new Error("T4.4: 面板里没有待确认订单明细");
   }
-  await page.screenshot({ path: shot("mobile-t4_半屏确认面板") });
-  console.log("T4.4 半屏确认面板(含订单明细): 通过");
+  const sb = await sheet.boundingBox();
+  const cx = sb.x + sb.width / 2;
+  const cy = sb.y + sb.height / 2;
+  if (Math.abs(cx - 375 / 2) > 24 || Math.abs(cy - 812 / 2) > 80) {
+    throw new Error(
+      `T4.4: 确认卡未居中(中心 ${cx.toFixed(0)},${cy.toFixed(0)} vs 视口 187,406)`
+    );
+  }
+  await page.screenshot({ path: shot("mobile-t4_居中确认面板") });
+  console.log(
+    `T4.4 屏幕正中央确认卡(中心 ${cx.toFixed(0)},${cy.toFixed(0)}): 通过`
+  );
 
   // T4.5 左上角朝右箭头 → 收回为悬浮球
   await page.locator('[data-testid="pending-sheet-collapse"]').click();
