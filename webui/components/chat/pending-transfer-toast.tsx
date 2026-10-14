@@ -12,12 +12,14 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PendingTransferBall } from "@/components/chat/pending-transfer-ball";
 import { useActiveChat } from "@/hooks/use-active-chat";
 import {
   bankAgentBase,
   bankAuthHeaders,
   useBankAuth,
 } from "@/hooks/use-bank-auth";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 interface PendingOrder {
   amount_yuan: string;
@@ -33,6 +35,7 @@ export function PendingTransferToast() {
   const router = useRouter();
   const { ready, token, user } = useBankAuth();
   const { status } = useActiveChat();
+  const isMobile = useIsMobile();
   const [orders, setOrders] = useState<PendingOrder[]>([]);
   const askedRef = useRef("");
 
@@ -77,6 +80,19 @@ export function PendingTransferToast() {
   const scheduled = orders.filter((o) => o.status === "scheduled");
   if (pending.length + scheduled.length === 0) {
     return null;
+  }
+
+  // 手机端:可拖拽悬浮球(边缘吸附半球 → 点按气泡 → 半屏确认面板);
+  // 桌面端:右下角常驻卡片(原设计)
+  if (isMobile) {
+    return (
+      <PendingTransferBall
+        nickname={user?.nickname}
+        onGoConfirm={goConfirm}
+        pending={pending}
+        scheduledCount={scheduled.length}
+      />
+    );
   }
 
   return (
