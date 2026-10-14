@@ -90,8 +90,12 @@ data/         运行库 bank.db 等(不入库,可重播种)
 # 重播种演示数据(先停 8788/8789/8800)
 .venv/Scripts/python.exe -m bank_core.seed
 
-# 前端 e2e(转账全流程+截图)
+# 前端 e2e(转账全流程+截图;2026-10-14 起自带登录步骤)
 cd webui && node e2e-check.mjs
+
+# 手机端 e2e(375px 视口:登录→转账→支付密码卡→扣款,断言无横向溢出、
+# 悬浮提醒不遮输入区;改动银行卡片/输入区布局后必跑)
+cd webui && node e2e-mobile-check.mjs
 
 # 真实 LLM 评估(25 剧本;先 export ZAI_BASE_URL/ZAI_API_KEY/ZAI_MODEL,
 # 否则 get_llm 直接抛"未配置 API Key")

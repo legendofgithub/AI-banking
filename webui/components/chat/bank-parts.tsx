@@ -192,9 +192,11 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
     return null;
   }
   return (
-    <div className="flex justify-between gap-4 text-[13px]">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium text-foreground">{value}</span>
+    <div className="flex items-baseline justify-between gap-4 text-[13px]">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 text-right font-medium text-foreground [overflow-wrap:anywhere]">
+        {value}
+      </span>
     </div>
   );
 }
@@ -354,14 +356,14 @@ function LinkagePlanCard({ data }: { data: LinkagePlanCardData }) {
         <div className="mt-1 flex flex-col gap-1">
           {actions.map((action, index) => (
             <div
-              className="flex items-center justify-between gap-3 rounded-md bg-amber-100/50 px-2 py-1 text-[13px] dark:bg-amber-900/20"
+              className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 rounded-md bg-amber-100/50 px-2 py-1 text-[13px] dark:bg-amber-900/20"
               key={action.idx ?? index}
             >
-              <span className="font-medium">
+              <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
                 {action.what}
                 {action.merchant ? `(${action.merchant})` : ""}
               </span>
-              <span className="text-muted-foreground">
+              <span className="text-right text-muted-foreground [overflow-wrap:anywhere]">
                 ¥{action.amount_yuan} · 提前 {action.days_before} 天
                 {action.run_at ? ` · ${action.run_at.slice(0, 10)}` : ""}
               </span>
@@ -547,8 +549,10 @@ function ContactChoiceRow({
       onClick={handlePick}
       type="button"
     >
-      <span className="font-medium">{candidate.name}</span>
-      <span className="text-right text-muted-foreground">
+      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
+        {candidate.name}
+      </span>
+      <span className="text-right text-muted-foreground [overflow-wrap:anywhere]">
         {[candidate.relation, candidate.note].filter(Boolean).join(" · ") ||
           candidate.phone}
       </span>
@@ -691,7 +695,7 @@ function SubscriptionRow({
         </span>
       </div>
       <div className="mt-1 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-        <span>
+        <span className="min-w-0 [overflow-wrap:anywhere]">
           下次扣费 {item.next_charge_date ?? "—"} · 年化 ¥
           {item.annual_yuan ?? "—"}
         </span>

@@ -61,10 +61,18 @@ def test_result_cached_per_process():
     assert asyncio.run(second()) == "glm-5.3-flash"
 
 
-def test_request_llm_override_and_cache():
-    """BYOK 门面:请求级覆盖 key/model;同组合复用实例;缺 key 报错。"""
+def test_request_llm_override_and_cache(monkeypatch):
+    """BYOK 门面:请求级覆盖 key/model;同组合复用实例;缺 key 报错。
+
+    注意隔离真实环境:本机用户环境变量可能长期存有 ZAI_MODEL(2026-10-09 切
+    DeepSeek 时 setx 写入过)。RequestLLM 的模型优先级是 覆盖 > env > fallback,
+    不清掉 env 的话 fallback 断言会被真实环境变量盖掉而假失败。
+    """
     import asyncio
     from agent.llm import RequestLLM, reset_request_llm, set_request_llm
+
+    monkeypatch.delenv("ZAI_MODEL", raising=False)
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
 
     made = []
 
