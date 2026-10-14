@@ -7,7 +7,16 @@ import { SessionProvider } from "next-auth/react";
 
 export const metadata: Metadata = {
   description: "AI Banking Agent —— 自然语言银行助手",
-  metadataBase: new URL("https://chat.vercel.ai"),
+  icons: {
+    apple: [{ sizes: "180x180", url: "/images/apple-icon.png" }],
+    icon: [
+      { sizes: "192x192", type: "image/png", url: "/images/icon-192.png" },
+      { sizes: "512x512", type: "image/png", url: "/images/icon-512.png" },
+    ],
+  },
+  // 模板残留的 chat.vercel.ai 会让 Next 把相对图标/og URL 解析到别人的域名,
+  // 换成本项目实际部署形态(本机演示,见 webui/.env.example 的 AUTH_URL)
+  metadataBase: new URL("http://127.0.0.1:3000"),
   title: "AI 银行助手",
 };
 
@@ -41,11 +50,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      className="font-sans"
-      lang="zh-CN"
-      suppressHydrationWarning
-    >
+    <html className="font-sans" lang="zh-CN" suppressHydrationWarning>
       <head>
         <script
           // biome-ignore lint/security/noDangerouslySetInnerHtml: "Required"
