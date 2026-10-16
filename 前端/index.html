@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 银行助手 · 移动端高保真原型总览(375×812)</title>
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="assets/shell.css">
+</head>
+<body class="page">
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="24" height="24" viewBox="0 0 32 32" fill="none"><path d="M16 3.2 27 7v9.2c0 6-4.6 10.7-11 12.6C9.6 26.9 5 22.2 5 16.2V7l11-3.8Z" fill="#fff" fill-opacity=".16" stroke="#C8A45C" stroke-width="1.6"/><path d="m11.6 15.8 3 3 5.8-6" stroke="#C8A45C" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div>
+      <h1>AI 银行助手 · 移动端高保真原型</h1>
+      <div class="sub">iPhone 375×812 单列画板 · 六大场景 · 所有动钱操作一律「确认卡 → 支付密码」两步闸门</div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="stat">页面 <b id="statPages">19</b></div>
+  <div class="stat">连线 <b id="statLinks">13</b></div>
+  <a class="nav-link gold" href="app.html">▶ 打开可交互演示</a>
+</header>
+
+<div class="toolbar">
+  <span class="tb-label">分组</span>
+  <button class="tb-btn on" data-group="全部">全部</button>
+  <button class="tb-btn" data-group="账号入口">账号入口</button>
+  <button class="tb-btn" data-group="对话核心">对话核心</button>
+  <button class="tb-btn" data-group="动钱闸门">动钱闸门</button>
+  <button class="tb-btn" data-group="六大场景">六大场景</button>
+  <button class="tb-btn" data-group="演示专用">演示专用</button>
+  <span class="tb-sep"></span>
+  <button class="tb-btn gold" id="btnHot">显示热区</button>
+  <span class="tb-note">点击画面里的任意按钮 → 自动跳到目标页面;带金色虚框的即热区</span>
+</div>
+
+<main class="grid" id="grid"></main>
+
+<div class="doc">
+
+  <section class="panel">
+    <h2>设计规范(全部页面统一)</h2>
+    <p class="lead">主色与卡片语汇来自产品设计规范;确认类一律浅金,危险类一律红色,只读类一律白卡。所有触控热区 ≥44px,底部元素避开 34px 安全区。</p>
+    <div class="legend">
+      <span><i style="background:#0F2B46"></i>墨蓝 #0F2B46 · 导航 / 主按钮 / 标题</span>
+      <span><i style="background:#C8A45C"></i>品牌金 #C8A45C · 确认卡 / 金额强调</span>
+      <span><i style="background:#FBF6EC;border:1px solid #E4CF9F"></i>确认卡底 #FBF6EC</span>
+      <span><i style="background:#F7F8FA;border:1px solid #E5E7EB"></i>背景 #F7F8FA</span>
+      <span><i style="background:#2E9E5B"></i>成功绿 #2E9E5B</span>
+      <span><i style="background:#D94141"></i>警示红 #D94141 · 挂失 / 超限 / 锁定</span>
+      <span><i style="background:#1A2233"></i>正文 15px #1A2233</span>
+      <span><i style="background:#6B7280"></i>次要 12-13px #6B7280</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>页面交互连线</h2>
+    <p class="lead">按「提示词.md」第四节连完。点右侧按钮即可跳到对应画板核对。</p>
+    <table class="tbl" id="linkTable">
+      <thead><tr><th style="width:34%">触发</th><th style="width:22%">从</th><th style="width:30%">到</th><th style="width:14%">查看</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>验收清单</h2>
+    <p class="lead">生成后逐项自检结果(全部通过)。</p>
+    <ul class="check-list" id="checkList"></ul>
+  </section>
+
+  <section class="panel">
+    <h2>为什么这么画(口径备忘)</h2>
+    <p class="lead">
+      本项目真实前端(webui,Next.js)即一个对话式单页应用,本原型忠实还原它的交互骨架:
+      <b>所有动钱操作一律走「确认卡 → 支付密码 → 才执行」两步闸门</b>,这是产品最大的差异化卖点(资金安全铁律),
+      所以每个场景页都保留了确认卡与密码弹层,不做「一步到位」的简化。
+      演示快进(P13b)与常驻待确认提醒(P3/P4 右下角胶囊)是为比赛现场演示设计的功能,原型中一并保留。
+    </p>
+  </section>
+
+</div>
+
+<script src="assets/screens.js"></script>
+<script>
+(function () {
+  const P = window.PROTO;
+  const grid = document.getElementById('grid');
+
+  /* ---------------- 画板网格 ---------------- */
+  grid.innerHTML = P.screens.map(s => `
+    <section class="frame" id="frame-${s.id}" data-group="${s.group}">
+      <div class="frame-head">
+        <span class="frame-no">${s.no}</span>
+        <span class="frame-title">${s.title}</span>
+        <span class="frame-group">${s.group}</span>
+      </div>
+      <p class="frame-note">${s.note}</p>
+      <div class="phone">${s.html}</div>
+    </section>`).join('');
+
+  document.getElementById('statPages').textContent = P.screens.length;
+  document.getElementById('statLinks').textContent = P.links.length;
+
+  /* ---------------- 点击热区 → 跳画板 ---------------- */
+  function jumpTo(id) {
+    const el = document.getElementById('frame-' + id);
+    if (!el) return;
+    if (el.classList.contains('hide')) {
+      document.querySelectorAll('.tb-btn[data-group]').forEach(b => b.classList.toggle('on', b.dataset.group === '全部'));
+      document.querySelectorAll('.frame').forEach(f => f.classList.remove('hide'));
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const ph = el.querySelector('.phone');
+    ph.classList.remove('flash');
+    void ph.offsetWidth;
+    ph.classList.add('flash');
+  }
+
+  grid.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-goto],[data-act]');
+    if (!el) return;
+    const act = el.dataset.act || '';
+    if (act === 'input' || act === 'noop') return;
+    if (act === 'del' || act === 'key') return;
+    let target = el.dataset.goto;
+    if (!target && act.indexOf('goto:') === 0) target = act.slice(5);
+    if (!target) {
+      if (act === 'back') target = 'p3';
+      else if (act === 'cancel') return;
+      else if (act === 'passcode') target = 'p5';
+      else if (act === 'send') target = 'p4';
+      else if (act === 'ff') target = 'p13b';
+      else if (act === 'ff-jump') target = 'p10b';
+    }
+    if (target) jumpTo(target);
+  });
+
+  /* ---------------- 分组筛选 ---------------- */
+  const tb = document.querySelector('.toolbar');
+  tb.addEventListener('click', (e) => {
+    const b = e.target.closest('.tb-btn[data-group]');
+    if (!b) return;
+    document.querySelectorAll('.tb-btn[data-group]').forEach(x => x.classList.toggle('on', x === b));
+    const g = b.dataset.group;
+    document.querySelectorAll('.frame').forEach(f => {
+      f.classList.toggle('hide', g !== '全部' && f.dataset.group !== g);
+    });
+  });
+
+  document.getElementById('btnHot').addEventListener('click', (e) => {
+    document.body.classList.toggle('show-hot');
+    e.currentTarget.classList.toggle('on');
+  });
+
+  /* ---------------- 连线表 ---------------- */
+  document.querySelector('#linkTable tbody').innerHTML = P.links.map(l => `
+    <tr>
+      <td>${l[0]}</td>
+      <td>${l[1]}</td>
+      <td class="flow">${l[2]}</td>
+      <td>
+        <button class="jump" data-jump="${l[3]}">${l[3].toUpperCase()}</button>
+        <button class="jump" data-jump="${l[4]}">→ ${l[4].toUpperCase()}</button>
+      </td>
+    </tr>`).join('');
+
+  document.querySelector('#linkTable').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-jump]');
+    if (b) jumpTo(b.dataset.jump);
+  });
+
+  /* ---------------- 验收清单 ---------------- */
+  document.getElementById('checkList').innerHTML = P.checklist.map(c => `
+    <li>
+      <span class="ck">${P.icons.checkSm}</span>
+      <span>${c[0]}</span>
+    </li>`).join('');
+})();
+</script>
+</body>
+</html>

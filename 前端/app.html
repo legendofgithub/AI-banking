@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 银行助手 · 可交互原型(单机演示)</title>
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="assets/shell.css">
+<style>
+  .stage { position: relative; }
+  .flows { display: flex; flex-direction: column; gap: 8px; }
+  .flow-btn {
+    display: flex; align-items: center; gap: 10px; text-align: left;
+    padding: 11px 13px; border-radius: 12px; cursor: pointer;
+    border: 1px solid #e5e7eb; background: #fff; font-family: inherit;
+  }
+  .flow-btn:hover { border-color: var(--gold); background: var(--gold-bg); }
+  .flow-btn .fi { font-size: 12px; font-weight: 800; color: #fff; background: var(--gold-ink); border-radius: 6px; padding: 3px 7px; }
+  .flow-btn .ft { font-size: 13px; font-weight: 600; color: var(--text); }
+  .flow-btn .fd { font-size: 11px; color: var(--muted); margin-top: 2px; }
+</style>
+</head>
+<body class="page">
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="24" height="24" viewBox="0 0 32 32" fill="none"><path d="M16 3.2 27 7v9.2c0 6-4.6 10.7-11 12.6C9.6 26.9 5 22.2 5 16.2V7l11-3.8Z" fill="#fff" fill-opacity=".16" stroke="#C8A45C" stroke-width="1.6"/><path d="m11.6 15.8 3 3 5.8-6" stroke="#C8A45C" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div>
+      <h1>AI 银行助手 · 可交互原型</h1>
+      <div class="sub">375×812 · 动钱两步闸门(确认卡 → 支付密码)· 直接点画面里的按钮就能走完整流程</div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="stat">支付密码演示口令 <b>888888</b> · 连错 4 次看锁定</div>
+  <a class="nav-link" href="index.html">← 回到全部页面总览</a>
+</header>
+
+<main class="shell">
+  <section class="stage">
+    <div class="stage-head">
+      <button class="tb-btn" data-act="back">← 返回</button>
+      <div class="cur" id="stageCur">P1 登录页</div>
+      <button class="tb-btn" data-act="reset">重新开始</button>
+      <button class="tb-btn gold" data-act="hot">显示热区</button>
+    </div>
+    <div class="phone" id="phone"></div>
+  </section>
+
+  <aside class="rail">
+    <h2>推荐演示动线</h2>
+    <p>三条线覆盖本次答辩的核心卖点,照着点就行。</p>
+    <div class="flows" id="flows"></div>
+
+    <h2 style="margin-top:22px">全部页面(点击直达)</h2>
+    <p>单机演示模式下,支付密码弹层、键盘、列表都是可操作的。</p>
+    <div id="railList"></div>
+  </aside>
+</main>
+
+<script src="assets/screens.js"></script>
+<script>
+(function () {
+  const P = window.PROTO;
+  const phone = document.getElementById('phone');
+  const stageCur = document.getElementById('stageCur');
+  const byId = Object.fromEntries(P.screens.map(s => [s.id, s]));
+
+  const CORRECT = '888888';
+  let cur = null;
+  let history = [];
+  let pwdState = null;
+  let toastTimer = null;
+  let showHot = false;
+
+  /* ---------------- 工具 ---------------- */
+  function toast(msg, gold) {
+    const old = phone.querySelector('.toast');
+    if (old) old.remove();
+    const el = document.createElement('div');
+    el.className = 'toast' + (gold ? ' gold' : '');
+    el.textContent = msg;
+    phone.appendChild(el);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.remove(), 2600);
+  }
+
+  /* ---------------- 渲染 ---------------- */
+  function render(id) {
+    const s = byId[id];
+    if (!s) return;
+    closePwd(true);
+    phone.innerHTML = s.html;
+    const body = phone.querySelector('.body');
+    if (body) body.scrollTop = 0;
+    cur = id;
+    stageCur.innerHTML = s.no + ' ' + s.title + ' <span>· ' + s.group + '</span>';
+    markRail();
+    if (id === 'p5') {
+      const staticMask = phone.querySelector('.mask');
+      if (staticMask) staticMask.remove();
+      openPwd({ sub: '向 <b>张三</b> 转账 <b>¥500.00</b>', next: 'p4s' });
+    }
+  }
+
+  function nav(id, opts) {
+    opts = opts || {};
+    if (cur && cur !== id && !opts.replace) history.push(cur);
+    render(id);
+  }
+
+  function back() {
+    const prev = history.pop();
+    render(prev || 'p1');
+  }
+
+  /* ---------------- 支付密码弹层 ---------------- */
+  function openPwd(cfg) {
+    pwdState = {
+      title: cfg.title || '请输入支付密码',
+      sub: cfg.sub || '向 <b>张三</b> 转账 <b>¥500.00</b>',
+      next: cfg.next || 'p4s',
+      digits: '',
+      wrong: 0
+    };
+    const m = document.createElement('div');
+    m.className = 'mask';
+    m.id = 'pwdMask';
+    m.innerHTML =
+      '<div class="sheet">' +
+        '<div class="sheet-title">' + pwdState.title + '</div>' +
+        '<div class="sheet-sub">' + pwdState.sub + '</div>' +
+        '<div class="pwd-cells" data-cells></div>' +
+        '<div class="hint" data-attempts></div>' +
+        P.keypad(true) +
+        '<div class="hint" style="margin:8px 0 12px;font-size:11px">演示提示:正确口令 <b>888888</b>;连错 4 次触发转账锁定</div>' +
+      '</div>';
+    phone.appendChild(m);
+    paintPwd();
+  }
+
+  function paintPwd(err) {
+    if (!pwdState) return;
+    const m = phone.querySelector('#pwdMask');
+    if (!m) return;
+    const cells = m.querySelector('[data-cells]');
+    const n = pwdState.digits.length;
+    cells.innerHTML = [1, 2, 3, 4, 5, 6].map(i =>
+      '<div class="pwd-cell' +
+      (i <= n ? (err ? ' err' : ' filled') : (i === n + 1 ? ' active' : '')) +
+      '">' + (i <= n ? '<i></i>' : '') + '</div>'
+    ).join('');
+    if (err) {
+      cells.classList.add('shake');
+      setTimeout(() => cells.classList.remove('shake'), 360);
+    }
+    const left = Math.max(0, 3 - pwdState.wrong);
+    m.querySelector('[data-attempts]').innerHTML =
+      '剩余尝试次数:<b style="color:' + (left === 0 ? 'var(--red)' : 'var(--red)') + '">' + left + ' 次</b>,连续错 4 次将锁定转账功能';
+  }
+
+  function closePwd(silent) {
+    const m = phone.querySelector('#pwdMask');
+    if (m) m.remove();
+    pwdState = null;
+  }
+
+  function typeDigit(d) {
+    if (!pwdState) return;
+    if (pwdState.digits.length >= 6) pwdState.digits = '';
+    pwdState.digits += d;
+    paintPwd();
+    if (pwdState.digits.length === 6) setTimeout(submitPwd, 170);
+  }
+
+  function delDigit() {
+    if (!pwdState) return;
+    pwdState.digits = pwdState.digits.slice(0, -1);
+    paintPwd();
+  }
+
+  function submitPwd() {
+    if (!pwdState) return;
+    const st = pwdState;
+    if (st.digits === CORRECT) {
+      const next = st.next;
+      closePwd();
+      nav(next);
+      toast('支付密码校验通过 ✓ 交易已执行(单号 #1024)', true);
+      return;
+    }
+    st.wrong += 1;
+    st.digits = '';
+    paintPwd(true);
+    if (st.wrong >= 4) {
+      closePwd();
+      nav('p13a');
+      toast('支付密码连续错误 4 次,转账功能已锁定');
+    } else {
+      toast('支付密码错误 · 剩余 ' + Math.max(0, 3 - st.wrong) + ' 次,再错 ' + (4 - st.wrong) + ' 次将锁定转账功能');
+    }
+  }
+
+  /* ---------------- 对话输入分流 ---------------- */
+  function send() {
+    const inp = phone.querySelector('.composer-input');
+    const raw = (inp && inp.value.trim()) || (inp ? inp.placeholder.replace(/^试试:/, '') : '');
+    const text = raw || '给张三转 500,备注房租';
+    let target = null;
+    if (/转|打钱|汇款|房租/.test(text)) target = 'p4';
+    else if (/账单|花了|消费|收支/.test(text)) target = 'p6';
+    else if (/理财|基金|申购|债|收益/.test(text)) target = /R4|高收益|量化/.test(text) ? 'p7b' : 'p7a';
+    else if (/挂失|丢了|丢失/.test(text)) target = 'p8b';
+    else if (/限额|卡/.test(text)) target = 'p8a';
+    else if (/订阅|续费|会员|代扣|自动扣/.test(text)) target = 'p9a';
+    else if (/生日|礼物|计划|准备/.test(text)) target = 'p10a';
+    else if (/待确认/.test(text)) target = 'p11';
+
+    const body = phone.querySelector('.body');
+    if (body) {
+      const t = document.createElement('div');
+      t.className = 'msg';
+      t.innerHTML = '<div class="avatar">AI</div><div class="bubble-ai"><span class="typing"><i></i><i></i><i></i></span></div>';
+      body.appendChild(t);
+      body.scrollTop = body.scrollHeight;
+    }
+    if (!target) {
+      setTimeout(() => {
+        if (body) body.removeChild(body.lastChild);
+        toast('原型只能听懂这几类:转账 / 账单 / 理财 / 卡片 / 订阅 / 生日联动');
+      }, 700);
+      return;
+    }
+    setTimeout(() => { if (inp) inp.value = ''; nav(target); }, 640);
+  }
+
+  /* ---------------- 事件代理 ---------------- */
+  phone.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act],[data-goto]');
+    if (!el) return;
+    const act = el.dataset.act || '';
+    if (act === 'input' || act === 'noop') return;
+    if (act === 'key') { e.stopPropagation(); typeDigit(el.dataset.key); return; }
+    if (act === 'del') { e.stopPropagation(); delDigit(); return; }
+    if (act.indexOf('goto:') === 0) { nav(act.slice(5)); return; }
+    switch (act) {
+      case 'back': back(); return;
+      case 'reset': history = []; nav('p1'); return;
+      case 'sent': return;
+      case 'send': send(); return;
+      case 'passcode':
+        openPwd({
+          title: el.dataset.pwdTitle || '请输入支付密码',
+          sub: el.dataset.pwdSub || '向 <b>张三</b> 转账 <b>¥500.00</b>',
+          next: el.dataset.pwdNext || 'p4s'
+        });
+        return;
+      case 'cancel':
+        toast('已取消 · 没有发生任何扣款', true);
+        return;
+      case 'ff':
+        nav('p13b'); return;
+      case 'ff-jump':
+        nav('p3');
+        toast('计划已建立:10-20 买鲜花 ¥300、10-21 订生日蛋糕 ¥260,到期我会提醒你', true);
+        return;
+      case 'hot':
+        showHot = !showHot;
+        document.body.classList.toggle('show-hot', showHot);
+        return;
+      default: break;
+    }
+    if (el.dataset.goto) nav(el.dataset.goto);
+  });
+
+  // 键盘输入支付密码(PC 演示方便)
+  document.addEventListener('keydown', (e) => {
+    if (!pwdState) return;
+    if (/^[0-9]$/.test(e.key)) typeDigit(e.key);
+    else if (e.key === 'Backspace') delDigit();
+    else if (e.key === 'Escape') closePwd();
+  });
+
+  /* ---------------- 侧栏 ---------------- */
+  const groups = [];
+  P.screens.forEach(s => {
+    let g = groups.find(x => x.name === s.group);
+    if (!g) { g = { name: s.group, items: [] }; groups.push(g); }
+    g.items.push(s);
+  });
+
+  const rail = document.getElementById('railList');
+  rail.innerHTML = groups.map(g =>
+    '<div class="rail-group">' + g.name + '</div><div class="rail-list">' +
+    g.items.map(i => '<button class="rail-item" data-id="' + i.id + '"><span class="ri-t">' + i.no + ' ' + i.title + '</span><span class="ri-n">' + i.note.slice(0, 26) + '…</span></button>').join('') +
+    '</div>'
+  ).join('');
+  rail.addEventListener('click', (e) => {
+    const b = e.target.closest('.rail-item');
+    if (b) nav(b.dataset.id);
+  });
+  function markRail() {
+    rail.querySelectorAll('.rail-item').forEach(b => b.classList.toggle('on', b.dataset.id === cur));
+  }
+
+  const flows = [
+    ['①', '转账铁律流', '登录 → 对话 → 转账确认卡 → 6 位支付密码 → 成功', 'p1'],
+    ['②', '联动到期流', '建生日计划 → 演示快进到 10-20 → 到期提醒 → 现在购买', 'p10a'],
+    ['③', '风险拦截流', '理财 R4 超 C3 等级 → 强制拦截,没有「继续」出口', 'p7b'],
+    ['④', '锁定流', '支付密码连错 4 次 → 转账功能锁定,按钮置灰', 'p5']
+  ];
+  document.getElementById('flows').innerHTML = flows.map(f =>
+    '<button class="flow-btn" data-id="' + f[3] + '"><span class="fi">' + f[0] + '</span><span><span class="ft">' + f[1] + '</span><span class="fd">' + f[2] + '</span></span></button>'
+  ).join('');
+  document.getElementById('flows').addEventListener('click', (e) => {
+    const b = e.target.closest('.flow-btn');
+    if (b) nav(b.dataset.id);
+  });
+
+  // 舞台工具条
+  document.querySelector('.stage-head').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    if (b.dataset.act === 'back') back();
+    if (b.dataset.act === 'reset') { history = []; nav('p1'); toast('已回到登录页'); }
+    if (b.dataset.act === 'hot') {
+      showHot = !showHot;
+      document.body.classList.toggle('show-hot', showHot);
+    }
+  });
+
+  render('p1');
+})();
+</script>
+</body>
+</html>
