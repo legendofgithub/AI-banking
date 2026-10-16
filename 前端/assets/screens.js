@@ -61,11 +61,30 @@
       <div class="composer-safe"></div>
     </div>`;
 
+  /* 待确认转账悬浮球(与 webui 同款:贴边半球 / 红角标 / 点按气泡 / 居中确认卡) */
   const fab = () => `
-    <button class="fab-alert" data-goto="p11" data-act="goto:p11">
-      <span class="red-dot"></span>${I.warn}
-      <span>你有 <b>1 笔待确认转账 ¥500</b> · 去确认</span>
+    <button class="pball snap-r" data-goto="p11" data-act="goto:p11" aria-label="待确认转账悬浮球,1 笔">
+      <span class="pb-grad"></span><span class="pb-yen">¥</span><span class="pb-badge">1</span>
     </button>`;
+
+  const pendingBubble = () => `
+    <div class="pb-bubble">
+      <div class="pb-bubble-text">陈明,你有 <b>1 笔</b>转账待确认</div>
+      <button class="pb-bubble-btn" data-act="pending-sheet">查看详情</button>
+    </div>`;
+
+  const pendingSheet = () => `
+    <div class="pb-sheet">
+      <button class="pb-collapse" data-goto="p3" data-act="pending-close" aria-label="收起为悬浮球">${I.arrowRight}</button>
+      <div class="pb-sheet-title">${I.warn} 待确认转账 · 1 笔</div>
+      <div class="pb-rows">
+        <div class="pb-row"><span>给 张三 · 房租</span><b>¥500.00</b></div>
+      </div>
+      <div class="pb-sched">另有 1 笔定时转账:房东 李四 ¥3,000(10-16 09:00 到期),到期后仅转为待确认,不会自动扣款</div>
+      <div class="pb-note">${I.lockSm}动钱等你亲自确认——需输入支付密码,此提醒不可关闭</div>
+      <button class="pb-go" data-goto="p5" data-act="passcode"
+        data-pwd-sub="向 <b>张三</b> 转账 <b>¥500.00</b>" data-pwd-next="p4s">去确认(输入支付密码执行) →</button>
+    </div>`;
 
   const homeBar = (dark) => `<div class="home-bar${dark ? ' on-dark' : ''}"><i></i></div>`;
 
@@ -223,7 +242,7 @@
     /* ---------------- P3 对话主界面(空态) ---------------- */
     {
       id: 'p3', no: 'P3', group: '对话核心', title: '对话主界面 · 空态',
-      note: '核心页:汉堡会话抽屉 / 演示快进;问候语 + 横滑建议胶囊;底部输入栏',
+      note: '核心页:汉堡会话抽屉 / 演示快进;问候语 + 横滑建议胶囊;右缘贴边黄色待确认悬浮球(可拖拽,角标 1 笔)',
       html: `
       <div style="display:flex;flex-direction:column;height:100%;background:var(--bg)">
         ${chatHead('AI 银行助手', { left: 'ham', right: demoFastBtn })}
@@ -627,45 +646,25 @@
       </div>`
     },
 
-    /* ---------------- P11 待确认转账页 ---------------- */
+    /* ---------------- P11 待确认转账 · 居中确认卡 ---------------- */
     {
-      id: 'p11', no: 'P11', group: '动钱闸门', title: '待确认转账页(独立页)',
-      note: '定时/待确认单据集中入口;展开即输入支付密码;定时到期只转待确认不自动扣款',
+      id: 'p11', no: 'P11', group: '动钱闸门', title: '待确认转账 · 居中确认卡',
+      note: '悬浮球点按气泡 → 「查看详情」→ 屏幕正中央浅金确认卡;左上「→」收回为悬浮球;定时单到期只转待确认',
       html: `
-      ${chatHead('待确认转账')}
-      <div class="body">
-        <div class="seg">
-          <button class="on">全部 2</button><button>待确认 1</button><button>定时 1</button>
-        </div>
-        <div class="card-gold">
-          <div class="cc-head">
-            <div class="cc-title">${I.cash}张三</div><span class="tag tag-gold">待确认</span>
-          </div>
-          <div class="amount-line"><div class="amount"><small>¥</small>500.00</div></div>
-          <div class="kv"><span class="k">备注</span><span class="v">房租</span></div>
-          <div class="kv"><span class="k">发起时间</span><span class="v">今天 09:41</span></div>
-          <div class="hint gold" style="margin:10px 0 4px">${I.lockSm}输入 6 位支付密码后才会真正扣款</div>
-          ${pwdCells(2)}
-          ${keypad(true)}
-          <div class="hint" style="margin-top:8px">连续输错 4 次锁定转账功能,输对一次即清零计数;对话窗口内错 2 次自动取消。</div>
-        </div>
-        <div class="card">
-          <div class="list-row" style="padding-top:0">
-            <div class="lr-main">
-              <div class="lr-name">房东 李四</div>
-              <div class="lr-meta">房租 · 定时转账</div>
-            </div>
-            <div style="text-align:right">
-              <div class="lr-amount">¥3,000.00</div>
-              <span class="tag tag-blue" style="margin-top:4px">${I.clock}定时 10-16 09:00</span>
-            </div>
+      <div style="display:flex;flex-direction:column;height:100%;background:var(--bg)">
+        ${chatHead('AI 银行助手', { left: 'ham', right: demoFastBtn })}
+        <div class="body">
+          <div class="hero hero-small" style="margin-top:20px"><h2 style="font-size:18px">你好,陈明!</h2><p>我是你的 AI 银行助手。</p></div>
+          <div style="flex:1"></div>
+          <div class="hint" style="justify-content:center;text-align:center;padding:0 10px">
+            悬浮球可拖拽,松手自动吸附屏幕左右边缘;拖到中心附近整球渐变旋转,点按气泡查看待确认转账。
           </div>
         </div>
-        <div class="hint" style="text-align:center;padding:0 8px">
-          定时转账到期后仅转为「待确认」,不会自动扣款;需你亲自输入支付密码。
-        </div>
-      </div>
-      <div class="safe-bottom on-bg"></div>`
+        ${fab()}
+        ${composer()}
+        <div class="mask">${pendingSheet()}</div>
+        ${homeBar()}
+      </div>`
     },
 
     /* ---------------- P12 会话抽屉 ---------------- */
@@ -776,8 +775,9 @@
     ['「确认转账」按钮', 'P4 转账确认流', 'P5 支付密码弹层', 'p4', 'p5'],
     ['密码输满 6 位(正确)', 'P5 支付密码弹层', 'P4-S 转账成功(绿色态)', 'p5', 'p4s'],
     ['密码错误 4 次', 'P5 支付密码弹层', 'P13a 转账功能锁定', 'p5', 'p13a'],
-    ['右下角「去确认」胶囊', 'P3 / P4', 'P11 待确认转账页', 'p3', 'p11'],
-    ['返回箭头', 'P11 待确认转账页', 'P3 对话主界面', 'p11', 'p3'],
+    ['悬浮球点按 → 气泡「查看详情」', 'P3 / P4 对话界面', 'P11 居中确认卡', 'p3', 'p11'],
+    ['居中卡左上「→」箭头', 'P11 居中确认卡', '收回为悬浮球(回 P3)', 'p11', 'p3'],
+    ['「去确认(输入支付密码执行)」', 'P11 居中确认卡', 'P5 支付密码弹层', 'p11', 'p5'],
     ['汉堡按钮', 'P3 对话主界面', 'P12 会话历史抽屉', 'p3', 'p12'],
     ['「确认取消(输支付密码)」', 'P9b 取消代扣确认', 'P5 支付密码弹层', 'p9b', 'p5'],
     ['「现在购买(需支付密码)」', 'P10b 联动到期', 'P5 支付密码弹层', 'p10b', 'p5'],
@@ -793,9 +793,10 @@
     ['支付密码统一是 6 格 + 数字键盘,带剩余次数提示', true],
     ['每页底部输入栏 / 键盘均避开安全区(34px),按钮热区 ≥ 44px', true],
     ['敏感信息全部脱敏:手机号 139****2233、卡号只露尾号', true],
+    ['待确认转账为黄色悬浮球:贴边半球 + 红角标,点按气泡,详情为屏幕居中确认卡(与 webui 实现一致,2026-10-16 同步)', true],
     ['演示数据口径一致:陈明 / 张三 / 腾讯视频 ¥30 / 生日 10-22 / 预算 ¥1,000', true],
     ['交互链接按第四节连完,重点走通:转账流 P3→P4→P5、联动流 P3→P13→P10', true]
   ];
 
-  window.PROTO = { screens: screens, links: links, checklist: checklist, icons: I, composer: composer, fab: fab, homeBar: homeBar, keypad: keypad, pwdCells: pwdCells, sb: sb, nav: nav };
+  window.PROTO = { screens: screens, links: links, checklist: checklist, icons: I, composer: composer, fab: fab, pendingBubble: pendingBubble, pendingSheet: pendingSheet, homeBar: homeBar, keypad: keypad, pwdCells: pwdCells, sb: sb, nav: nav };
 })();

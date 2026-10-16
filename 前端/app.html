@@ -54,7 +54,7 @@
     <div class="flows" id="flows"></div>
 
     <h2 style="margin-top:22px">全部页面(点击直达)</h2>
-    <p>单机演示模式下,支付密码弹层、键盘、列表都是可操作的。</p>
+    <p>单机演示模式下,支付密码弹层、键盘、悬浮球(可拖拽/点按气泡)都是可操作的。</p>
     <div id="railList"></div>
   </aside>
 </main>
@@ -91,6 +91,7 @@
     const s = byId[id];
     if (!s) return;
     closePwd(true);
+    closeBubble();
     phone.innerHTML = s.html;
     const body = phone.querySelector('.body');
     if (body) body.scrollTop = 0;
@@ -202,6 +203,97 @@
     }
   }
 
+  /* ---------------- 待确认转账:悬浮球 / 气泡 / 居中卡 ---------------- */
+  let bubbleOpen = false;
+  let suppressBallClick = false;
+  let ballDrag = null;
+
+  function closeBubble() {
+    const b = phone.querySelector('.pb-bubble');
+    if (b) b.remove();
+    bubbleOpen = false;
+  }
+
+  function toggleBubble() {
+    if (bubbleOpen) { closeBubble(); return; }
+    if (!phone.querySelector('.pball')) return;
+    phone.insertAdjacentHTML('beforeend', P.pendingBubble());
+    bubbleOpen = true;
+  }
+
+  function openPendingSheet() {
+    closeBubble();
+    const m = document.createElement('div');
+    m.className = 'mask';
+    m.id = 'pbMask';
+    m.innerHTML = P.pendingSheet();
+    phone.appendChild(m);
+  }
+
+  function closePendingSheet() {
+    const dyn = phone.querySelector('#pbMask');
+    if (dyn) { dyn.remove(); return; }
+    const sheet = phone.querySelector('.mask .pb-sheet');
+    if (sheet) sheet.closest('.mask').remove();
+  }
+
+  // 悬浮球拖拽(与 webui 同参数:跟手 / 距中心 130px 内渐变 / 松手吸附较近边缘)
+  phone.addEventListener('pointerdown', (e) => {
+    const ball = e.target.closest('.pball');
+    if (ball) {
+      const pr = phone.getBoundingClientRect();
+      const br = ball.getBoundingClientRect();
+      ballDrag = {
+        ball: ball,
+        x0: e.clientX, y0: e.clientY,
+        left: br.left - pr.left, top: br.top - pr.top,
+        moved: false
+      };
+      if (ball.setPointerCapture) { try { ball.setPointerCapture(e.pointerId); } catch (err) {} }
+      closeBubble();
+      ball.classList.add('drag');
+      ball.classList.remove('settle');
+      suppressBallClick = false;
+      return;
+    }
+    // 气泡开着时,点球/气泡以外任何区域收起(capture 语义与 webui 一致)
+    if (bubbleOpen && !e.target.closest('.pb-bubble')) closeBubble();
+  });
+
+  phone.addEventListener('pointermove', (e) => {
+    if (!ballDrag) return;
+    const dx = e.clientX - ballDrag.x0, dy = e.clientY - ballDrag.y0;
+    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) ballDrag.moved = true;
+    const W = 375, H = 812, R = 28;
+    let x = Math.min(Math.max(ballDrag.left + dx, R * 0.4), W - R * 0.4);
+    let y = Math.min(Math.max(ballDrag.top + dy, 88), H - 140);
+    const b = ballDrag.ball;
+    b.style.left = x + 'px';
+    b.style.top = y + 'px';
+    b.style.right = 'auto';
+    b.style.bottom = 'auto';
+    b.classList.toggle('spin', Math.hypot(x + R - W / 2, y + R - H / 2) < 130);
+  });
+
+  function endBallDrag() {
+    if (!ballDrag) return;
+    const b = ballDrag.ball;
+    const moved = ballDrag.moved;
+    ballDrag = null;
+    b.classList.remove('drag');
+    if (!moved) return; // 未拖动 → 让 click 事件走点按弹气泡
+    suppressBallClick = true;
+    const W = 375, R = 28;
+    const x = parseFloat(b.style.left || '341');
+    b.classList.add('settle');
+    b.style.left = (x + R < W / 2 ? -22 : W - 34) + 'px'; // 球心贴边 6px,只露半球
+    b.classList.remove('spin');
+    b.classList.add('landing');
+    setTimeout(() => b.classList.remove('landing'), 450);
+  }
+  phone.addEventListener('pointerup', endBallDrag);
+  phone.addEventListener('pointercancel', endBallDrag);
+
   /* ---------------- 对话输入分流 ---------------- */
   function send() {
     const inp = phone.querySelector('.composer-input');
@@ -241,6 +333,11 @@
     if (!el) return;
     const act = el.dataset.act || '';
     if (act === 'input' || act === 'noop') return;
+    if (el.classList.contains('pball')) {
+      if (suppressBallClick) { suppressBallClick = false; return; }
+      toggleBubble();
+      return;
+    }
     if (act === 'key') { e.stopPropagation(); typeDigit(el.dataset.key); return; }
     if (act === 'del') { e.stopPropagation(); delDigit(); return; }
     if (act.indexOf('goto:') === 0) { nav(act.slice(5)); return; }
@@ -261,6 +358,10 @@
         return;
       case 'ff':
         nav('p13b'); return;
+      case 'pending-sheet':
+        openPendingSheet(); return;
+      case 'pending-close':
+        closePendingSheet(); return;
       case 'ff-jump':
         nav('p3');
         toast('计划已建立:10-20 买鲜花 ¥300、10-21 订生日蛋糕 ¥260,到期我会提醒你', true);
@@ -274,12 +375,15 @@
     if (el.dataset.goto) nav(el.dataset.goto);
   });
 
-  // 键盘输入支付密码(PC 演示方便)
+  // 键盘输入支付密码(PC 演示方便);Esc 依次收起密码/居中卡/气泡
   document.addEventListener('keydown', (e) => {
-    if (!pwdState) return;
-    if (/^[0-9]$/.test(e.key)) typeDigit(e.key);
-    else if (e.key === 'Backspace') delDigit();
-    else if (e.key === 'Escape') closePwd();
+    if (/^[0-9]$/.test(e.key) && pwdState) { typeDigit(e.key); return; }
+    if (e.key === 'Backspace' && pwdState) { delDigit(); return; }
+    if (e.key === 'Escape') {
+      if (pwdState) closePwd();
+      else if (phone.querySelector('#pbMask, .mask .pb-sheet')) closePendingSheet();
+      else closeBubble();
+    }
   });
 
   /* ---------------- 侧栏 ---------------- */
