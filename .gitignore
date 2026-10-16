@@ -34,6 +34,9 @@ logs/
 .playwright-mcp/
 nul
 
+# ===== AI 会话产物(ZCode 每会话生成的计划文件,本地留档不入库) =====
+.zcode/plans/
+
 # ===== 系统 =====
 Thumbs.db
 .DS_Store
