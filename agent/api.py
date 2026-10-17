@@ -171,6 +171,8 @@ async def _transfer_card(order_view: dict, tools: BankTools,
         policy = await tools.call("get_policy")  # [READ] 只读,失败也不拦截发卡
         policy_cache["value"] = policy
     if isinstance(policy, dict) and "error" not in policy:
+        # get_policy 在 MCP 工具层已把 *_cents 键的值转为 "50000元" 形态的
+        # 展示串(mcp_server.get_policy),这里直接透传即可,不要再转一次
         policy_note = (f"单笔限额 {policy.get('single_tx_limit_cents')},"
                        f"当日累计转出限额 {policy.get('daily_out_limit_cents')}")
     else:

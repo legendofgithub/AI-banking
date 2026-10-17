@@ -31,6 +31,8 @@ LLM,静态解析可以让契约检查保持零依赖、毫秒级。代价是:如
 from __future__ import annotations
 
 import re
+
+import pytest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,4 +187,142 @@ def test_announce_nodes_all_exist_in_graph() -> None:
     assert not missing, (
         f"agent/api.py 的 ANNOUNCE_NODES 引用了图中不存在的节点:{sorted(missing)}。"
         f"节点若已改名,请同步 ANNOUNCE_NODES(否则该场景不再播报文本)。"
+    )
+
+
+# ------------------------------------------------- 契约 5:部件载荷字段级冻结
+# 背景(2026-10-17 全字段审计):契约 1-4 只守"部件名",载荷内部字段曾出现
+# "前端读而后端从不发送"的静默断裂(AA 卡 bill_id 一行永不显示)与"后端键名
+# 与前端读取名不一致"(管理台 merchant)。本节把每张卡的字段口径冻结成表:
+# - required:前端 interface 声明、后端也发的键。interface 增删键而不同步
+#   本表(和后端)→ 契约 5 红灯;后端删除/改名其中"特征键"→ 契约 6 红灯。
+# - frontend_only:前端声明但后端当前不发的键(confirm_hint/note 等预留槽,
+#   有渲染兜底)——显式登记,新增未登记的即红灯。
+# 注意:后端发而前端 interface 未声明的键(transfer 卡 status/policy 等)是
+# 良性冗余,不在本表约束范围。
+PART_FIELD_CONTRACT: list[dict] = [
+    {"interface": "TransferCardData", "required": {
+        "amount_yuan", "confirm_hint", "memo", "order_id", "pay_required",
+        "policy_note", "scheduled_at", "to_name"}, "frontend_only": set()},
+    {"interface": "SplitCardData", "required": {
+        "participants", "pay_required", "title", "total_yuan"},
+     "frontend_only": set()},  # bill_id 已删(2026-10-17):建单在闸门之后,永无值
+    {"label_map": "SETTLE_LABELS", "required": {
+        "bill_id", "contact_name", "share_yuan", "title"}, "frontend_only": set()},
+    {"interface": "ContactCandidate", "required": {
+        "name", "note", "phone", "relation"}, "frontend_only": set()},
+    {"interface": "LinkagePlanCardData", "required": {
+        "actions", "budget_yuan", "event", "lock_order", "pay_required",
+        "plan_id", "progress", "status", "title"}, "frontend_only": set()},
+    {"interface": "LinkageActionCardData", "required": {
+        "amount_yuan", "days_before", "idx", "merchant", "pay_required",
+        "plan_id", "plan_title", "run_at", "what"}, "frontend_only": set()},
+    {"interface": "WealthOrder", "required": {
+        "amount_yuan", "code", "est_value_yuan", "fee_yuan",
+        "from_account_name", "lock_days", "product", "redeem_net_yuan",
+        "risk_level"}, "frontend_only": set()},
+    {"interface": "WealthCardData", "required": {"kind", "order", "pay_required"},
+     "frontend_only": {"confirm_hint"}},
+    {"interface": "CardInfoView", "required": {
+        "card_id", "card_type", "current_daily_limit_yuan",
+        "current_per_tx_limit_yuan", "current_status", "kind",
+        "new_daily_limit_yuan", "new_per_tx_limit_yuan", "tail", "target"},
+     "frontend_only": set()},
+    {"interface": "CardConfirmationData", "required": {
+        "card", "kind", "pay_required"}, "frontend_only": {"confirm_hint"}},
+    {"interface": "SubscriptionItem", "required": {
+        "amount_yuan", "annual_yuan", "category", "merchant_name",
+        "next_charge_date", "period_text"}, "frontend_only": {"note"}},
+    {"interface": "SubscriptionListData", "required": {
+        "annual_total_yuan", "hint", "items", "monthly_total_yuan"},
+     "frontend_only": set()},
+    {"interface": "SubscriptionCancelData", "required": {
+        "amount_yuan", "annual_yuan", "category", "merchant_name",
+        "next_charge_date", "pay_required", "period_text"},
+     "frontend_only": {"confirm_hint", "note"}},
+    # ask_slot 为内联类型 {missing?: string[]},无具名 interface,只做后端键守卫
+    {"grep_only": {"missing"}},
+]
+
+
+def _interface_members(name: str, seen: set[str] | None = None) -> set[str]:
+    """解析 bank-parts.tsx 里 interface 的成员名(支持一层 extends 继承)。"""
+    src = _read(BANK_PARTS)
+    m = re.search(
+        rf"interface {name}(?: extends (\w+))?\s*\{{(.*?)\n\}}", src, re.S)
+    assert m, f"bank-parts.tsx 里找不到 interface {name}(被重构/改名?请同步契约 5)"
+    members = {mm.group(1) for mm in re.finditer(r"^\s{2}([A-Za-z_]\w*)\??:", m.group(2), re.M)}
+    base = m.group(1)
+    if base:
+        seen = seen or set()
+        assert base not in seen, f"interface 继承环:{name} -> {base}"
+        seen.add(name)
+        members |= _interface_members(base, seen)
+    return members
+
+
+def _label_map_keys(name: str) -> set[str]:
+    src = _read(BANK_PARTS)
+    m = re.search(rf"const {name}: Record<string, string> = \{{(.*?)\}}", src, re.S)
+    assert m, f"bank-parts.tsx 里找不到标签映射 {name}(请同步契约 5)"
+    # 键不加引号(bill_id: "账单编号"),按行首成员名解析
+    return set(re.findall(r"^\s{2}([A-Za-z_]\w*):", m.group(1), re.M))
+
+
+def _declared_keys(entry: dict) -> set[str]:
+    if "interface" in entry:
+        return _interface_members(entry["interface"])
+    if "label_map" in entry:
+        return _label_map_keys(entry["label_map"])
+    return set()
+
+
+def test_part_field_contract_interfaces_match() -> None:
+    """前端每个部件类型的字段集合,必须与冻结表完全一致。
+
+    前端新增 interface 字段而后端不发的键(= 渲染 undefined 的静默断裂,
+    2026-10-17 的 bill_id 即此类)或删除字段而未同步——都在这里红灯。
+    新增字段请:后端补发 → 键加入 required;或确认为预留槽 → 加入
+    frontend_only(须为可选字段且有渲染兜底)。
+    """
+    for entry in PART_FIELD_CONTRACT:
+        if "grep_only" in entry:
+            continue
+        declared = _declared_keys(entry)
+        expected = entry["required"] | entry["frontend_only"]
+        extra = declared - expected
+        gone = expected - declared
+        where = entry.get("interface") or entry.get("label_map")
+        assert not extra and not gone, (
+            f"{where} 字段与冻结契约不一致:前端多出 {sorted(extra)}"
+            f"(后端不发则为静默断裂,请补后端或登记),缺失 {sorted(gone)}。"
+            f"同步修改 PART_FIELD_CONTRACT 与后端视图。"
+        )
+
+
+# 太通用的键名在源码里到处出现,grep 存在性无意义,跳过(其余键全部守)
+_SKIP_KEY_GREP = {"title", "status", "kind", "hint", "note", "event",
+                  "progress", "order", "card", "items"}
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [e for e in PART_FIELD_CONTRACT
+     if (e.get("required", set()) - _SKIP_KEY_GREP) or e.get("grep_only")],
+    ids=[e.get("interface") or e.get("label_map") or "ask-slot"
+         for e in PART_FIELD_CONTRACT])
+def test_part_field_contract_backend_keys_exist(entry: dict) -> None:
+    """冻结表中每个特征键,后端源码里必须仍能找到同名键字面量。
+
+    后端把 amount_yuan 改名/删除时(前端不知道→渲染 undefined),
+    这里红灯报警。注意:字面量存在≠一定在该部件视图里(同键多视图共用),
+    定位需人工;作为"改名/删除"报警线足够。
+    """
+    backend_src = _read(GRAPH_PY) + _read(API_PY)
+    keys = (entry.get("required", set()) | entry.get("grep_only", set())) - _SKIP_KEY_GREP
+    missing = [k for k in sorted(keys) if f'"{k}"' not in backend_src]
+    where = entry.get("interface") or entry.get("label_map") or "ask-slot"
+    assert not missing, (
+        f"{where} 的冻结键 {missing} 在 agent/graph.py+api.py 里已不存在——"
+        f"疑似后端改名/删除,前端将渲染 undefined。请同步两端并更新契约表。"
     )

@@ -201,12 +201,13 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
         s = _Svcs(uid)
         accounts = s.ledger.list_accounts()
         rows = conn.execute(
-            """SELECT id, to_name, amount_cents, status, created_at FROM transfer_orders
+            """SELECT id, to_name, amount_cents, status, created_at, memo FROM transfer_orders
                WHERE user_id=? AND status IN ('pending_confirm','scheduled')
                ORDER BY id DESC LIMIT 20""", (uid,)).fetchall()
         pending_orders = [{"id": r["id"], "to_name": r["to_name"],
                            "amount_yuan": cents_to_yuan(r["amount_cents"]),
-                           "status": r["status"], "created_at": r["created_at"]}
+                           "status": r["status"], "created_at": r["created_at"],
+                           "memo": r["memo"]}
                           for r in rows]
         holdings = s.wealth.get_holdings()
         due = conn.execute(

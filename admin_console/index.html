@@ -948,7 +948,7 @@ async function loadOrders(){
   $('#ordersBody').innerHTML = (od.orders || []).map(orderRow).join('') || emptyRow(7);
   $('#subsBody').innerHTML = (sd.subscriptions || []).map(s => `
     <tr>
-      <td>${esc(s.merchant_name)}</td>
+      <td>${esc(s.merchant)}</td>
       <td class="num">${money(s.amount_yuan)}</td>
       <td class="num">${esc(s.period_days)}</td>
       <td class="ts">${esc(s.next_charge_date)}</td>
