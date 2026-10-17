@@ -596,7 +596,6 @@ const SETTLE_LABELS: Record<string, string> = {
 };
 
 interface SplitCardData {
-  bill_id?: number;
   participants?: { name?: string; share_yuan?: string }[];
   pay_required?: boolean;
   title?: string;
@@ -612,7 +611,6 @@ function SplitCard({ data }: { data: SplitCardData }) {
           label="总金额"
           value={<span className="text-base">¥{data.total_yuan}</span>}
         />
-        <Row label="账单编号" value={data.bill_id} />
       </div>
       {data.participants?.length ? (
         <div className="mt-2 flex flex-col gap-1">
