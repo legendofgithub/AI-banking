@@ -57,8 +57,11 @@ try {
   console.log("T2 金色确认卡片出现(含支付密码): 通过");
 
   await page.getByRole("button", { exact: true, name: "确认" }).click();
-  // 播报文案由 LLM 生成,措辞不定,用正则兜底
-  await page.waitForSelector("text=/成功|已转|完成/", { timeout: 60_000 });
+  // 播报文案由 LLM 生成,措辞不定,用正则兜底。词表与 mobile 版对齐
+  // (2026-10-20 实测 DeepSeek 用过「已向…转账」句式,窄词表会干等超时)
+  await page.waitForSelector("text=/成功|已转|已执行|完成|已扣|已向/", {
+    timeout: 90_000,
+  });
   await page.screenshot({ fullPage: true, path: shot("t3_转账成功") });
   console.log("T3 确认后扣款成功播报: 通过");
   console.log("E2E ALL PASSED");

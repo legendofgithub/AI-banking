@@ -153,6 +153,31 @@ def register(conn: sqlite3.Connection, *, real_name: str, id_card: str,
             "id_card": id_card, "email": email}
 
 
+def issue_session(conn: sqlite3.Connection, user_id: int) -> dict:
+    """为已验证身份的用户直接签发 7 天会话 token。
+
+    登录(密码校验后)与手机扫码登录(票据校验后)共用;两处只负责
+    "证明是本人",会话的生成/过期/last_login 一律走这里,口径不漂移。
+    """
+    row = conn.execute(
+        """SELECT u.name, a.identifier FROM users u
+           LEFT JOIN auth_users a ON a.user_id=u.id WHERE u.id=?""",
+        (user_id,)).fetchone()
+    if not row:
+        raise AuthError("用户不存在")
+    token = secrets.token_hex(32)
+    now = datetime.now()
+    conn.execute(
+        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
+        (token, user_id, now.isoformat(timespec="seconds"),
+         (now + timedelta(days=SESSION_DAYS)).isoformat(timespec="seconds")))
+    conn.execute("UPDATE auth_users SET last_login_at=? WHERE user_id=?",
+                 (now.isoformat(timespec="seconds"), user_id))
+    conn.commit()
+    return {"token": token, "user_id": user_id, "nickname": row["name"],
+            "identifier": row["identifier"] or ""}
+
+
 def login(conn: sqlite3.Connection, *, identifier: str, password: str) -> dict:
     """登录：校验后发 7 天会话 token。"""
     identifier = (identifier or "").strip()
@@ -162,17 +187,9 @@ def login(conn: sqlite3.Connection, *, identifier: str, password: str) -> dict:
            WHERE a.identifier=?""", (identifier,)).fetchone()
     if not row or not verify_password(password or "", row["password_hash"]):
         raise AuthError("账号或密码不正确")
-    token = secrets.token_hex(32)
-    now = datetime.now()
-    conn.execute(
-        "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)",
-        (token, row["user_id"], now.isoformat(timespec="seconds"),
-         (now + timedelta(days=SESSION_DAYS)).isoformat(timespec="seconds")))
-    conn.execute("UPDATE auth_users SET last_login_at=? WHERE user_id=?",
-                 (now.isoformat(timespec="seconds"), row["user_id"]))
-    conn.commit()
-    return {"token": token, "user_id": row["user_id"], "nickname": row["name"],
-            "identifier": identifier}
+    sess = issue_session(conn, row["user_id"])
+    # identifier 返回用户亲手输入的原样值(保持旧口径,不回查库里账号)
+    return {**sess, "identifier": identifier}
 
 
 def resolve_token(conn: sqlite3.Connection, token: str | None) -> dict | None:
@@ -199,6 +216,6 @@ def logout(conn: sqlite3.Connection, token: str | None) -> None:
 
 
 __all__ = ["AuthError", "classify_identifier", "ensure_demo_auth", "init_auth",
-           "login", "logout", "mask_identifier", "register", "resolve_token",
-           "validate_login_password", "validate_pay_password",
+           "issue_session", "login", "logout", "mask_identifier", "register",
+           "resolve_token", "validate_login_password", "validate_pay_password",
            "verify_pay_password"]

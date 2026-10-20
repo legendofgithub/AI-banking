@@ -97,6 +97,9 @@ cd webui && node e2e-check.mjs
 # 可重复运行,测试收款人固定手机号 13912345678)
 cd webui && node e2e-payee-check.mjs
 
+# 手机扫码登录 e2e(电脑端出码 → 模拟手机 375px 扫码免密登录 → 票据一次性)
+cd webui && node e2e-mobile-login-check.mjs
+
 # 手机端 e2e(375px 视口:登录→转账→支付密码卡→扣款,断言无横向溢出、
 # 收款人弹窗不溢出且搜索可用、悬浮提醒不遮输入区;改动银行卡片/输入区布局后必跑)
 cd webui && node e2e-mobile-check.mjs

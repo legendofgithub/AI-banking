@@ -46,6 +46,12 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
 常用收款人 REST(非 SSE,「我要转账」选择器用;均需 x-bank-token 头):
     GET  /api/contacts          当前登录用户收款人列表;未登录 401
     POST /api/contacts          新建收款人 {name, phone, note};手机号 1 开头 11 位且唯一
+
+手机扫码登录(电脑端已登录 → 手机免密登录同一账号):
+    POST /api/auth/qr-ticket    电脑端签发一次性票据(120s,需 x-bank-token)
+    POST /api/auth/qr-login     手机端凭 {ticket} 换正式会话 token(一次性)
+    GET  /api/lan-info          本机局域网 IP(拼手机可访问的 URL)
+    GET  /api/qr?data=...       本地二维码 PNG 渲染(不出网)
 ────────────────────────────────────────────────────────────────────────────
 
 会话驱动约定(与 agent/graph.py 的图契约一致):
@@ -59,7 +65,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import sqlite3
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -67,7 +75,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 from pydantic import BaseModel, Field
@@ -147,6 +155,11 @@ class ContactIn(BaseModel):
     name: str = ""
     phone: str = ""
     note: str = ""
+
+
+class QrLoginIn(BaseModel):
+    """手机扫码登录入参:电脑端签发的一次性票据。"""
+    ticket: str = Field(min_length=16, max_length=128)
 
 
 class OrderConfirmIn(BaseModel):
@@ -271,6 +284,10 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         app.state.conn = conn
         app.state.threads = tconn
         app.state.auth_conn = auth_conn
+        # 手机扫码登录的一次性票据(进程内存即可:短时效+一次性,
+        # 重启丢票据的代价只是电脑端重新点一次"手机端登录")
+        app.state.qr_tickets = {}
+        app.state.qr_ttl = float(os.environ.get("AGENT_QR_TICKET_TTL", "120"))
         app.state.graph = build_agent_graph(model, tools, saver)
         app.state.model_desc = getattr(model, "model_name", None) \
             or getattr(model, "model", None) or type(model).__name__
@@ -407,6 +424,85 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         if not me:
             raise HTTPException(status_code=401, detail="未登录或会话过期")
         return me
+
+    # ------------------------------------------------ 手机扫码登录(电脑端已登录 → 手机免密登录)
+    @app.post("/api/auth/qr-ticket")
+    async def auth_qr_ticket(
+            x_bank_token: str | None = Header(default=None)):
+        """电脑端(已登录)签发一次性扫码票据,嵌入二维码 URL。
+
+        票据 = 随机 24 字节 urlsafe,默认 120 秒有效、用一次即焚;
+        只发给持有有效会话的请求(手机扫的是登录者本人屏幕上的码)。
+        存进程内存:重启最多让电脑端重新点一次按钮,不引入新表。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先在电脑端登录,再生成手机登录二维码"})
+        now = time.time()
+        tickets = app.state.qr_tickets
+        for key in [k for k, v in tickets.items() if v["expires"] <= now]:
+            tickets.pop(key, None)
+        ticket = secrets.token_urlsafe(24)
+        tickets[ticket] = {"user_id": me["user_id"],
+                           "expires": now + app.state.qr_ttl}
+        return {"ticket": ticket, "expires_in": int(app.state.qr_ttl)}
+
+    @app.post("/api/auth/qr-login")
+    async def auth_qr_login(req: QrLoginIn):
+        """手机端扫二维码后的免密登录:票据换正式 7 天会话 token。
+
+        票据一次性(pop 即焚):同一张码扫第二次直接拒绝;过期同样拒绝。
+        换到的会话与密码登录完全同权(动钱仍要支付密码闸门)。
+        """
+        entry = app.state.qr_tickets.pop(req.ticket, None)
+        if not entry or entry["expires"] <= time.time():
+            return JSONResponse(
+                status_code=400,
+                content={"error": "二维码已过期或已被使用,请在电脑端刷新后重扫"})
+        try:
+            sess = auth_mod.issue_session(app.state.auth_conn,
+                                          entry["user_id"])
+        except auth_mod.AuthError as e:
+            return JSONResponse(status_code=400, content={"error": str(e)})
+        return {"token": sess["token"], "user_id": sess["user_id"],
+                "nickname": sess["nickname"],
+                "identifier": auth_mod.mask_identifier(sess["identifier"])}
+
+    @app.get("/api/lan-info")
+    async def lan_info() -> dict:
+        """本机局域网 IP(前端拼手机可访问的扫码 URL 用)。
+
+        UDP connect 只让路由层选出口网卡,不真正发包;取不到就退回
+        127.0.0.1(此时二维码只能在同一台机器上打开,演示现场应保证有局域网)。
+        """
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            host = s.getsockname()[0]
+        except OSError:
+            host = "127.0.0.1"
+        finally:
+            s.close()
+        return {"host": host}
+
+    @app.get("/api/qr")
+    async def qr_png(data: str = ""):
+        """本地二维码 PNG 渲染(前端 <img> 直接引用;离线可用,不出网)。
+
+        data 由调用方(电脑端页面)拼好,通常是 /qr-login?ticket=... 的完整 URL。
+        """
+        data = (data or "").strip()[:512]
+        if not data:
+            return JSONResponse(status_code=400, content={"error": "缺少 data 参数"})
+        import io
+
+        import qrcode
+        img = qrcode.make(data)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
 
     # ------------------------------------------------ 常用收款人(转账选择器)
     @app.get("/api/contacts")
