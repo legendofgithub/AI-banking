@@ -112,7 +112,7 @@ ROUTER_SYS = """你是银行智能助手的意图分类器。只输出一个 JSO
 - 看账单/消费统计/分类占比/月报/收支总结/异常可疑交易 → bill_analysis
 - 理财/产品/申购/赎回/持仓/风险测评 → wealth
 - 卡片/银行卡/挂失/锁卡/解锁/限额/办卡 → card
-- 订阅/会员/自动扣费/代扣/续费/退订(查订阅花销、取消会员自动扣费) → subscription
+- 订阅/会员/自动扣费/代扣/续费/退订/订阅预审/即将扣费(查订阅花销、取消会员自动扣费、处理即将扣款) → subscription
 - 其他(问候、闲聊) → chat"""
 
 EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对话】,输出完整转账槽位 JSON,不要任何多余文字:
@@ -202,16 +202,20 @@ CARD_EXTRACT_SYS = """你是卡片业务抽取器。结合【已有槽位】与�
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
 
 REPORT_SYS = """你是银行助手播报员。严格依据【事实】用 1-3 句中文向用户播报结果。
-禁止编造、修改、推算任何数字与状态;事实里有错误或拦截原因就如实转述;事实里没有的信息不要补充。"""
+禁止编造、修改、推算任何数字与状态;事实里有错误或拦截原因就如实转述;事实里没有的信息不要补充。
+动钱完成的播报(转账执行/联动扣款)必须报出订单号(事实里 order.id),让用户可随时查凭证。"""
 
 SUB_EXTRACT_SYS = """你是订阅/代扣业务抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
-{"action": "list|cancel|null", "merchant": "商户/会员名称|null"}
+{"action": "list|cancel|precheck|allow|skip|null", "merchant": "商户/会员名称|null"}
 
 规则:
 - 看订阅/查订阅/订阅花了多少钱/有哪些会员/自动扣费清单/周期扣费/年化成本 → list
 - 取消/退订/关闭/停止/不要 某个会员或自动扣费 → cancel,merchant 尽量取全商户名
   (如"腾讯视频VIP";用户只说了"腾讯视频"也原样填,系统去库里模糊匹配);
 - 用户点订阅卡片「取消代扣」按钮发出的「取消XX的自动扣费」→ cancel,merchant=XX;
+- 订阅预审/代扣预审/即将扣费/未来几天要扣什么/查看将扣款 → precheck;
+- 放行/同意/确认某个订阅的本期扣费(点预审卡「放行本期」按钮)→ allow,merchant=XX;
+- 跳过/这期不扣/缓一期某个订阅(点预审卡「跳过本期」按钮)→ skip,merchant=XX;
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
 
 CHAT_SYS = """你是"练功假银行"的智能助手(大赛演示沙箱)。当前版本(M2)支持:
@@ -226,6 +230,8 @@ CHAT_SYS = """你是"练功假银行"的智能助手(大赛演示沙箱)。当�
 
 _FALLBACK_TEXT = {
     "executed": "转账已完成。",
+    "sub_precheck": "已列出即将扣费的订阅,请在卡片上选择放行、跳过或解约。",
+    "sub_precheck_done": "预审决策已记录。",
     "cancelled": "转账已取消,资金未变动。",
     "scheduled_created": "定时转账单已建立,到期后会提醒你确认,确认前不会扣款。",
     "blocked": "这笔转账被风控拦截了。",
@@ -307,7 +313,14 @@ def _wealth_idempotency_key(*, kind: str, thread_id: str, turn_text: str,
 
 
 def _fallback_announcement(notice: dict | None) -> str:
-    return _FALLBACK_TEXT.get(str((notice or {}).get("kind")), "处理完成。")
+    n = notice or {}
+    kind = str(n.get("kind"))
+    if kind == "executed":
+        # 播报即凭证:兜底文案(确定性)也必须带单号,不依赖 LLM 自觉
+        oid = (n.get("order") or {}).get("id")
+        if oid:
+            return f"转账已完成(订单号 {oid})。"
+    return _FALLBACK_TEXT.get(kind, "处理完成。")
 
 
 # ===================================================================== 确定性工具函数(不走 LLM)
@@ -938,8 +951,8 @@ def _card_view_of(c: dict) -> dict:
 
 def _sub_slot_question(missing: list[str]) -> str:
     if "merchant" in missing:
-        return "想取消哪个商户的自动扣费?请回复商户名(如:腾讯视频VIP),或说「查我的订阅」看清单。"
-    return "想查看订阅清单,还是取消某个自动扣费?"
+        return "想操作哪个商户的订阅?请回复商户名(如:腾讯视频VIP),或说「查我的订阅」看清单。"
+    return "想查看订阅清单、处理即将扣费(订阅预审),还是取消某个自动扣费?"
 
 
 def _sub_confirm_question(s: dict) -> str:
@@ -2343,9 +2356,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             draft.pop("sub_id", None)   # 换动作清上一动作的定位
         missing: list[str] = []
         action = draft.get("action")
-        if action not in ("list", "cancel"):
+        if action not in ("list", "cancel", "precheck", "allow", "skip"):
             missing.append("action")
-        if action == "cancel" and not draft.get("merchant"):
+        if action in ("cancel", "allow", "skip") and not draft.get("merchant"):
             missing.append("merchant")
         return {"sub": draft, "sub_missing": missing}
 
@@ -2374,6 +2387,34 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         return {"bank_calls": calls, "sub_view": view,
                 "notice": {"kind": "sub_list", "n": len(items),
                            "annual_total_yuan": view["annual_total_yuan"]}}
+
+    async def s_precheck(state: AgentState) -> dict:
+        """代扣预审(事前知情):列出未来 N 天将发生的周期扣费(滚动修正+涨价
+        对照),交用户决策——放行/跳过/解约由前端预审卡按钮回话驱动。"""
+        calls: list[dict] = []
+        res = await tools.call("list_upcoming_precharges", within_days=3)
+        calls.append(_jr("list_upcoming_precharges", {"within_days": 3}, res))
+        if _has_error(res) or not isinstance(res, list):
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error",
+                               "where": "list_upcoming_precharges",
+                               "error": _has_error(res) or "预审查询失败"}}
+        items = [{
+            "sub_id": int(r["sub_id"]),
+            "merchant_name": r.get("merchant"),
+            "category": r.get("category") or "订阅",
+            "amount_yuan": r.get("amount_yuan"),
+            "base_amount_yuan": r.get("base_amount_yuan"),
+            "price_note": r.get("price_note") or "",
+            "next_charge_date": r.get("next_charge_date"),
+            "days_left": int(r.get("days_left") or 0),
+            "period_text": _period_text(int(r.get("period_days") or 30)),
+        } for r in res if not _has_error(r)]
+        view = {"items": items,
+                "hint": "即将发生的周期扣费;每项可放行本期、跳过本期(顺延一个周期)"
+                        "或解约代扣(需支付密码)"}
+        return {"bank_calls": calls, "precheck_view": view,
+                "notice": {"kind": "sub_precheck", "n": len(items)}}
 
     async def s_pick(state: AgentState) -> dict:
         """按商户名定位要取消的订阅:精确 > 唯一包含;定位不到走播报收尾。"""
@@ -2430,6 +2471,31 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                 "notice": {"kind": "sub_cancelled",
                            "merchant": v.get("merchant_name"),
                            "annual_yuan": v.get("annual_yuan")}}
+
+    async def s_decide(state: AgentState) -> dict:
+        """预审决策执行:allow/skip 落库(LOW,不动钱,审计+change_log);
+        解约不在此列——走 s_gate 支付密码闸门(s_pick 按 action 分流)。"""
+        draft = state.get("sub") or {}
+        sub_id = draft.get("sub_id")
+        if sub_id is None:
+            return {"notice": {"kind": "sub_not_found"}}
+        action = "allow" if draft.get("action") == "allow" else "skip"
+        res = await tools.call("decide_precharge", subscription_id=int(sub_id),
+                               decision=action)
+        calls = [_jr("decide_precharge",
+                     {"subscription_id": sub_id, "decision": action}, res)]
+        err = _has_error(res)
+        if err:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "decide_precharge",
+                               "error": err}}
+        v = draft.get("sub") or {}
+        return {"bank_calls": calls,
+                "notice": {"kind": "sub_precheck_done",
+                           "merchant": v.get("merchant_name") or res.get("merchant"),
+                           "decision": action,
+                           "charge_date": res.get("charge_date"),
+                           "note": res.get("note")}}
 
     async def s_report(state: AgentState) -> dict:
         return await _announce(state)
@@ -2678,15 +2744,23 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     def after_s_extract(state: AgentState) -> str:
         if state.get("sub_missing"):
             return "s_clarify"
-        return ("s_list" if (state.get("sub") or {}).get("action") == "list"
-                else "s_pick")
+        action = (state.get("sub") or {}).get("action")
+        if action == "list":
+            return "s_list"
+        if action == "precheck":
+            return "s_precheck"
+        return "s_pick"
 
     def after_s_clarify(state: AgentState) -> str:
         return "s_report" if state.get("notice") else "s_extract"
 
     def after_s_pick(state: AgentState) -> str:
-        # 没定位到商户(notice 已设)→ 直接播报;定位到 → 进支付密码闸门
-        return "s_report" if state.get("notice") else "s_gate"
+        # 没定位到商户(notice 已设)→ 直接播报;
+        # cancel → 支付密码闸门;allow/skip(预审决策)→ s_decide 直接落库
+        if state.get("notice"):
+            return "s_report"
+        action = (state.get("sub") or {}).get("action")
+        return "s_decide" if action in ("allow", "skip") else "s_gate"
 
     def after_s_gate(state: AgentState) -> str:
         decision = state.get("decision")
@@ -2729,9 +2803,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                      ("k_gate", k_gate), ("k_lost_gate", k_lost_gate),
                      ("k_exec", k_exec), ("k_report", k_report),
                      ("s_extract", s_extract), ("s_clarify", s_clarify),
-                     ("s_list", s_list), ("s_pick", s_pick),
+                     ("s_list", s_list), ("s_precheck", s_precheck),
+                     ("s_pick", s_pick),
                      ("s_gate", s_gate), ("s_exec", s_exec),
-                     ("s_report", s_report),
+                     ("s_decide", s_decide), ("s_report", s_report),
                      ("auth_guard", auth_guard), ("chat", chat)]:
         g.add_node(name, fn)
 
@@ -2828,14 +2903,17 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     g.add_edge("k_report", END)
     # ---- 订阅/代扣 ----
     g.add_conditional_edges("s_extract", after_s_extract,
-                            ["s_clarify", "s_list", "s_pick"])
+                            ["s_clarify", "s_list", "s_pick", "s_precheck"])
     g.add_conditional_edges("s_clarify", after_s_clarify,
                             ["s_extract", "s_report"])
     g.add_edge("s_list", "s_report")
-    g.add_conditional_edges("s_pick", after_s_pick, ["s_report", "s_gate"])
+    g.add_edge("s_precheck", "s_report")
+    g.add_conditional_edges("s_pick", after_s_pick,
+                            ["s_report", "s_gate", "s_decide"])
     g.add_conditional_edges("s_gate", after_s_gate,
                             ["s_exec", "s_report", "s_gate"])
     g.add_edge("s_exec", "s_report")
+    g.add_edge("s_decide", "s_report")
     g.add_edge("s_report", END)
     g.add_edge("auth_guard", "t_report")
     g.add_edge("chat", END)

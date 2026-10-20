@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     amount_cents    INTEGER NOT NULL,
     period_days     INTEGER NOT NULL,
     next_charge_date TEXT NOT NULL,
+    precheck_ack_date TEXT NOT NULL DEFAULT '',  -- 代扣预审:已放行/跳过的周期(YYYY-MM-DD)
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'cancelled')),
     last_tx_id      INTEGER REFERENCES transactions(id),
@@ -288,6 +289,12 @@ def init_db(db_path: str | os.PathLike | None = None) -> sqlite3.Connection:
     conn = connect(db_path)
     conn.executescript(SCHEMA)
     migrate_users_kyc(conn)
+    # 订阅预审列(2026-10-20):CREATE TABLE IF NOT EXISTS 不改已存在的表,
+    # 这里统一补列(服务层 _ensure_precheck_col 兜底不走 init_db 的路径)
+    subs_cols = {r[1] for r in conn.execute("PRAGMA table_info(subscriptions)")}
+    if subs_cols and "precheck_ack_date" not in subs_cols:
+        conn.execute("ALTER TABLE subscriptions ADD COLUMN "
+                     "precheck_ack_date TEXT NOT NULL DEFAULT ''")
     conn.commit()
     return conn
 
