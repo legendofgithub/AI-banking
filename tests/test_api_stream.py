@@ -318,6 +318,82 @@ def test_contacts_api_list_create_and_validation(tmp_path):
         assert r.status_code == 401
 
 
+# ----------------------------------------------------------------- 手机扫码登录
+
+def test_qr_login_roundtrip_and_one_time(tmp_path):
+    """扫码登录主链路:电脑端签票据 → 手机端换正式会话;票据一次性。"""
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    with client:
+        headers = {"x-bank-token": tok}
+        # 未登录不可签发票据(码只能来自登录者本人的屏幕)
+        r = client.post("/api/auth/qr-ticket")
+        assert r.status_code == 401
+        assert "电脑端登录" in r.json()["error"]
+
+        r = client.post("/api/auth/qr-ticket", headers=headers)
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["ticket"]) >= 16
+        assert body["expires_in"] == 120
+
+        # 手机端:票据换正式 token,与密码登录同权(/api/auth/me 可用)
+        r = client.post("/api/auth/qr-login",
+                        json={"ticket": body["ticket"]})
+        assert r.status_code == 200
+        sess = r.json()
+        assert sess["nickname"] == "测试用户"
+        r = client.get("/api/auth/me",
+                       headers={"x-bank-token": sess["token"]})
+        assert r.status_code == 200
+        assert r.json()["user_id"] == sess["user_id"]
+
+        # 同一票据第二次:已用过即焚
+        r = client.post("/api/auth/qr-login",
+                        json={"ticket": body["ticket"]})
+        assert r.status_code == 400
+        assert "已过期或已被使用" in r.json()["error"]
+
+        # 乱码票据:同样 400
+        r = client.post("/api/auth/qr-login",
+                        json={"ticket": "x" * 32})
+        assert r.status_code == 400
+
+
+def test_qr_ticket_expiry(tmp_path, monkeypatch):
+    """票据过期路径:TTL=0 时签出的票据即刻失效,手机端兑换被拒。"""
+    monkeypatch.setenv("AGENT_QR_TICKET_TTL", "0")
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    with client:
+        r = client.post("/api/auth/qr-ticket",
+                        headers={"x-bank-token": tok})
+        assert r.status_code == 200
+        r = client.post("/api/auth/qr-login",
+                        json={"ticket": r.json()["ticket"]})
+        assert r.status_code == 400
+        assert "已过期" in r.json()["error"]
+
+
+def test_qr_render_and_lan_info(tmp_path):
+    """二维码本地渲染出 PNG;lan-info 返回本机 IP 口径。"""
+    import re as _re
+    client, _db, _tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    with client:
+        r = client.get("/api/qr", params={
+            "data": "http://192.168.1.5:3000/qr-login?ticket=abc123"})
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/png")
+        assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+        # 缺 data 参数拒绝
+        r = client.get("/api/qr")
+        assert r.status_code == 400
+
+        r = client.get("/api/lan-info")
+        assert r.status_code == 200
+        assert _re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}",
+                             r.json()["host"]), r.json()
+
+
 # ----------------------------------------------------------------- BYOK / 模型切换
 
 def test_chat_request_accepts_byok_fields(tmp_path):
