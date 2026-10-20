@@ -1,64 +1,15 @@
 "use client";
 
-import { LogOutIcon, PanelLeftIcon, UserIcon } from "lucide-react";
-import Link from "next/link";
-import { memo, useCallback, useState } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { useSidebar } from "@/components/ui/sidebar";
-import { useBankAuth } from "@/hooks/use-bank-auth";
-import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
-
 /*
- * 右上角登录入口:未登录显示金色描边「登录」按钮(→ /login);
- * 已登录显示昵称胶囊,下拉菜单可登出(撤销会话 + 清本地 + 回首页)。
+ * 顶栏只留侧栏开关与会话可见性。登录/登出入口 2026-10-20 起收编到
+ * 左下角「设置」弹窗(components/chat/sidebar-settings.tsx)。
  */
-function AuthMenu() {
-  const { user, logout } = useBankAuth();
-  const [open, setOpen] = useState(false);
-  const handleLogout = useCallback(async () => {
-    setOpen(false);
-    await logout();
-  }, [logout]);
 
-  if (!user) {
-    return (
-      <Button
-        asChild
-        className="ml-auto rounded-lg border border-amber-500/60 bg-amber-500/10 px-4 text-amber-600 transition hover:bg-amber-500/20 hover:text-amber-500 dark:text-amber-300 dark:hover:text-amber-200"
-        size="sm"
-        variant="ghost"
-      >
-        <Link href="/login">登录</Link>
-      </Button>
-    );
-  }
-
-  return (
-    <div className="ml-auto">
-      <DropdownMenu onOpenChange={setOpen} open={open}>
-        <DropdownMenuTrigger
-          className="inline-flex h-8 items-center gap-1.5 rounded-full border border-amber-500/50 bg-amber-500/10 px-3 text-[13px] font-medium text-amber-600 transition hover:bg-amber-500/20 dark:text-amber-300"
-          data-testid="user-pill"
-        >
-          <UserIcon className="size-3.5" />
-          <span className="max-w-32 truncate">{user.nickname || "已登录"}</span>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-40">
-          <DropdownMenuItem onClick={handleLogout}>
-            <LogOutIcon className="size-4" />
-            登出
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-}
+import { PanelLeftIcon } from "lucide-react";
+import { memo } from "react";
+import { Button } from "@/components/ui/button";
+import { useSidebar } from "@/components/ui/sidebar";
+import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
 
 function PureChatHeader({
   chatId,
@@ -92,8 +43,6 @@ function PureChatHeader({
           selectedVisibilityType={selectedVisibilityType}
         />
       )}
-
-      <AuthMenu />
     </header>
   );
 }

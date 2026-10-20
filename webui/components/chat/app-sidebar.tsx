@@ -17,7 +17,7 @@ import {
   getChatHistoryPaginationKey,
   SidebarHistory,
 } from "@/components/chat/sidebar-history";
-import { SidebarUserNav } from "@/components/chat/sidebar-user-nav";
+import { SidebarSettings } from "@/components/chat/sidebar-settings";
 import {
   Sidebar,
   SidebarContent,
@@ -149,7 +149,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
           <SidebarHistory user={user} />
         </SidebarContent>
         <SidebarFooter className="border-t border-sidebar-border pt-2 pb-3">
-          {user ? <SidebarUserNav user={user} /> : null}
+          {user ? <SidebarSettings /> : null}
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
