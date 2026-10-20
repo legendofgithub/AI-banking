@@ -100,6 +100,19 @@ try {
       `T1a: 搜索框/「+」位置异常 search=${JSON.stringify(searchBox)} add=${JSON.stringify(addBox)}`
     );
   }
+  const settingsBtn = page.locator('[data-testid="settings-button"]');
+  await settingsBtn.waitFor({ timeout: 10_000 });
+  const settingsBefore = await settingsBtn.boundingBox();
+  const dialogBottom = sessionBox.y + sessionBox.height;
+  if (
+    !settingsBefore ||
+    settingsBefore.y < sessionBox.y ||
+    settingsBefore.y + settingsBefore.height > dialogBottom + 1
+  ) {
+    throw new Error(
+      `T1a: 设置没有吸底可见 settings=${JSON.stringify(settingsBefore)} dialogBottom=${dialogBottom}`
+    );
+  }
   const scrollStats = await sessionScroller.evaluate((el) => ({
     client: el.clientHeight,
     scroll: el.scrollHeight,
@@ -119,13 +132,19 @@ try {
       `T1a: 滚到底没有继续加载会话 (${countBefore} -> ${countAfter})`
     );
   }
+  const settingsAfter = await settingsBtn.boundingBox();
+  if (!settingsAfter || Math.abs(settingsAfter.y - settingsBefore.y) > 2) {
+    throw new Error(
+      `T1a: 设置随列表滚走了 before=${settingsBefore.y} after=${settingsAfter?.y}`
+    );
+  }
   await noHorizontalOverflow("T1a 会话弹窗");
   await page.screenshot({ path: shot("mobile-t1a_会话总览弹窗") });
   // 点弹窗外的空白(遮罩)关闭
   await page.mouse.click(6, 6);
   await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
   console.log(
-    `T1a 会话总览弹窗(居中 ${Math.round(sessionBox.width)}x${Math.round(sessionBox.height)},滚动加载 ${countBefore}->${countAfter},点空白关闭): 通过`
+    `T1a 会话总览弹窗(居中 ${Math.round(sessionBox.width)}x${Math.round(sessionBox.height)},设置吸底固定,滚动加载 ${countBefore}->${countAfter},点空白关闭): 通过`
   );
 
   // ---- T1a2 「+」新建会话:强制先命名(≤10 字)→ 标题/正文都能搜到 ----
