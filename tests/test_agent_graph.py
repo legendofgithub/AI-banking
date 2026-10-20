@@ -223,6 +223,8 @@ def test_transfer_gate_then_confirm(tmp_path):
 
             r2 = await graph.ainvoke(Command(resume="888888"), cfg)
             assert "已向张三" in _ai_text(r2)
+            # 办结追问:模型漏问时由确定性兜底补上
+            assert "还需要给其他人转账吗?" in _ai_text(r2)
             # 恰好扣 500 元 = 50000 分
             assert _balance(db) == DEFAULT_BALANCE - 50_000
             order = _order(db, order_id)
@@ -1390,6 +1392,7 @@ def test_subscription_cancel_gate_then_execute(tmp_path):
             # 对密码:取消落库 + 播报
             r3 = await graph.ainvoke(Command(resume="888888"), cfg)
             assert "取消" in _ai_text(r3)
+            assert "还需要取消其他订阅吗?" in _ai_text(r3)
             assert _sub_status(db, 1) == "cancelled"
             # 已取消的不再被匹配:再取消同名 → not_found 收尾
             r4 = await graph.ainvoke(
