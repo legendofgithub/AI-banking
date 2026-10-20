@@ -19,11 +19,14 @@ const PureChatItem = ({
   isActive,
   onDelete,
   setOpenMobile,
+  snippet,
 }: {
   chat: Chat;
   isActive: boolean;
   onDelete: (chatId: string) => void;
   setOpenMobile: (open: boolean) => void;
+  /** 内容搜索命中片段(手机端会话总览搜索时展示) */
+  snippet?: string;
 }) => {
   const closeMobile = useCallback(() => {
     setOpenMobile(false);
@@ -37,11 +40,20 @@ const PureChatItem = ({
     <SidebarMenuItem>
       <SidebarMenuButton
         asChild
-        className="h-8 rounded-none text-[13px] text-sidebar-foreground/50 transition-all duration-150 hover:bg-transparent hover:text-sidebar-foreground data-active:bg-transparent data-active:font-normal data-active:text-sidebar-foreground/50 data-[active=true]:text-sidebar-foreground data-[active=true]:font-medium data-[active=true]:border-b data-[active=true]:border-dashed data-[active=true]:border-sidebar-foreground/50"
+        className={`rounded-none text-[13px] text-sidebar-foreground/50 transition-all duration-150 hover:bg-transparent hover:text-sidebar-foreground data-active:bg-transparent data-active:font-normal data-active:text-sidebar-foreground/50 data-[active=true]:text-sidebar-foreground data-[active=true]:font-medium data-[active=true]:border-b data-[active=true]:border-dashed data-[active=true]:border-sidebar-foreground/50 ${
+          snippet ? "h-auto py-1" : "h-8"
+        }`}
         isActive={isActive}
       >
         <Link href={`/chat/${chat.id}`} onClick={closeMobile}>
-          <span className="truncate">{chat.title}</span>
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate">{chat.title}</span>
+            {snippet ? (
+              <span className="truncate text-[10px] leading-tight text-sidebar-foreground/40">
+                {snippet}
+              </span>
+            ) : null}
+          </span>
         </Link>
       </SidebarMenuButton>
 
@@ -68,6 +80,15 @@ const PureChatItem = ({
 };
 
 export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
+  if (prevProps.chat.id !== nextProps.chat.id) {
+    return false;
+  }
+  if (prevProps.chat.title !== nextProps.chat.title) {
+    return false;
+  }
+  if (prevProps.snippet !== nextProps.snippet) {
+    return false;
+  }
   if (prevProps.isActive !== nextProps.isActive) {
     return false;
   }

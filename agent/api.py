@@ -162,6 +162,11 @@ class QrLoginIn(BaseModel):
     ticket: str = Field(min_length=16, max_length=128)
 
 
+class ThreadCreateIn(BaseModel):
+    """新建会话(手机端「+」):先命名,再进入空会话。"""
+    title: str = ""
+
+
 class OrderConfirmIn(BaseModel):
     token: str = Field(min_length=16, max_length=128)
     order_id: int
@@ -184,6 +189,18 @@ def _text_frames(text: str, chunk_size: int = TEXT_CHUNK_SIZE) -> list[str]:
             frames.append(_frame({"type": "text-delta", "id": part_id, "delta": piece}))
     frames.append(_frame({"type": "text-end", "id": part_id}))
     return frames
+
+
+def _snippet(text: str, needle: str, radius: int = 18) -> str:
+    """命中词上下文片段(会话内容搜索的可解释结果),压成单行。"""
+    low = text.lower()
+    pos = low.find(needle.lower())
+    if pos < 0:
+        return ""
+    start = max(0, pos - radius)
+    end = min(len(text), pos + len(needle) + radius)
+    body = text[start:end].replace("\n", " ").strip()
+    return ("…" if start > 0 else "") + body + ("…" if end < len(text) else "")
 
 
 # ----------------------------------------------------------------- 卡片(自定义 data 部件)
@@ -701,18 +718,89 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             return JSONResponse(status_code=400, content={"error": str(e)})
         return {"ok": True, "order_id": req.order_id, "status": done["status"]}
 
+    @app.post("/api/threads")
+    async def create_thread(req: ThreadCreateIn,
+                            x_bank_token: str | None = Header(default=None)):
+        """新建会话(手机端「+」):必须先命名,名称 ≤10 个字。
+
+        只写会话目录一行,不动图状态;进会话后的首条消息只刷新时间,
+        不会用首句覆盖这里的命名(_touch_thread 的 upsert 不更新 title)。
+        """
+        title = " ".join(req.title.split()).strip()
+        if not title:
+            return JSONResponse(status_code=400,
+                                content={"error": "请先给会话起个名字"})
+        if len(title) > 10:
+            return JSONResponse(status_code=400,
+                                content={"error": "会话名称最多 10 个字"})
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        owner = me["user_id"] if me else 0
+        thread_id = str(uuid4())
+        now = _now_iso()
+        await app.state.threads.execute(
+            """INSERT INTO threads (thread_id,title,created_at,updated_at,
+                                   pending_question,user_id)
+               VALUES (?,?,?,?, '',?)""",
+            (thread_id, title, now, now, owner))
+        await app.state.threads.commit()
+        return {"id": thread_id, "title": title, "createdAt": now}
+
     @app.get("/api/threads")
-    async def threads(limit: int = 100, offset: int = 0,
+    async def threads(limit: int = 100, offset: int = 0, q: str = "",
                       x_bank_token: str | None = Header(default=None)) -> dict:
         """会话目录(侧边栏/手机端会话总览):按最后活跃倒序,offset 分页。
 
         带登录 token(x-bank-token 头)只看自己的会话;观光(无 token)看
         观光会话(user_id=0)。hasMore 表示还有下一页,前端滚动到底继续取。
+
+        q 非空时按关键词检索:先匹配标题,再读该会话的 checkpoint 消息全文
+        (含用户与助手所有文本、待答问题),命中返回 snippet 供前端展示。
+        搜索是一次性过滤后分页,数据量=个人会话数(本机演示规模)。
         """
         me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
         owner = me["user_id"] if me else 0
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
+        needle = (q or "").strip()
+        if needle:
+            cur = await app.state.threads.execute(
+                """SELECT thread_id,title,updated_at,pending_question FROM threads
+                   WHERE user_id=? ORDER BY updated_at DESC""",
+                (owner,))
+            rows = await cur.fetchall()
+            low = needle.lower()
+            matched: list[tuple[str, str, str, str]] = []
+            for r in rows:
+                tid, title, updated, pending = r[0], r[1] or "", r[2], r[3] or ""
+                snippet = ""
+                if low not in title.lower():
+                    # 标题未命中才读图状态:命中词可能在任何一轮用户/助手消息里
+                    try:
+                        snap = await app.state.graph.aget_state(
+                            {"configurable": {"thread_id": tid}})
+                        msgs = ((getattr(snap, "values", None) or {})
+                                .get("messages") or [])
+                        for m in msgs:
+                            content = getattr(m, "content", "")
+                            if (isinstance(content, str)
+                                    and low in content.lower()):
+                                snippet = _snippet(content, needle)
+                                break
+                    except Exception:  # noqa: BLE001 —— 单个会话读失败不拖垮搜索
+                        pass
+                    if not snippet and low in pending.lower():
+                        snippet = _snippet(pending, needle)
+                    if not snippet:
+                        continue
+                matched.append((tid, title, updated, snippet))
+            total = len(matched)
+            page = matched[offset:offset + limit]
+            chats = [{"id": tid, "title": title, "createdAt": updated,
+                      "userId": None, "visibility": "private",
+                      "snippet": snippet}
+                     for tid, title, updated, snippet in page]
+            return {"chats": chats, "hasMore": offset + limit < total,
+                    "total": total, "query": needle}
         # 多取一条判断 hasMore,避免额外 COUNT 查询
         cur = await app.state.threads.execute(
             """SELECT thread_id, title, updated_at FROM threads
