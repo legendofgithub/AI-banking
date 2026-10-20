@@ -314,7 +314,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
           </SidebarGroup>
           <SidebarHistory searchQuery={query} user={user} />
         </SidebarContent>
-        <SidebarFooter className="border-t border-sidebar-border pt-2 pb-3">
+        <SidebarFooter className="sticky bottom-0 z-10 border-t border-sidebar-border bg-sidebar pt-2 pb-3 shadow-[0_-8px_18px_-14px_rgba(0,0,0,0.35)]">
           {user ? <SidebarSettings /> : null}
         </SidebarFooter>
         <SidebarRail />
