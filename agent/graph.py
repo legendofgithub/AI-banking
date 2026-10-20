@@ -203,7 +203,11 @@ CARD_EXTRACT_SYS = """你是卡片业务抽取器。结合【已有槽位】与�
 
 REPORT_SYS = """你是银行助手播报员。严格依据【事实】用 1-3 句中文向用户播报结果。
 禁止编造、修改、推算任何数字与状态;事实里有错误或拦截原因就如实转述;事实里没有的信息不要补充。
-动钱完成的播报(转账执行/联动扣款)必须报出订单号(事实里 order.id),让用户可随时查凭证。"""
+动钱完成的播报(转账执行/联动扣款)必须报出订单号(事实里 order.id),让用户可随时查凭证。
+业务办结后,用一句自然的追问收尾,引导继续办同类业务:
+- 转账执行成功 → 问是否还需要给其他人转账;
+- 取消订阅/关闭自动续费成功 → 问是否还需要取消其他订阅。
+查询、被拦截、用户取消、失败等情况不要追问;追问只问一句,不堆叠多个问题。"""
 
 SUB_EXTRACT_SYS = """你是订阅/代扣业务抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
 {"action": "list|cancel|precheck|allow|skip|null", "merchant": "商户/会员名称|null"}
@@ -321,6 +325,26 @@ def _fallback_announcement(notice: dict | None) -> str:
         if oid:
             return f"转账已完成(订单号 {oid})。"
     return _FALLBACK_TEXT.get(kind, "处理完成。")
+
+
+# 业务办结后的追问:引导继续办同类业务(只覆盖明确要问的两类;
+# 提示词已要求模型自然追问,这里再做确定性兜底——模型漏问就补一句)。
+_FOLLOWUP_BY_KIND = {
+    "executed": "还需要给其他人转账吗?",
+    "sub_cancelled": "还需要取消其他订阅吗?",
+}
+# 模型已经自己问过(任意"要不要/还需要"句式)就不再补,避免重复追问
+_FOLLOWUP_MARKERS = ("还需要", "还要", "需不需要", "要不要", "是否还", "再转", "再取消")
+
+
+def _with_followup(text: str, notice: dict | None) -> str:
+    """办结播报补一句追问;非办结类或已含追问时原样返回。"""
+    question = _FOLLOWUP_BY_KIND.get(str((notice or {}).get("kind")))
+    if not text or not question:
+        return text
+    if any(marker in text for marker in _FOLLOWUP_MARKERS):
+        return text
+    return text.rstrip() + " " + question
 
 
 # ===================================================================== 确定性工具函数(不走 LLM)
@@ -2525,6 +2549,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                              "【事实】" + json.dumps(facts, ensure_ascii=False, default=str))
         if not text or not text.strip():
             text = _fallback_announcement(state.get("notice"))
+        text = _with_followup(text, state.get("notice"))
         return {"messages": [AIMessage(content=text)]}
 
     # ---------------------------------------------------------------- 路由函数
