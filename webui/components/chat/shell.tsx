@@ -30,7 +30,6 @@ export function ChatShell() {
     addToolApprovalResponse,
     input,
     setInput,
-    visibilityType,
     isReadonly,
     isLoading,
     votes,
@@ -102,11 +101,7 @@ export function ChatShell() {
             isArtifactVisible ? "w-[40%]" : "w-full"
           )}
         >
-          <ChatHeader
-            chatId={chatId}
-            isReadonly={isReadonly}
-            selectedVisibilityType={visibilityType}
-          />
+          <ChatHeader />
 
           {/* 到期提醒入口(挂载时查一次;横幅文本可一键发给助手处理) */}
           <ReminderBanner />
@@ -143,7 +138,6 @@ export function ChatShell() {
                   onModelChange={setCurrentModelId}
                   onRequestTransfer={openPayeePicker}
                   selectedModelId={currentModelId}
-                  selectedVisibilityType={visibilityType}
                   sendMessage={
                     editingMessage ? handleSendEditedMessage : sendMessage
                   }
@@ -167,7 +161,6 @@ export function ChatShell() {
           messages={messages}
           regenerate={regenerate}
           selectedModelId={currentModelId}
-          selectedVisibilityType={visibilityType}
           sendMessage={sendMessage}
           setAttachments={setAttachments}
           setInput={setInput}

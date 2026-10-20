@@ -1,9 +1,13 @@
 "use client";
 
 /*
- * 顶栏只留侧栏开关、会话可见性、右上角动作区(手机端登录 + 管理台)。
+ * 顶栏只留侧栏开关与右上角动作区(手机端登录 + 管理台)。
  * 登录/登出入口 2026-10-20 起收编到左下角「设置」弹窗
  * (components/chat/sidebar-settings.tsx)。
+ *
+ * 原模板的 Private/Public 可见性开关已移除(2026-10-21):本项目的会话
+ * 历史由 8800 按登录用户隔离,接口固定返回 private,模板那套切换既没有
+ * 真实公开入口、也依赖并不存在的 NextAuth 会话,是纯 UI 假象。
  */
 
 import { PanelLeftIcon, ShieldCheckIcon } from "lucide-react";
@@ -11,7 +15,6 @@ import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
 import { MobileLoginButton } from "./mobile-login-button";
-import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
 
 /* 右上角动作区:手机端登录(扫码,位于后台入口左边) + 管理台。
    均仅 PC 端显示——前者是"电脑演示 → 手机接力"的入口,手机端自己没有
@@ -36,15 +39,7 @@ function HeaderActions() {
   );
 }
 
-function PureChatHeader({
-  chatId,
-  selectedVisibilityType,
-  isReadonly,
-}: {
-  chatId: string;
-  selectedVisibilityType: VisibilityType;
-  isReadonly: boolean;
-}) {
+function PureChatHeader() {
   const { state, toggleSidebar, isMobile } = useSidebar();
 
   if (state === "collapsed" && !isMobile) {
@@ -68,22 +63,9 @@ function PureChatHeader({
         <PanelLeftIcon className="size-4" />
       </Button>
 
-      {!isReadonly && (
-        <VisibilitySelector
-          chatId={chatId}
-          selectedVisibilityType={selectedVisibilityType}
-        />
-      )}
-
       <HeaderActions />
     </header>
   );
 }
 
-export const ChatHeader = memo(
-  PureChatHeader,
-  (prevProps, nextProps) =>
-    prevProps.chatId === nextProps.chatId &&
-    prevProps.selectedVisibilityType === nextProps.selectedVisibilityType &&
-    prevProps.isReadonly === nextProps.isReadonly
-);
+export const ChatHeader = memo(PureChatHeader);

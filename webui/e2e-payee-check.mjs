@@ -43,7 +43,13 @@ try {
     timeout: 30_000,
   });
   await page.waitForTimeout(2000); // 等水合
-  console.log("T1 登录 + 首页建议胶囊: 通过");
+  if ((await page.locator('[data-testid="visibility-selector"]').count()) > 0) {
+    throw new Error("T1: 顶栏仍显示私密/公开切换(模板残留应已移除)");
+  }
+  await page.locator('[data-testid="mobile-login-button"]').waitFor({
+    timeout: 10_000,
+  });
+  console.log("T1 登录 + 首页建议胶囊(PC 顶栏无可见性切换): 通过");
 
   // ---- T2 点「我要转账」自动弹出收款人列表 ----
   await page.getByRole("button", { exact: true, name: "我要转账" }).click();
