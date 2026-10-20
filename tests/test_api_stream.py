@@ -221,6 +221,17 @@ def test_history_and_threads(tmp_path):
         # 倒序:最后活跃的 t-other 在最前
         assert ids[0] == "t-other"
 
+        # offset 分页(手机端会话总览滚动加载):limit=1 时 hasMore=True,
+        # 第二页取到另一条且 hasMore=False,两页合起来覆盖全部会话。
+        r4 = client.get("/api/threads", params={"limit": 1},
+                        headers={"x-bank-token": _tok}).json()
+        assert len(r4["chats"]) == 1 and r4["hasMore"] is True
+        r5 = client.get("/api/threads", params={"limit": 1, "offset": 1},
+                        headers={"x-bank-token": _tok}).json()
+        assert len(r5["chats"]) == 1 and r5["hasMore"] is False
+        assert {r4["chats"][0]["id"], r5["chats"][0]["id"]} == {
+            "t-hist", "t-other"}
+
 
 def test_thread_title_truncation_and_touch(tmp_path):
     """标题取首条用户消息并截断;后续消息只刷新时间不改标题。"""

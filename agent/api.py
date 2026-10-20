@@ -702,24 +702,28 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         return {"ok": True, "order_id": req.order_id, "status": done["status"]}
 
     @app.get("/api/threads")
-    async def threads(limit: int = 100,
+    async def threads(limit: int = 100, offset: int = 0,
                       x_bank_token: str | None = Header(default=None)) -> dict:
-        """会话目录(侧边栏):按最后活跃倒序。
+        """会话目录(侧边栏/手机端会话总览):按最后活跃倒序,offset 分页。
 
         带登录 token(x-bank-token 头)只看自己的会话;观光(无 token)看
-        观光会话(user_id=0)。
+        观光会话(user_id=0)。hasMore 表示还有下一页,前端滚动到底继续取。
         """
         me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
         owner = me["user_id"] if me else 0
         limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+        # 多取一条判断 hasMore,避免额外 COUNT 查询
         cur = await app.state.threads.execute(
             """SELECT thread_id, title, updated_at FROM threads
-               WHERE user_id=? ORDER BY updated_at DESC LIMIT ?""",
-            (owner, limit))
+               WHERE user_id=? ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+            (owner, limit + 1, offset))
         rows = await cur.fetchall()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         chats = [{"id": r[0], "title": r[1], "createdAt": r[2],
                   "userId": None, "visibility": "private"} for r in rows]
-        return {"chats": chats, "hasMore": False}
+        return {"chats": chats, "hasMore": has_more}
 
     @app.post("/api/validate-key")
     async def validate_key(req: ValidateKeyRequest) -> dict:

@@ -55,7 +55,9 @@ function PureChatHeader() {
   return (
     <header className="sticky top-0 flex h-14 items-center gap-2 bg-sidebar px-3">
       <Button
+        aria-label="会话总览"
         className="md:hidden"
+        data-testid="mobile-session-button"
         onClick={toggleSidebar}
         size="icon-sm"
         variant="ghost"

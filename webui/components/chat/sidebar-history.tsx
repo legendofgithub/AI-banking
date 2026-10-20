@@ -85,14 +85,12 @@ export function getChatHistoryPaginationKey(
     return null;
   }
 
-  if (pageIndex === 0) {
-    // 会话目录来自 agent 后端(服务端持久化);接口固定返回 hasMore=false,
-    // 上面那个守卫自然终止分页。登录态由全局 fetcher 带 x-bank-token 头。
-    const agentBase = `${typeof window === "undefined" ? "http://127.0.0.1" : `${window.location.protocol}//${window.location.hostname}`}:${process.env.NEXT_PUBLIC_AGENT_API_PORT ?? "8800"}`;
-    return `${agentBase}/api/threads?limit=${PAGE_SIZE}`;
-  }
-
-  return null;
+  // 会话目录来自 agent 后端(服务端持久化),offset 分页:
+  // 手机端会话总览滚动到底会继续加载,直到接口返回 hasMore=false。
+  // 登录态由全局 fetcher 带 x-bank-token 头。
+  const agentBase = `${typeof window === "undefined" ? "http://127.0.0.1" : `${window.location.protocol}//${window.location.hostname}`}:${process.env.NEXT_PUBLIC_AGENT_API_PORT ?? "8800"}`;
+  const page = Math.max(0, pageIndex);
+  return `${agentBase}/api/threads?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`;
 }
 
 export function SidebarHistory({ user }: { user: User | undefined }) {
