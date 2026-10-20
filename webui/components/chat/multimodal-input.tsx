@@ -57,7 +57,6 @@ import {
   slashCommands,
 } from "./slash-commands";
 import { SuggestedActions } from "./suggested-actions";
-import type { VisibilityType } from "./visibility-selector";
 
 function setCookie(name: string, value: string) {
   const maxAge = 60 * 60 * 24 * 365;
@@ -85,7 +84,6 @@ function PureMultimodalInput({
   setMessages,
   sendMessage,
   className,
-  selectedVisibilityType,
   selectedModelId,
   onModelChange,
   editingMessage,
@@ -106,7 +104,6 @@ function PureMultimodalInput({
     | UseChatHelpers<ChatMessage>["sendMessage"]
     | (() => Promise<void>);
   className?: string;
-  selectedVisibilityType: VisibilityType;
   selectedModelId: string;
   onModelChange?: (modelId: string) => void;
   editingMessage?: ChatMessage | null;
@@ -502,7 +499,6 @@ function PureMultimodalInput({
         uploadQueue.length === 0 && (
           <SuggestedActions
             chatId={chatId}
-            selectedVisibilityType={selectedVisibilityType}
             sendMessage={sendMessage}
           />
         )}
@@ -617,9 +613,6 @@ export const MultimodalInput = memo(
       return false;
     }
     if (!equal(prevProps.attachments, nextProps.attachments)) {
-      return false;
-    }
-    if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
       return false;
     }
     if (prevProps.selectedModelId !== nextProps.selectedModelId) {

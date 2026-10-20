@@ -27,7 +27,6 @@ import { ArtifactCloseButton } from "./artifact-close-button";
 import { LoaderIcon } from "./icons";
 import { Toolbar } from "./toolbar";
 import { VersionFooter } from "./version-footer";
-import type { VisibilityType } from "./visibility-selector";
 
 export const artifactDefinitions = [
   textArtifact,
@@ -67,7 +66,6 @@ function PureArtifact({
   regenerate: _regenerate,
   votes: _votes,
   isReadonly: _isReadonly,
-  selectedVisibilityType: _selectedVisibilityType,
   selectedModelId: _selectedModelId,
 }: {
   addToolApprovalResponse: UseChatHelpers<ChatMessage>["addToolApprovalResponse"];
@@ -84,7 +82,6 @@ function PureArtifact({
   sendMessage: UseChatHelpers<ChatMessage>["sendMessage"];
   regenerate: UseChatHelpers<ChatMessage>["regenerate"];
   isReadonly: boolean;
-  selectedVisibilityType: VisibilityType;
   selectedModelId: string;
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
@@ -484,9 +481,6 @@ export const Artifact = memo(PureArtifact, (prevProps, nextProps) => {
     return false;
   }
   if (prevProps.messages.length !== nextProps.messages.length) {
-    return false;
-  }
-  if (prevProps.selectedVisibilityType !== nextProps.selectedVisibilityType) {
     return false;
   }
 

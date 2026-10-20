@@ -60,6 +60,9 @@ try {
   await page.waitForTimeout(3000); // 等水合
   await page.screenshot({ path: shot("mobile-t1_登录后首页") });
   await noHorizontalOverflow("T1 首页");
+  if ((await page.locator('[data-testid="visibility-selector"]').count()) > 0) {
+    throw new Error("T1: 顶栏仍显示私密/公开切换(模板残留应已移除)");
+  }
   console.log("T1 手机登录 + 首页: 通过");
 
   // ---- T1b 收款人选择器:375px 弹窗不溢出 + 搜索可用 ----

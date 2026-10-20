@@ -26,7 +26,6 @@ import {
 } from "@/components/chat/payee-picker";
 import { getChatHistoryPaginationKey } from "@/components/chat/sidebar-history";
 import { toast } from "@/components/chat/toast";
-import type { VisibilityType } from "@/components/chat/visibility-selector";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { getStoredToken } from "@/hooks/use-bank-auth";
 import {
@@ -50,7 +49,6 @@ type ActiveChatContextValue = {
   addToolApprovalResponse: UseChatHelpers<ChatMessage>["addToolApprovalResponse"];
   input: string;
   setInput: Dispatch<SetStateAction<string>>;
-  visibilityType: VisibilityType;
   isReadonly: boolean;
   isLoading: boolean;
   votes: Vote[] | undefined;
@@ -145,9 +143,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   const initialMessages: ChatMessage[] = isNewChat
     ? []
     : (chatData?.messages ?? []);
-  const visibility: VisibilityType = isNewChat
-    ? "private"
-    : (chatData?.visibility ?? "private");
 
   const {
     messages,
@@ -365,7 +360,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       setMessages,
       status,
       stop,
-      visibilityType: visibility,
       votes,
     }),
     [
@@ -378,7 +372,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       regenerate,
       addToolApprovalResponse,
       input,
-      visibility,
       isReadonly,
       isNewChat,
       isLoading,
