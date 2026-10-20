@@ -89,8 +89,10 @@ try {
   // ---- T3 输支付密码 → 扣款成功 ----
   await page.fill('input[aria-label="支付密码"]', PAY_PASSWORD);
   await page.getByRole("button", { exact: true, name: "确认" }).click();
-  // 播报词由 LLM 生成、时延不定(实测 DeepSeek 偶发超 60s),给足 90s 并放宽词表
-  await page.waitForSelector("text=/成功|已转|已执行|完成|已扣/", {
+  // 播报词由 LLM 生成、时延不定(实测 DeepSeek 偶发超 60s),给足 90s 并放宽词表。
+  // 「已向…转账」是 DeepSeek 实际用过的句式(不含成功/完成),必须覆盖,
+  // 否则扣款成功但断言干等超时(2026-10-20 实测)。
+  await page.waitForSelector("text=/成功|已转|已执行|完成|已扣|已向/", {
     timeout: 90_000,
   });
   await page.screenshot({ path: shot("mobile-t3_转账成功") });
