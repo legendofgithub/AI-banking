@@ -76,7 +76,7 @@ def test_health_and_validation(tmp_path):
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok"
-        assert body["bank_tools"] == 42  # +4 联动 +1 verify_pay_password
+        assert body["bank_tools"] == 44  # +4 联动 +1 verify_pay_password +2 代扣预审(2026-10-20)
         assert "model" in body
 
         # 没有 user 消息 → 400,绝不进入流式
@@ -562,3 +562,73 @@ def test_pay_password_four_strikes_lock(tmp_path):
         r7 = _confirm(client, tok, oids[1], "888888")
         assert r7.status_code == 200
         assert _order(db, oids[1])["status"] == "executed"
+
+
+def test_subscription_precheck_frame(tmp_path):
+    """订阅预审:SSE 应出现 data-subscription-precheck 卡片帧(明天扣费项)。"""
+    from datetime import date, timedelta
+    import sqlite3 as _s
+
+    client, db, tok = _client(tmp_path, [
+        '{"intent": "subscription"}',
+        json.dumps({"action": "precheck", "merchant": None}, ensure_ascii=False),
+        "即将扣费已列出。",
+    ])
+    nxt = (date.today() + timedelta(days=1)).isoformat()
+    ac = _s.connect(db)
+    ac.execute(
+        """INSERT INTO subscriptions
+           (user_id, merchant_name, category, amount_cents, period_days,
+            next_charge_date, status, detected_at)
+           VALUES (1,'明日扣会员','订阅',1500,30,?,'active','2026-09-01T00:00:00')""",
+        (nxt,))
+    ac.commit()
+    ac.close()
+    with client:
+        resp = _post_chat(client, "订阅预审", "sp-frame", tok)
+    card = _find_data(_frames(resp.text), "data-subscription-precheck")
+    assert card and card["data"]["items"], "预审卡帧未下发"
+    assert card["data"]["items"][0]["merchant_name"] == "明日扣会员"
+    assert card["data"]["items"][0]["days_left"] == 1
+
+
+def test_order_receipt_audit_chain(tmp_path):
+    """播报即凭证:执行单的三表审计链可查,未登录 401 / 他人单 404。"""
+    import sqlite3 as _s
+
+    from bank_core.db import connect as _bconnect
+    from bank_core.ledger import LedgerService
+
+    client, db, tok = _client(tmp_path, [])
+    conn = _bconnect(db)
+    svc = LedgerService(conn, user_id=1)
+    acct = svc.list_accounts()[0]["id"]
+    order = svc.create_transfer_order(
+        from_account_id=acct, amount_cents=1234, to_name="张三",
+        memo="凭证测试", idempotency_key="agent-test-receipt-1")
+    svc.confirm_transfer_order(order["id"])
+    conn.close()
+    oid = order["id"]
+
+    with client:
+        resp = client.get(f"/api/orders/{oid}/receipt",
+                          headers={"x-bank-token": tok})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["order"]["order_id"] == oid
+    assert body["order"]["amount_yuan"] == "12.34"
+    assert body["order"]["status"] == "executed"
+    assert body["order"]["executed_at"]
+    assert body["order"]["idempotency_key"] == "agent-test-receipt-1"
+    assert body["transaction"]["external_ref"] == f"order:{oid}"
+    assert body["transaction"]["balance_after_yuan"]
+    led = body["ledger"]
+    assert led and led["ref"] == f"order:{oid}" and led["operator"] == "agent"
+    assert led["before_yuan"] and led["after_yuan"]
+    tools_hit = {a["tool"] for a in body["audit_trail"]}
+    assert {"create_transfer_order", "confirm_transfer_order"} <= tools_hit
+
+    with client:
+        assert client.get(f"/api/orders/{oid}/receipt").status_code == 401
+        assert client.get("/api/orders/99999/receipt",
+                          headers={"x-bank-token": tok}).status_code == 404

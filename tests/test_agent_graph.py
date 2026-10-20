@@ -1409,3 +1409,90 @@ def _sub_status(db: Path, sub_id: int) -> str:
         ).fetchone()[0]
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- 订阅代扣预审(2026-10-20)
+
+def _seed_precheck_sub(db: Path, merchant: str = "明日扣会员",
+                        amount_cents: int = 1500,
+                        next_date: str | None = None) -> int:
+    """种一条 next=明天 的 active 订阅(日期运行时算,不对真实时钟敏感)。"""
+    from datetime import date, timedelta
+    nxt = next_date or (date.today() + timedelta(days=1)).isoformat()
+    conn = sqlite3.connect(db)
+    cur = conn.execute(
+        """INSERT INTO subscriptions
+           (user_id, merchant_name, category, amount_cents, period_days,
+            next_charge_date, status, detected_at)
+           VALUES (1,?, '订阅', ?, 30, ?, 'active', '2026-09-01T00:00:00')""",
+        (merchant, amount_cents, nxt))
+    conn.commit()
+    sid = cur.lastrowid
+    conn.close()
+    return sid
+
+
+def test_subscription_precheck_shows_view(tmp_path):
+    """订阅预审:过期种子滚动后在窗口外,明天扣费的在窗口内,无闸门直发卡。"""
+    from datetime import date, timedelta
+
+    db = _mk_db(tmp_path)
+    _seed_subscriptions(db)          # 老种子(2026-10 初,滚动到月底,窗口外)
+    _seed_precheck_sub(db)           # 明天扣费
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "subscription"}',
+            json.dumps({"action": "precheck", "merchant": None}, ensure_ascii=False),
+            "已列出即将扣费。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "sp1"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("订阅预审,看看即将扣费")]}, cfg)
+            assert not r.get("__interrupt__")  # 只读,不停闸门
+            view = r["precheck_view"]
+            merchants = [i["merchant_name"] for i in view["items"]]
+            assert merchants == ["明日扣会员"]
+            item = view["items"][0]
+            assert item["days_left"] == 1
+            assert item["next_charge_date"] == tomorrow
+            assert item["amount_yuan"] == "15.00"
+            assert r["notice"]["kind"] == "sub_precheck"
+
+    run(scenario())
+
+
+def test_subscription_precheck_allow_executes(tmp_path):
+    """放行本期:LOW 决策无闸门直接落库,ack 记录本期、订阅仍 active。"""
+    from datetime import date, timedelta
+
+    db = _mk_db(tmp_path)
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    sid = _seed_precheck_sub(db, next_date=tomorrow)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "subscription"}',
+            json.dumps({"action": "allow", "merchant": "明日扣会员"},
+                       ensure_ascii=False),
+            "已放行本期。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "sp2"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("放行明日扣会员的本期代扣")]}, cfg)
+            assert not r.get("__interrupt__")  # allow/skip 不设闸门(不动钱)
+            assert r["notice"]["kind"] == "sub_precheck_done"
+            assert r["notice"]["decision"] == "allow"
+            assert r["notice"]["charge_date"] == tomorrow
+            conn = sqlite3.connect(db)
+            row = conn.execute(
+                "SELECT precheck_ack_date, status FROM subscriptions WHERE id=?",
+                (sid,)).fetchone()
+            conn.close()
+            assert row[0] == tomorrow
+            assert row[1] == "active"
+
+    run(scenario())

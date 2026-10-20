@@ -105,23 +105,25 @@ LangGraph 编排层（agent/，已在跑：70 节点 / 10 路由意图 / 9 类�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 161 个用例全绿(2026-10-17)
+.venv/Scripts/python.exe -m pytest tests -q      # 172 个用例全绿(2026-10-20)
 
 tests/test_bank_core.py     23 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
                             AA 对账、挂失不可逆、理财风险闸门(含无测评限购 R1)、
                             申购幂等键、种子确定性、余额=入-出不变量、订阅/异常戏眼、
                             月报勾稽、事件联动
-tests/test_agent_graph.py   26 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅)
-tests/test_api_stream.py    14 个 —— SSE 协议帧、确认卡片、会话目录、悬空单落地页
+tests/test_agent_graph.py   28 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅)
+tests/test_api_stream.py    16 个 —— SSE 协议帧、确认卡片、会话目录、悬空单落地页
 tests/test_auth.py          28 个 —— 实名注册、密码策略、会话与支付密码核验
 tests/test_admin.py         10 个 —— 管理台资金/变更记录、调账、按用户隔离
 tests/test_review_fixes.py   8 个 —— 严格确认语义、犹豫答复绝不执行、幂等重放
 tests/test_linkage.py        9 个 —— 跨场景联动建/到期/取消与时间旅行
 tests/test_e2e_transfer.py   5 个 —— 端到端 A~E(立即/同名/超限/定时/AA)
 tests/test_llm_autoselect.py 5 个 —— 模型自动选型与缓存
-tests/test_contract.py      20 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
+tests/test_contract.py      21 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
                             线协议词表、播报白名单、**部件载荷字段级冻结**——前端
                             interface 与后端键集漂移直接红灯),多人并行的"合同测试"
+tests/test_precheck.py       6 个 —— 代扣预审(事前知情):滚动数学/涨价对照/
+                            ack 抑制/跳过顺延/老库自愈补列
 tests/test_env_template.py  13 个 —— "clone 后只填一个 Key"契约守卫:.gitignore
                             通配拦截所有 .env 变体(git check-ignore 实测)、
                             模板键齐全且默认值可用、setup_env.py 随机密钥/防覆盖

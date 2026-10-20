@@ -55,6 +55,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -422,6 +423,84 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             "scheduled_at": r["scheduled_at"] or "",
         } for r in rows]}
 
+    @app.get("/api/orders/{order_id}/receipt")
+    async def order_receipt(order_id: int,
+                            x_bank_token: str | None = Header(default=None)):
+        """播报即凭证:单笔转账订单的完整审计链(三表拼装,只读)。
+
+        transfer_orders(状态机)→ transactions(external_ref=order:{id})
+        → money_records(ref=order:{id},前后余额快照+operator)
+        + audit_log 调用轨迹(工具/风险级/时间)。覆盖转账全家(立即/定时/
+        联动锁定与到期购买,均为 transfer_orders);理财申赎不在本表范围。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401, content={"error": "未登录或会话过期"})
+        uid = me["user_id"]
+        o = app.state.auth_conn.execute(
+            "SELECT * FROM transfer_orders WHERE id=? AND user_id=?",
+            (order_id, uid)).fetchone()
+        if not o:
+            return JSONResponse(status_code=404, content={"error": "订单不存在"})
+        order = {
+            "order_id": o["id"], "to_name": o["to_name"],
+            "amount_yuan": cents_to_yuan(o["amount_cents"]),
+            "memo": o["memo"] or "", "status": o["status"],
+            "created_at": o["created_at"],
+            "scheduled_at": o["scheduled_at"] or "",
+            "executed_at": o["executed_at"] or "",
+            "idempotency_key": o["idempotency_key"],
+        }
+        tx = app.state.auth_conn.execute(
+            "SELECT ts, direction, amount_cents, balance_after_cents,"
+            " external_ref, tx_type FROM transactions WHERE external_ref=?",
+            (f"order:{order_id}",)).fetchone()
+        transaction = None
+        if tx:
+            transaction = {
+                "ts": tx["ts"], "direction": tx["direction"],
+                "amount_yuan": cents_to_yuan(tx["amount_cents"]),
+                "balance_after_yuan": cents_to_yuan(tx["balance_after_cents"]),
+                "external_ref": tx["external_ref"], "tx_type": tx["tx_type"],
+            }
+        # 资金流水库(与银行库同目录派生):按 ref 反查前后余额与操作方
+        ledger_row = None
+        try:
+            from bank_core.recorder import money_db_path
+
+            mpath = money_db_path(app.state.auth_conn)
+            if mpath.is_file():
+                mconn = sqlite3.connect(f"file:{mpath}?mode=ro", uri=True)
+                mconn.row_factory = sqlite3.Row
+                mrow = mconn.execute(
+                    "SELECT ts, tool, delta_cents, before_cents, after_cents,"
+                    " ref, note, operator FROM money_records WHERE ref=?"
+                    " ORDER BY id DESC LIMIT 1", (f"order:{order_id}",)).fetchone()
+                if mrow:
+                    ledger_row = {
+                        "ts": mrow["ts"], "tool": mrow["tool"],
+                        "delta_yuan": cents_to_yuan(mrow["delta_cents"]),
+                        "before_yuan": cents_to_yuan(mrow["before_cents"]),
+                        "after_yuan": cents_to_yuan(mrow["after_cents"]),
+                        "ref": mrow["ref"], "note": mrow["note"],
+                        "operator": mrow["operator"],
+                    }
+                mconn.close()
+        except Exception:  # noqa: BLE001 —— 流水库缺失不拦凭证主链路
+            ledger_row = None
+        # 审计轨迹:建单/确认/取消的工具调用记录(按单号 JSON 字段模糊匹配)
+        pats = (f'"order_id": {order_id}', f'"id": {order_id}')
+        like_pats = tuple(f"%{p}%" for p in pats)
+        audit_rows = app.state.auth_conn.execute(
+            "SELECT ts, tool, risk FROM audit_log WHERE "
+            "args_json LIKE ? OR result_json LIKE ? "
+            "OR args_json LIKE ? OR result_json LIKE ? ORDER BY id",
+            (*like_pats, *like_pats)).fetchall()
+        return {"order": order, "transaction": transaction,
+                "ledger": ledger_row,
+                "audit_trail": [{"ts": r["ts"], "tool": r["tool"],
+                                 "risk": r["risk"]} for r in audit_rows]}
+
     @app.post("/api/orders/confirm")
     async def order_confirm(req: OrderConfirmIn):
         """页面直连确认(弹窗"去确认"落地页):token 定用户 → 支付密码核验
@@ -556,6 +635,30 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 "plan_id": plan_id,
                 "action_idx": payload.get("action_idx"),
             })
+        # ---- 代扣预审(事前知情):未来 N 天将扣费的订阅主动浮出 ----
+        # 只读不动钱;已放行/跳过的周期由服务端 ack 抑制;失败静默不影响上面
+        try:
+            upcoming = await app.state.bank.call(
+                "list_upcoming_precharges", as_of=as_of, within_days=3)
+            if isinstance(upcoming, list):
+                for r in upcoming:
+                    if not isinstance(r, dict) or r.get("error"):
+                        continue
+                    left = int(r.get("days_left") or 0)
+                    when = "今天" if left == 0 else ("明天" if left == 1
+                                                    else f"{left} 天后")
+                    note = f"({r.get('price_note')})" if r.get("price_note") else ""
+                    out.append({
+                        "kind": "precharge",
+                        "text": (f"(订阅预审) {r.get('merchant')} {when}将扣 "
+                                 f"{r.get('amount_yuan')} 元{note},"
+                                 f"发送「订阅预审」放行 / 跳过 / 解约"),
+                        "sub_id": r.get("sub_id"),
+                        "merchant": r.get("merchant"),
+                        "next_charge_date": r.get("next_charge_date"),
+                    })
+        except Exception:  # noqa: BLE001 —— 预审段失败不影响到期提醒主链路
+            pass
         return {"reminders": out}
 
     def _now_iso() -> str:
@@ -640,6 +743,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                                 # /api/history 的文本播报兜底)
                                 yield _frame({"type": "data-subscription-list",
                                               "data": update["sub_view"]})
+                            elif node == "s_precheck" and isinstance(update, dict) \
+                                    and update.get("precheck_view"):
+                                # 代扣预审卡(事前知情):与订阅清单同款下发模式,
+                                # 决策按钮以普通消息回话,不占 interrupt
+                                yield _frame({"type": "data-subscription-precheck",
+                                              "data": update["precheck_view"]})
             except TimeoutError:
                 yield _frame({"type": "error",
                               "errorText": f"本轮处理超时(>{TURN_DEADLINE_S:.0f}秒),"
