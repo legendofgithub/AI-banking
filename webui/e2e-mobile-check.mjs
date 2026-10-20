@@ -83,6 +83,23 @@ try {
     );
   }
   const sessionScroller = sessionDialog.locator("div.overflow-y-auto").first();
+  // 顶部固定搜索框 + 右侧「+」新建入口
+  const sessionSearch = page.getByRole("textbox", { name: "搜索会话" });
+  const sessionAdd = page.locator('[data-testid="session-new-button"]');
+  await sessionSearch.waitFor({ timeout: 10_000 });
+  await sessionAdd.waitFor({ timeout: 10_000 });
+  const searchBox = await sessionSearch.boundingBox();
+  const addBox = await sessionAdd.boundingBox();
+  if (
+    !searchBox ||
+    !addBox ||
+    addBox.x < searchBox.x + searchBox.width - 2 ||
+    searchBox.y > sessionBox.y + 150
+  ) {
+    throw new Error(
+      `T1a: 搜索框/「+」位置异常 search=${JSON.stringify(searchBox)} add=${JSON.stringify(addBox)}`
+    );
+  }
   const scrollStats = await sessionScroller.evaluate((el) => ({
     client: el.clientHeight,
     scroll: el.scrollHeight,
@@ -111,27 +128,92 @@ try {
     `T1a 会话总览弹窗(居中 ${Math.round(sessionBox.width)}x${Math.round(sessionBox.height)},滚动加载 ${countBefore}->${countAfter},点空白关闭): 通过`
   );
 
-  // ---- T1a2 选择一条会话可进入(有历史时) ----
+  // ---- T1a2 「+」新建会话:强制先命名(≤10 字)→ 标题/正文都能搜到 ----
+  const suffix = String(Date.now()).slice(-6);
+  const sessionName = `搜索${suffix}`; // 8 字
+  const tokenWord = `蓝莓${suffix}`; // 只出现在本条会话正文里
   await sessionBtn.click();
   await sessionDialog.waitFor({ timeout: 10_000 });
-  const historyLink = sessionDialog.locator('a[href^="/chat/"]').first();
-  if ((await historyLink.count()) > 0) {
-    await historyLink.click();
-    await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
-    await page.waitForURL(/\/chat\//, { timeout: 15000 });
-    // 等聊天页完成水合再离开:否则 goto 打断水合并报 React #418(测试节奏问题)
-    await page.waitForTimeout(2000);
-    console.log("T1a2 弹窗内选择会话并进入: 通过");
-    await page.goto(BASE, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector('[data-testid="suggested-actions"]', {
-      timeout: 30_000,
-    });
-    await page.waitForTimeout(1500);
-  } else {
-    await page.mouse.click(6, 6);
-    await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
-    console.log("T1a2 无历史会话,跳过选择进入");
+  await sessionAdd.click();
+  const nameInput = page.locator('[data-testid="session-name-input"]');
+  const createBtn = page.locator('[data-testid="session-create-button"]');
+  await nameInput.waitFor({ timeout: 10_000 });
+  if (!(await createBtn.isDisabled())) {
+    throw new Error("T1a2: 空名称时「创建」应禁用");
   }
+  await nameInput.fill("一二三四五六七八九十甲"); // 11 字应被截到 10
+  const capped = await nameInput.inputValue();
+  if (capped.length !== 10) {
+    throw new Error(`T1a2: 会话名称未限制 10 字(实际 ${capped.length})`);
+  }
+  await nameInput.fill(sessionName);
+  await createBtn.click();
+  await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
+  await page.waitForURL(/\/chat\//, { timeout: 15_000 });
+  await page.waitForSelector("textarea", { timeout: 30_000 });
+  await page.waitForTimeout(1200);
+
+  // 发一条带唯一暗号的消息,供正文搜索验证
+  await page.fill("textarea", `请记住 ${tokenWord} 这个暗号`);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(4000); // 等 checkpoint 落盘(搜索读的是会话消息)
+
+  await sessionBtn.click();
+  await sessionDialog.waitFor({ timeout: 10_000 });
+  const searchInput = page.getByRole("textbox", { name: "搜索会话" });
+  const sessionLink = () =>
+    sessionDialog
+      .locator('a[href^="/chat/"]')
+      .filter({ hasText: sessionName })
+      .first();
+  await searchInput.fill(tokenWord);
+  const resultLabel = sessionDialog
+    .locator('[data-sidebar="group-label"]')
+    .filter({ hasText: "搜索结果" });
+  await resultLabel.waitFor({ timeout: 15_000 });
+  let contentHit = false;
+  let contentRowText = "";
+  for (let i = 0; i < 40; i++) {
+    if ((await sessionLink().count()) > 0) {
+      const text = await sessionLink().innerText();
+      if (text.includes(tokenWord)) {
+        contentHit = true;
+        contentRowText = text;
+        break;
+      }
+    }
+    await page.waitForTimeout(300);
+  }
+  if (!contentHit) {
+    throw new Error(
+      `T1a2: 正文搜索「${tokenWord}」没有找到带命中片段的新会话 (${contentRowText})`
+    );
+  }
+  await searchInput.fill("");
+  await sessionDialog
+    .locator('[data-sidebar="group-label"]')
+    .filter({ hasText: "会话" })
+    .waitFor({ timeout: 10_000 });
+  await searchInput.fill(sessionName);
+  await resultLabel.waitFor({ timeout: 15_000 });
+  await page.waitForTimeout(500);
+  if ((await sessionLink().count()) === 0) {
+    throw new Error(`T1a2: 标题搜索「${sessionName}」没有找到新会话`);
+  }
+  await page.screenshot({ path: shot("mobile-t1a2_会话搜索") });
+  await sessionLink().click();
+  await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
+  await page.waitForURL(/\/chat\//, { timeout: 15_000 });
+  await page.waitForTimeout(2000);
+  console.log(
+    `T1a2 先命名建会话(名称 ${sessionName})+标题/正文搜索: 通过`
+  );
+
+  await page.goto(BASE, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="suggested-actions"]', {
+    timeout: 30_000,
+  });
+  await page.waitForTimeout(1500);
 
   // ---- T1b 收款人选择器:375px 弹窗不溢出 + 搜索可用 ----
   await page.getByRole("button", { exact: true, name: "我要转账" }).click();

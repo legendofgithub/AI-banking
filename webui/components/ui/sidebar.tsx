@@ -31,6 +31,11 @@ const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
+/** 手机端会话弹窗打开时不自动聚焦搜索框(否则会立刻弹出软键盘) */
+function preventAutoFocus(event: Event) {
+  event.preventDefault()
+}
+
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
   open: boolean
@@ -147,11 +152,14 @@ function Sidebar({
   collapsible = "offcanvas",
   className,
   children,
+  mobileHeader,
   ...props
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right"
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
+  /** 手机端弹窗的固定头区(搜索/新建会话);不参与下方列表滚动 */
+  mobileHeader?: React.ReactNode
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
 
@@ -179,6 +187,7 @@ function Sidebar({
           className="flex max-h-[min(82dvh,640px)] w-[calc(100%-2rem)] max-w-md flex-col gap-0 overflow-hidden rounded-2xl p-0 text-sidebar-foreground"
           data-mobile="true"
           data-testid="mobile-session-dialog"
+          onOpenAutoFocus={preventAutoFocus}
         >
           <DialogHeader className="border-b border-border/40 px-5 pt-4 pr-12 pb-3 text-left">
             <DialogTitle className="text-[14px]">会话总览</DialogTitle>
@@ -186,7 +195,10 @@ function Sidebar({
               上下滑动浏览全部会话,点一条进入;点空白处关闭。
             </DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-1 [&_[data-sidebar=header]]:hidden [&_[data-sidebar=menu-button]]:h-10 [&_[data-sidebar=trigger]]:hidden">
+          {mobileHeader ? (
+            <div className="border-b border-border/40 px-3 py-2">{mobileHeader}</div>
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-1 [&_[data-sidebar=header]]:hidden [&_[data-sidebar=menu-button]]:min-h-10 [&_[data-sidebar=trigger]]:hidden">
             {children}
           </div>
         </DialogContent>

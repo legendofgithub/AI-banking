@@ -405,6 +405,59 @@ def test_qr_render_and_lan_info(tmp_path):
                              r.json()["host"]), r.json()
 
 
+def test_thread_create_named_and_search(tmp_path):
+    """手机端「+」先命名建会话;搜索覆盖标题与消息正文(含命中片段)。"""
+    client, _db, tok = _client(
+        tmp_path,
+        ['{"intent": "chat"}', "好的",
+         '{"intent": "chat"}', "理财建议"])
+    headers = {"x-bank-token": tok}
+    with client:
+        # 命名规则:空名/超 10 字拒绝;10 字整可建
+        assert client.post("/api/threads", json={"title": "  "},
+                           headers=headers).status_code == 400
+        r = client.post("/api/threads", json={"title": "一二三四五六七八九十甲"},
+                        headers=headers)
+        assert r.status_code == 400
+        assert "10 个字" in r.json()["error"]
+        r = client.post("/api/threads", json={"title": "午餐记录"},
+                        headers=headers)
+        assert r.status_code == 200
+        created = r.json()
+        assert created["title"] == "午餐记录"
+        tid = created["id"]
+
+        # 进入会话发首条消息:标题保持用户命名,不被首句覆盖
+        _post_chat(client, "今天中午吃了牛肉面", tid, token=tok)
+        r = client.get("/api/threads", headers=headers)
+        named = next(c for c in r.json()["chats"] if c["id"] == tid)
+        assert named["title"] == "午餐记录"
+
+        _post_chat(client, "帮我看看理财", "t-finance", token=tok)
+
+        # 标题命中
+        r = client.get("/api/threads", params={"q": "午餐"}, headers=headers)
+        body = r.json()
+        assert body["total"] == 1
+        assert body["chats"][0]["id"] == tid
+        # 正文命中(标题里没有「牛肉」):结果带片段
+        r = client.get("/api/threads", params={"q": "牛肉"}, headers=headers)
+        body = r.json()
+        assert body["total"] == 1
+        assert body["chats"][0]["id"] == tid
+        assert "牛肉面" in body["chats"][0]["snippet"]
+        # 另一个会话的正文也能命中
+        r = client.get("/api/threads", params={"q": "理财"},
+                       headers=headers)
+        ids = [c["id"] for c in r.json()["chats"]]
+        assert "t-finance" in ids
+        # 无结果
+        r = client.get("/api/threads", params={"q": "完全不存在的词"},
+                       headers=headers)
+        assert r.json()["total"] == 0
+        assert r.json()["chats"] == []
+
+
 # ----------------------------------------------------------------- BYOK / 模型切换
 
 def test_chat_request_accepts_byok_fields(tmp_path):
