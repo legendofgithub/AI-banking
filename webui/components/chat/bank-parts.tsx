@@ -7,6 +7,7 @@ import {
   useCallback,
   useState,
 } from "react";
+import { ReceiptButton } from "@/components/chat/receipt-dialog";
 import { useActiveChat } from "@/hooks/use-active-chat";
 
 /*
@@ -284,6 +285,8 @@ function TransferCard({ data }: { data: TransferCardData }) {
       <div className="mt-2 text-xs text-muted-foreground">
         {data.confirm_hint ?? "动钱前请再次确认"}
       </div>
+      {/* 播报即凭证:每笔动钱随时可查完整审计链(只读) */}
+      {data.order_id ? <ReceiptButton orderId={data.order_id} /> : null}
     </GoldCard>
   );
 }
@@ -770,6 +773,121 @@ function SubscriptionListChat({ data }: { data: SubscriptionListData }) {
   );
 }
 
+/* ---- 代扣预审(事前知情):即将扣费清单 + 放行/跳过/解约三决策 ---- */
+interface PrecheckItem {
+  amount_yuan?: string;
+  base_amount_yuan?: string;
+  category?: string;
+  days_left?: number;
+  merchant_name?: string;
+  next_charge_date?: string;
+  period_text?: string;
+  price_note?: string;
+  sub_id?: number;
+}
+
+interface PrecheckView {
+  hint?: string;
+  items?: PrecheckItem[];
+}
+
+function _whenText(daysLeft: number | undefined): string {
+  const d = daysLeft ?? 0;
+  if (d <= 0) {
+    return "今天";
+  }
+  if (d === 1) {
+    return "明天";
+  }
+  return `${d} 天后`;
+}
+
+function PrecheckCard({ data }: { data: PrecheckView }) {
+  const { answered, busy, reply } = useGateReply();
+  const disabled = answered || busy;
+  const make = useCallback(
+    (item: PrecheckItem, verb: string) => () =>
+      reply(`${verb}${item.merchant_name ?? ""}的本期代扣`),
+    [reply]
+  );
+  const makeCancel = useCallback(
+    (item: PrecheckItem) => () =>
+      reply(`取消${item.merchant_name ?? ""}的自动扣费`),
+    [reply]
+  );
+  const items = data.items ?? [];
+  return (
+    <div className="w-[min(100%,420px)] rounded-2xl border border-amber-300/70 bg-gradient-to-br from-amber-50 to-yellow-50 p-4 shadow-[var(--shadow-card)] dark:border-amber-500/40 dark:from-amber-950/40 dark:to-yellow-950/30">
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+        <span aria-hidden>🔔</span>
+        代扣预审 · 即将扣费 {items.length} 项
+      </div>
+      <div className="flex flex-col gap-2">
+        {items.map((item) => (
+          <div
+            className="rounded-xl border border-amber-200/60 bg-white/60 p-2.5 dark:border-amber-500/20 dark:bg-amber-950/20"
+            key={item.sub_id ?? item.merchant_name}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-[13px] font-medium text-foreground">
+                  {item.merchant_name}
+                </span>
+                {item.category ? (
+                  <span className="shrink-0 rounded-full bg-amber-100/80 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    {item.category}
+                  </span>
+                ) : null}
+              </div>
+              <span className="shrink-0 text-[13px] font-semibold text-foreground">
+                ¥{item.amount_yuan}
+                <span className="text-[11px] font-normal text-muted-foreground">
+                  /{item.period_text ?? "期"}
+                </span>
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+              <span className="min-w-0 [overflow-wrap:anywhere]">
+                {_whenText(item.days_left)}扣费({item.next_charge_date})
+                {item.price_note ? ` · ${item.price_note}` : ""}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                className="rounded-lg bg-amber-500 px-3 py-1 text-xs font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={disabled}
+                onClick={make(item, "放行")}
+                type="button"
+              >
+                放行本期
+              </button>
+              <button
+                className="rounded-lg border border-amber-300/70 px-3 py-1 text-xs text-amber-700 transition hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-500/40 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                disabled={disabled}
+                onClick={make(item, "跳过")}
+                type="button"
+              >
+                跳过本期
+              </button>
+              <button
+                className="rounded-lg border border-border/60 px-3 py-1 text-xs text-muted-foreground transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={disabled}
+                onClick={makeCancel(item)}
+                type="button"
+              >
+                解约代扣
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {data.hint ? (
+        <div className="mt-2 text-xs text-muted-foreground">{data.hint}</div>
+      ) : null}
+    </div>
+  );
+}
+
 export function SubscriptionListCard({
   data,
   onPickCancel,
@@ -966,6 +1084,9 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   }
   if (type === "data-card-confirmation") {
     return <CardConfirmCard data={(data ?? {}) as CardConfirmationData} />;
+  }
+  if (type === "data-subscription-precheck") {
+    return <PrecheckCard data={(data ?? {}) as PrecheckView} />;
   }
   if (type === "data-ask-slot") {
     return <AskSlot data={(data ?? {}) as { missing?: string[] }} />;

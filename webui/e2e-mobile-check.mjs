@@ -96,6 +96,23 @@ try {
   await page.screenshot({ path: shot("mobile-t3_转账成功") });
   console.log("T3 支付密码确认后扣款成功播报: 通过");
 
+  // ---- T3b 播报即凭证:执行单点「查看凭证」弹审计链 ----
+  const receiptBtn = page.locator('[data-testid="receipt-button"]').last();
+  await receiptBtn.waitFor({ timeout: 10_000 });
+  await receiptBtn.click();
+  const receiptDlg = page.locator('[data-testid="receipt-dialog"]');
+  await receiptDlg.waitFor({ timeout: 10_000 });
+  const receiptText = await receiptDlg.innerText();
+  for (const needle of ["审计链", "资金流水", "agent", "幂等键"]) {
+    if (!receiptText.includes(needle)) {
+      throw new Error(`T3b: 凭证弹窗缺要素「${needle}」`);
+    }
+  }
+  await page.screenshot({ path: shot("mobile-t3b_转账凭证审计链") });
+  await page.keyboard.press("Escape");
+  await receiptDlg.waitFor({ state: "hidden", timeout: 5000 });
+  console.log("T3b 转账凭证(三表审计链)弹窗: 通过");
+
   // ---- T4 待确认转账悬浮球(2026-10-14 v2:可拖拽悬浮球取代横幅) ----
   const userBefore = await page.locator('[data-role="user"]').count();
   await page.fill("textarea", "给张三转5元");

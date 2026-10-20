@@ -236,6 +236,12 @@ PART_FIELD_CONTRACT: list[dict] = [
     {"interface": "SubscriptionListData", "required": {
         "annual_total_yuan", "hint", "items", "monthly_total_yuan"},
      "frontend_only": set()},
+    {"interface": "PrecheckItem", "required": {
+        "amount_yuan", "base_amount_yuan", "category", "days_left",
+        "merchant_name", "next_charge_date", "period_text", "price_note",
+        "sub_id"}, "frontend_only": set()},
+    {"interface": "PrecheckView", "required": {"hint", "items"},
+     "frontend_only": set()},
     {"interface": "SubscriptionCancelData", "required": {
         "amount_yuan", "annual_yuan", "category", "merchant_name",
         "next_charge_date", "pay_required", "period_text"},
@@ -310,7 +316,8 @@ _SKIP_KEY_GREP = {"title", "status", "kind", "hint", "note", "event",
     [e for e in PART_FIELD_CONTRACT
      if (e.get("required", set()) - _SKIP_KEY_GREP) or e.get("grep_only")],
     ids=[e.get("interface") or e.get("label_map") or "ask-slot"
-         for e in PART_FIELD_CONTRACT])
+         for e in PART_FIELD_CONTRACT
+         if (e.get("required", set()) - _SKIP_KEY_GREP) or e.get("grep_only")])
 def test_part_field_contract_backend_keys_exist(entry: dict) -> None:
     """冻结表中每个特征键,后端源码里必须仍能找到同名键字面量。
 
