@@ -62,6 +62,38 @@ try {
   await noHorizontalOverflow("T1 首页");
   console.log("T1 手机登录 + 首页: 通过");
 
+  // ---- T1b 收款人选择器:375px 弹窗不溢出 + 搜索可用 ----
+  await page.getByRole("button", { exact: true, name: "我要转账" }).click();
+  const payeeDialog = page.locator('[data-testid="payee-picker"]');
+  await payeeDialog.waitFor({ timeout: 10_000 });
+  const payeeBox = await payeeDialog.boundingBox();
+  if (
+    !payeeBox ||
+    payeeBox.x < -1 ||
+    payeeBox.x + payeeBox.width > 376 ||
+    payeeBox.width > 376
+  ) {
+    throw new Error(
+      `T1b: 收款人弹窗超出 375px 视口 x=${payeeBox?.x} w=${payeeBox?.width}`
+    );
+  }
+  await page.getByRole("textbox", { name: "搜索收款人" }).fill("张");
+  await page.waitForTimeout(400);
+  const mobilePayeeTexts = await page
+    .locator('[data-testid="payee-row"]')
+    .allInnerTexts();
+  if (!mobilePayeeTexts.some((t) => t.includes("张阿姨"))) {
+    throw new Error("T1b: 搜索「张」未找到张阿姨");
+  }
+  if (mobilePayeeTexts.some((t) => t.includes("林悦"))) {
+    throw new Error("T1b: 搜索「张」仍显示林悦");
+  }
+  await noHorizontalOverflow("T1b 收款人弹窗");
+  await page.screenshot({ path: shot("mobile-t1b_收款人选择器375") });
+  await page.keyboard.press("Escape");
+  await payeeDialog.waitFor({ state: "hidden", timeout: 5000 });
+  console.log("T1b 收款人弹窗(375px)与搜索: 通过");
+
   // ---- T2 转账指令 → 金色确认卡(支付密码版) ----
   await page.fill("textarea", "给张三转10元");
   await page.keyboard.press("Enter");

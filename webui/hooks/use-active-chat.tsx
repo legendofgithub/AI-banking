@@ -9,6 +9,7 @@ import {
   type Dispatch,
   type ReactNode,
   type SetStateAction,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -19,6 +20,10 @@ import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
 import { getStoredApiKey } from "@/components/chat/api-key-settings";
 import { useDataStream } from "@/components/chat/data-stream-provider";
+import {
+  type PayeeContact,
+  PayeePickerDialog,
+} from "@/components/chat/payee-picker";
 import { getChatHistoryPaginationKey } from "@/components/chat/sidebar-history";
 import { toast } from "@/components/chat/toast";
 import type { VisibilityType } from "@/components/chat/visibility-selector";
@@ -51,6 +56,8 @@ type ActiveChatContextValue = {
   votes: Vote[] | undefined;
   currentModelId: string;
   setCurrentModelId: (id: string) => void;
+  /** 打开「我要转账」收款人选择器(搜索/新建都在弹窗内完成) */
+  openPayeePicker: () => void;
 };
 
 const ActiveChatContext = createContext<ActiveChatContextValue | null>(null);
@@ -123,6 +130,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   }, [autoModelsData]);
 
   const [input, setInput] = useState("");
+  const [payeePickerOpen, setPayeePickerOpen] = useState(false);
 
   // 会话历史来自 agent 后端(服务端 SQLite 持久化):刷新/换浏览器都能恢复现场,
   // 与聊天 transport 同源同端口策略(跟随页面主机,避免代理差异)。
@@ -303,6 +311,43 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     { revalidateOnFocus: false }
   );
 
+  const openPayeePicker = useCallback(() => {
+    setPayeePickerOpen(true);
+  }, []);
+
+  // 选中收款人(或选择直接对话发起)后走原转账入口:带着姓名+手机号发一条
+  // 用户消息,金额/定时/支付密码仍由后端闸门处理,前端不碰动钱逻辑。
+  const startTransfer = useCallback(
+    (contact: PayeeContact | null) => {
+      setPayeePickerOpen(false);
+      if (status === "submitted" || status === "streaming") {
+        toast({ description: "助手还在回复,请稍后再发起转账", type: "error" });
+        return;
+      }
+      window.history.pushState(
+        {},
+        "",
+        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
+      );
+      sendMessage({
+        parts: [
+          {
+            text: contact
+              ? `我要转账,转给${contact.name},手机号${contact.phone}`
+              : "我要转账",
+            type: "text",
+          },
+        ],
+        role: "user",
+      });
+    },
+    [chatId, sendMessage, status]
+  );
+
+  const handlePayeeFallback = useCallback(() => {
+    startTransfer(null);
+  }, [startTransfer]);
+
   const value = useMemo<ActiveChatContextValue>(
     () => ({
       addToolApprovalResponse,
@@ -312,6 +357,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       isLoading: !isNewChat && isLoading,
       isReadonly,
       messages,
+      openPayeePicker,
       regenerate,
       sendMessage,
       setCurrentModelId,
@@ -336,6 +382,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       isReadonly,
       isNewChat,
       isLoading,
+      openPayeePicker,
       votes,
       currentModelId,
     ]
@@ -344,6 +391,12 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   return (
     <ActiveChatContext.Provider value={value}>
       {children}
+      <PayeePickerDialog
+        onFallback={handlePayeeFallback}
+        onOpenChange={setPayeePickerOpen}
+        onPick={startTransfer}
+        open={payeePickerOpen}
+      />
     </ActiveChatContext.Provider>
   );
 }

@@ -36,6 +36,7 @@ export function ChatShell() {
     votes,
     currentModelId,
     setCurrentModelId,
+    openPayeePicker,
   } = useActiveChat();
 
   const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(
@@ -140,6 +141,7 @@ export function ChatShell() {
                   messages={messages}
                   onCancelEdit={handleCancelEdit}
                   onModelChange={setCurrentModelId}
+                  onRequestTransfer={openPayeePicker}
                   selectedModelId={currentModelId}
                   selectedVisibilityType={visibilityType}
                   sendMessage={
