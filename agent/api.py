@@ -42,6 +42,10 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
     data-contact-choices        同名联系人选项(卡片式消歧,而非开放反问)
     data-ask-slot               缺槽反问(附缺失字段清单)
     data-gate-pending           本轮结束时图停在人工闸门(前端可切换输入态为"确认/取消")
+
+常用收款人 REST(非 SSE,「我要转账」选择器用;均需 x-bank-token 头):
+    GET  /api/contacts          当前登录用户收款人列表;未登录 401
+    POST /api/contacts          新建收款人 {name, phone, note};手机号 1 开头 11 位且唯一
 ────────────────────────────────────────────────────────────────────────────
 
 会话驱动约定(与 agent/graph.py 的图契约一致):
@@ -136,6 +140,13 @@ class LoginIn(BaseModel):
 
 class TokenIn(BaseModel):
     token: str = Field(min_length=16, max_length=128)
+
+
+class ContactIn(BaseModel):
+    """新建收款人(联系人)入参;格式与重复手机号由 LedgerService 统一校验。"""
+    name: str = ""
+    phone: str = ""
+    note: str = ""
 
 
 class OrderConfirmIn(BaseModel):
@@ -396,6 +407,40 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         if not me:
             raise HTTPException(status_code=401, detail="未登录或会话过期")
         return me
+
+    # ------------------------------------------------ 常用收款人(转账选择器)
+    @app.get("/api/contacts")
+    async def contacts_list(
+            x_bank_token: str | None = Header(default=None)) -> dict:
+        """当前登录用户的收款人全量列表(聊天「我要转账」选择器数据源)。
+
+        只返回本人 contacts;未登录返回 401(前端给出登录引导)。
+        token 走 x-bank-token 头,不进 access log。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401, content={"error": "请先登录后查看收款人"})
+        svc = LedgerService(app.state.auth_conn, user_id=me["user_id"])
+        return {"contacts": svc.list_contacts()}
+
+    @app.post("/api/contacts")
+    async def contacts_add(
+            req: ContactIn,
+            x_bank_token: str | None = Header(default=None)):
+        """新建收款人(姓名+手机号,手机号唯一)。
+
+        校验复用 LedgerService.add_contact:姓名非空、手机号 1 开头 11 位、
+        同手机号不可重复;写入 audit_log + change_log(动钱账户资料留痕)。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401, content={"error": "请先登录后新建收款人"})
+        svc = LedgerService(app.state.auth_conn, user_id=me["user_id"])
+        try:
+            contact = svc.add_contact(req.name, req.phone, req.note)
+        except LedgerError as e:
+            return JSONResponse(status_code=400, content={"error": str(e)})
+        return {"contact": contact}
 
     # ------------------------------------------------ 悬空转账提醒(弹窗+落地页)
     @app.get("/api/pending-orders")

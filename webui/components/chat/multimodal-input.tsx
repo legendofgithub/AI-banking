@@ -3,12 +3,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
-import {
-  ArrowUpIcon,
-  BrainIcon,
-  EyeIcon,
-  WrenchIcon,
-} from "lucide-react";
+import { ArrowUpIcon, BrainIcon, EyeIcon, WrenchIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
@@ -38,8 +33,8 @@ import {
 } from "@/components/ai-elements/model-selector";
 import {
   type ChatModel,
-  FALLBACK_CHAT_MODELS,
   DEFAULT_CHAT_MODEL,
+  FALLBACK_CHAT_MODELS,
   type ModelCapabilities,
 } from "@/lib/ai/models";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -53,6 +48,7 @@ import {
 } from "../ai-elements/prompt-input";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ApiKeySettings, getStoredApiKey } from "./api-key-settings";
 import { PaperclipIcon, StopIcon } from "./icons";
 import { PreviewAttachment } from "./preview-attachment";
 import {
@@ -61,7 +57,6 @@ import {
   slashCommands,
 } from "./slash-commands";
 import { SuggestedActions } from "./suggested-actions";
-import { ApiKeySettings, getStoredApiKey } from "./api-key-settings";
 import type { VisibilityType } from "./visibility-selector";
 
 function setCookie(name: string, value: string) {
@@ -95,6 +90,7 @@ function PureMultimodalInput({
   onModelChange,
   editingMessage,
   onCancelEdit,
+  onRequestTransfer,
   isLoading,
 }: {
   chatId: string;
@@ -115,6 +111,7 @@ function PureMultimodalInput({
   onModelChange?: (modelId: string) => void;
   editingMessage?: ChatMessage | null;
   onCancelEdit?: () => void;
+  onRequestTransfer?: () => void;
   isLoading?: boolean;
 }) {
   const router = useRouter();
@@ -411,12 +408,33 @@ function PureMultimodalInput({
     if (!input.trim() && attachments.length === 0) {
       return;
     }
+    // 手打「我要转账」与点击建议胶囊同路:先弹收款人选择器(可搜索/新建)。
+    // 带金额或其他信息的转账指令原样交给后端,不打断既有用法。
+    if (
+      /^我要转账[。.!！]?$/.test(input.trim()) &&
+      attachments.length === 0 &&
+      (status === "ready" || status === "error")
+    ) {
+      setInput("");
+      setLocalStorageInput("");
+      onRequestTransfer?.();
+      return;
+    }
     if (status === "ready" || status === "error") {
       submitForm();
     } else {
       toast.error("Please wait for the model to finish its response!");
     }
-  }, [attachments.length, handleSlashSelect, input, status, submitForm]);
+  }, [
+    attachments.length,
+    handleSlashSelect,
+    input,
+    status,
+    submitForm,
+    onRequestTransfer,
+    setInput,
+    setLocalStorageInput,
+  ]);
 
   const handleTextareaKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

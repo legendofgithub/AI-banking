@@ -264,6 +264,60 @@ def test_history_shows_pending_gate_question(tmp_path):
         assert all(texts2[i] != texts2[i - 1] for i in range(1, len(texts2)))
 
 
+# ----------------------------------------------------------------- 常用收款人选择器
+
+def test_contacts_api_list_create_and_validation(tmp_path):
+    """转账选择器数据源:登录后列本人收款人;新建走 Ledger 校验并立即可见。"""
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    with client:
+        # 未登录:401(前端据此给登录引导,而不是空列表)
+        r = client.get("/api/contacts")
+        assert r.status_code == 401
+        assert "登录" in r.json()["error"]
+
+        headers = {"x-bank-token": tok}
+        r = client.get("/api/contacts", headers=headers)
+        assert r.status_code == 200
+        contacts = r.json()["contacts"]
+        assert [c["name"] for c in contacts] == ["林悦", "林悦", "张三"]
+        # 每个收款人对应手机号(同名林悦靠手机号区分)
+        assert sorted(c["phone"] for c in contacts) == [
+            "13633334444", "13711112222", "13900008821"]
+
+        r = client.post("/api/contacts", headers=headers, json={
+            "name": "王小明", "phone": "13512345678", "note": "测试收款人"})
+        assert r.status_code == 200
+        created = r.json()["contact"]
+        assert created["name"] == "王小明"
+        assert created["phone"] == "13512345678"
+        assert created["note"] == "测试收款人"
+
+        names = [c["name"] for c in
+                 client.get("/api/contacts", headers=headers).json()["contacts"]]
+        assert "王小明" in names
+
+        # 手机号唯一:同号换个名字也拒绝(不静默覆盖)
+        r = client.post("/api/contacts", headers=headers, json={
+            "name": "王小明明", "phone": "13512345678"})
+        assert r.status_code == 400
+        assert "不能重复" in r.json()["error"]
+
+        # 手机号格式与姓名由服务层确定性校验
+        r = client.post("/api/contacts", headers=headers, json={
+            "name": "赵六", "phone": "1351234"})
+        assert r.status_code == 400
+        assert "11 位" in r.json()["error"]
+        r = client.post("/api/contacts", headers=headers, json={
+            "name": " ", "phone": "13512340000"})
+        assert r.status_code == 400
+        assert "姓名不能为空" in r.json()["error"]
+
+        # 未登录不可新建
+        r = client.post("/api/contacts", json={
+            "name": "游客", "phone": "13512340001"})
+        assert r.status_code == 401
+
+
 # ----------------------------------------------------------------- BYOK / 模型切换
 
 def test_chat_request_accepts_byok_fields(tmp_path):

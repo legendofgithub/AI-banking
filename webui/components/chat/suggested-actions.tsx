@@ -3,6 +3,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { motion } from "framer-motion";
 import { memo, useCallback } from "react";
+import { useActiveChat } from "@/hooks/use-active-chat";
 import { suggestions } from "@/lib/constants";
 import type { ChatMessage } from "@/lib/types";
 import { Suggestion } from "../ai-elements/suggestion";
@@ -15,9 +16,16 @@ type SuggestedActionsProps = {
 };
 
 function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
+  const { openPayeePicker } = useActiveChat();
   const suggestedActions = suggestions;
   const handleSuggestionClick = useCallback(
     (suggestion: string) => {
+      // 「我要转账」先让用户从已记录的收款人里选(支持搜索/新建),
+      // 选中后由选择器带着姓名+手机号发起,不再直接发一条空指令。
+      if (suggestion === "我要转账") {
+        openPayeePicker();
+        return;
+      }
       window.history.pushState(
         {},
         "",
@@ -28,7 +36,7 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
         role: "user",
       });
     },
-    [chatId, sendMessage]
+    [chatId, openPayeePicker, sendMessage]
   );
 
   return (
