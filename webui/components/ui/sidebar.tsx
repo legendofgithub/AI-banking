@@ -7,15 +7,15 @@ import { Slot } from "radix-ui"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
@@ -147,7 +147,6 @@ function Sidebar({
   collapsible = "offcanvas",
   className,
   children,
-  dir,
   ...props
 }: React.ComponentProps<"div"> & {
   side?: "left" | "right"
@@ -172,25 +171,26 @@ function Sidebar({
   }
 
   if (isMobile) {
+    // 手机端:居中弹窗而不是整屏底部抽屉(2026-10-21 实测反馈:底部抽屉
+    // 会话铺满屏、不易退出)。点遮罩/右上角 X 关闭,内容区单独滚动。
     return (
-      <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
-        <SheetContent
-          dir={dir}
-          data-sidebar="sidebar"
-          data-slot="sidebar"
+      <Dialog open={openMobile} onOpenChange={setOpenMobile}>
+        <DialogContent
+          className="flex max-h-[min(82dvh,640px)] w-[calc(100%-2rem)] max-w-md flex-col gap-0 overflow-hidden rounded-2xl p-0 text-sidebar-foreground"
           data-mobile="true"
-          className="inset-x-0 bottom-0 top-auto h-[70dvh] w-full rounded-t-2xl border-t border-border/30 bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
-          showCloseButton={false}
-          side="bottom"
+          data-testid="mobile-session-dialog"
         >
-          <SheetHeader className="sr-only">
-            <SheetTitle>Sidebar</SheetTitle>
-            <SheetDescription>Displays the mobile sidebar.</SheetDescription>
-          </SheetHeader>
-          <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-sidebar-foreground/20" />
-          <div className="flex h-full w-full flex-col overflow-y-auto pt-2">{children}</div>
-        </SheetContent>
-      </Sheet>
+          <DialogHeader className="border-b border-border/40 px-5 pt-4 pr-12 pb-3 text-left">
+            <DialogTitle className="text-[14px]">会话总览</DialogTitle>
+            <DialogDescription className="text-[12px]">
+              上下滑动浏览全部会话,点一条进入;点空白处关闭。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-1 [&_[data-sidebar=header]]:hidden [&_[data-sidebar=menu-button]]:h-10 [&_[data-sidebar=trigger]]:hidden">
+            {children}
+          </div>
+        </DialogContent>
+      </Dialog>
     )
   }
 

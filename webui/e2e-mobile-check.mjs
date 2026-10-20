@@ -65,6 +65,74 @@ try {
   }
   console.log("T1 手机登录 + 首页: 通过");
 
+  // ---- T1a 会话总览:居中弹窗(不是整屏抽屉),可滚动,点空白关闭 ----
+  const sessionBtn = page.locator('[data-testid="mobile-session-button"]');
+  await sessionBtn.click();
+  const sessionDialog = page.locator('[data-testid="mobile-session-dialog"]');
+  await sessionDialog.waitFor({ timeout: 10_000 });
+  const sessionBox = await sessionDialog.boundingBox();
+  if (
+    !sessionBox ||
+    sessionBox.x < 8 ||
+    sessionBox.x + sessionBox.width > 368 ||
+    sessionBox.height > 700 ||
+    sessionBox.y < 0
+  ) {
+    throw new Error(
+      `T1a: 会话弹窗未居中/过高 x=${sessionBox?.x} y=${sessionBox?.y} w=${sessionBox?.width} h=${sessionBox?.height}`
+    );
+  }
+  const sessionScroller = sessionDialog.locator("div.overflow-y-auto").first();
+  const scrollStats = await sessionScroller.evaluate((el) => ({
+    client: el.clientHeight,
+    scroll: el.scrollHeight,
+  }));
+  if (scrollStats.scroll <= scrollStats.client) {
+    throw new Error(
+      `T1a: 会话列表没有形成可滚动区域 (${scrollStats.scroll}/${scrollStats.client})`
+    );
+  }
+  // 滚到底触发 offset 分页:初始 20 条应继续加载下一页(会话足够多时)
+  const countBefore = await sessionDialog.locator('a[href^="/chat/"]').count();
+  await sessionScroller.evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  await page.waitForTimeout(1500);
+  const countAfter = await sessionDialog.locator('a[href^="/chat/"]').count();
+  if (countBefore >= 20 && countAfter <= countBefore) {
+    throw new Error(
+      `T1a: 滚到底没有继续加载会话 (${countBefore} -> ${countAfter})`
+    );
+  }
+  await noHorizontalOverflow("T1a 会话弹窗");
+  await page.screenshot({ path: shot("mobile-t1a_会话总览弹窗") });
+  // 点弹窗外的空白(遮罩)关闭
+  await page.mouse.click(6, 6);
+  await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
+  console.log(
+    `T1a 会话总览弹窗(居中 ${Math.round(sessionBox.width)}x${Math.round(sessionBox.height)},滚动加载 ${countBefore}->${countAfter},点空白关闭): 通过`
+  );
+
+  // ---- T1a2 选择一条会话可进入(有历史时) ----
+  await sessionBtn.click();
+  await sessionDialog.waitFor({ timeout: 10_000 });
+  const historyLink = sessionDialog.locator('a[href^="/chat/"]').first();
+  if ((await historyLink.count()) > 0) {
+    await historyLink.click();
+    await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
+    await page.waitForURL(/\/chat\//, { timeout: 15000 });
+    // 等聊天页完成水合再离开:否则 goto 打断水合并报 React #418(测试节奏问题)
+    await page.waitForTimeout(2000);
+    console.log("T1a2 弹窗内选择会话并进入: 通过");
+    await page.goto(BASE, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="suggested-actions"]', {
+      timeout: 30_000,
+    });
+    await page.waitForTimeout(1500);
+  } else {
+    await page.mouse.click(6, 6);
+    await sessionDialog.waitFor({ state: "hidden", timeout: 5000 });
+    console.log("T1a2 无历史会话,跳过选择进入");
+  }
+
   // ---- T1b 收款人选择器:375px 弹窗不溢出 + 搜索可用 ----
   await page.getByRole("button", { exact: true, name: "我要转账" }).click();
   const payeeDialog = page.locator('[data-testid="payee-picker"]');
