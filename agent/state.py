@@ -155,9 +155,10 @@ class AgentState(TypedDict, total=False):
     card_missing: list[str]            # 待补项(action/card/card_type/limits/status_target)
 
     # ---- 订阅/代扣(s_ 前缀节点) ----
-    sub: SubscriptionSlots             # 订阅抽取槽位(列表/取消)
+    sub: SubscriptionSlots             # 订阅抽取槽位(列表/取消/预审/放行/跳过)
     sub_missing: list[str]             # 待补项(action/merchant);非空 → 反问
     sub_view: dict | None              # 列表卡片视图(api 在 s_list 节点更新时发帧)
+    precheck_view: dict | None         # 代扣预审卡片视图(api 在 s_precheck 节点发帧)
 
     # ---- 播报与留痕 ----
     notice: dict | None                # 播报依据的事实 {"kind": ..., ...}

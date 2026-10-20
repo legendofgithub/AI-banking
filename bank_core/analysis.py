@@ -325,6 +325,126 @@ class AnalysisService:
                               "amount_cents": row["amount_cents"]})
         return result
 
+    # ------------------------------------------------- 代扣预审(事前知情)
+
+    def _ensure_precheck_col(self) -> None:
+        """老库自愈补列(CREATE TABLE IF NOT EXISTS 不改已存在的表;
+        订阅预审列 2026-10-20 加入,任何连接路径首次使用时自动补齐)。"""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(subscriptions)")}
+        if cols and "precheck_ack_date" not in cols:
+            self.conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN "
+                "precheck_ack_date TEXT NOT NULL DEFAULT ''")
+            self.conn.commit()
+
+    @staticmethod
+    def _roll_next(next_date: str, as_of_date: str, period_days: int) -> str:
+        """挖掘滞后的 next_charge_date 可能在过去——按周期滚到 as_of 起的首个未来日。"""
+        d = datetime.strptime(next_date, "%Y-%m-%d").date()
+        a = datetime.strptime(as_of_date, "%Y-%m-%d").date()
+        while d < a:
+            d += timedelta(days=period_days)
+        return d.isoformat()
+
+    def upcoming_precharges(self, as_of: str | None = None,
+                            within_days: int = 3) -> list[dict]:
+        """即将扣费预审清单(纯只读,不动钱)。
+
+        语义:对每个 active 订阅,给出 as_of 起未来 within_days 天内将发生的
+        下一期扣费(含金额与历史常见档的涨价对照);已放行/跳过的周期
+        (precheck_ack_date 命中)不再重复提醒。
+        """
+        self._ensure_precheck_col()
+        as_of_date = (as_of or now_iso())[:10]
+        rows = self.conn.execute(
+            "SELECT * FROM subscriptions WHERE user_id=? AND status='active' "
+            "ORDER BY next_charge_date", (self.user_id,)).fetchall()
+        out = []
+        for r in rows:
+            period = r["period_days"] or 30
+            nxt = self._roll_next(r["next_charge_date"], as_of_date, period)
+            gap = (datetime.strptime(nxt, "%Y-%m-%d")
+                   - datetime.strptime(as_of_date, "%Y-%m-%d")).days
+            if gap > within_days or (r["precheck_ack_date"] or "") == nxt:
+                continue
+            # 涨价对照:订阅行存的是常见档金额;下一期预期扣费取该商户
+            # 最新一笔交易,与常见档(transactions 无 user_id,经 accounts 过滤)
+            base = self.conn.execute(
+                "SELECT t.amount_cents, COUNT(*) c FROM transactions t "
+                "JOIN accounts a ON a.id = t.account_id "
+                "WHERE a.user_id=? AND t.counterparty=? "
+                "GROUP BY t.amount_cents ORDER BY c DESC LIMIT 1",
+                (self.user_id, r["merchant_name"])).fetchone()
+            latest = self.conn.execute(
+                "SELECT t.amount_cents FROM transactions t "
+                "JOIN accounts a ON a.id = t.account_id "
+                "WHERE a.user_id=? AND t.counterparty=? "
+                "ORDER BY t.ts DESC LIMIT 1",
+                (self.user_id, r["merchant_name"])).fetchone()
+            base_cents = base["amount_cents"] if base else r["amount_cents"]
+            cur_cents = latest["amount_cents"] if latest else r["amount_cents"]
+            note = ""
+            if base_cents and cur_cents != base_cents:
+                note = (f"较常见扣费 {cents_to_yuan(base_cents)} 元"
+                        + ("已涨价" if cur_cents > base_cents else "已降价"))
+            out.append({
+                "sub_id": r["id"], "merchant": r["merchant_name"],
+                "category": r["category"],
+                "amount_yuan": cents_to_yuan(cur_cents),
+                "base_amount_yuan": cents_to_yuan(base_cents),
+                "price_note": note, "next_charge_date": nxt,
+                "period_days": period, "days_left": gap,
+                "annual_yuan": cents_to_yuan(round(365 / period * r["amount_cents"])),
+            })
+        audit(self.conn, "upcoming_precharges",
+              {"as_of": as_of_date, "within_days": within_days}, {"n": len(out)})
+        return out
+
+    def decide_precharge(self, sub_id: int, decision: str,
+                         charge_date: str | None = None) -> dict:
+        """代扣预审决策:allow=放行本期(仅记录);skip=跳过本期(顺延一周期)。
+
+        不动钱(沙箱无自动扣款引擎),决策留 audit + change_log;
+        解约走 cancel_subscription(MED/密码闸门),不在此列。
+        """
+        self._ensure_precheck_col()
+        if decision not in ("allow", "skip"):
+            raise ValueError("decision 只允许 allow/skip")
+        row = self.conn.execute(
+            "SELECT * FROM subscriptions WHERE id=? AND user_id=?",
+            (sub_id, self.user_id)).fetchone()
+        if not row:
+            raise ValueError("订阅不存在")
+        if row["status"] != "active":
+            raise ValueError("订阅已取消,无需预审")
+        period = row["period_days"] or 30
+        ack = charge_date or self._roll_next(
+            row["next_charge_date"], now_iso()[:10], period)
+        if decision == "skip":
+            nxt = (datetime.strptime(ack, "%Y-%m-%d")
+                   + timedelta(days=period)).date().isoformat()
+            self.conn.execute(
+                "UPDATE subscriptions SET precheck_ack_date=?, next_charge_date=? "
+                "WHERE id=?", (ack, nxt, sub_id))
+            note = f"已跳过 {ack} 这一期,下期 {nxt}"
+        else:
+            self.conn.execute(
+                "UPDATE subscriptions SET precheck_ack_date=? WHERE id=?",
+                (ack, sub_id))
+            note = f"已放行 {ack} 这一期扣费"
+        self.conn.commit()
+        result = {"subscription_id": sub_id, "merchant": row["merchant_name"],
+                  "decision": decision, "charge_date": ack, "note": note}
+        audit(self.conn, "decide_precharge",
+              {"sub_id": sub_id, "decision": decision, "charge_date": ack},
+              result, risk="LOW")
+        from .recorder import record_change
+        record_change(self.conn, self.user_id, category="subscription",
+                      action=f"precheck_{decision}", target=row["merchant_name"],
+                      detail={"sub_id": sub_id, "charge_date": ack,
+                              "amount_cents": row["amount_cents"]})
+        return result
+
 
 def _yuan(yuan_str: str) -> int:
     """'30.00' -> 3000 分（内部用）。"""

@@ -204,6 +204,24 @@ def cancel_subscription(subscription_id: int) -> dict:
     return _analysis.cancel_subscription(subscription_id)
 
 
+@mcp.tool
+def list_upcoming_precharges(as_of: str | None = None,
+                             within_days: int = 3) -> list[dict]:
+    """[READ] 代扣预审:即将扣费的订阅清单(默认未来 3 天)。
+    next_charge_date 会按周期向前滚动修正(挖掘滞后时);已放行/跳过的周期
+    不再出现;含较历史常见档的涨/降价对照。"""
+    return _analysis.upcoming_precharges(as_of, within_days)
+
+
+@mcp.tool
+def decide_precharge(subscription_id: int, decision: str,
+                     charge_date: str | None = None) -> dict:
+    """[LOW] 代扣预审决策:allow=放行本期(仅记录);skip=跳过本期
+    (扣费日顺延一个周期)。不动钱、无需支付密码;解约代扣走
+    cancel_subscription(需密码确认)。"""
+    return _analysis.decide_precharge(subscription_id, decision, charge_date)
+
+
 # ============================== 5. 理财操作 ==============================
 
 @mcp.tool
