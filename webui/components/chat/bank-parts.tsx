@@ -27,7 +27,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *                               配套后台接入中,先经 /preview/subscriptions 演示)
  *   data-subscription-cancel    取消代扣确认卡(金色闸门,支付密码核验)
  *   data-ask-slot               缺槽提示
- *   data-gate-pending           本轮停在人工闸门
+ *   data-gate-pending           本轮停在人工闸门(后端仍下发;前端不渲染提示胶囊)
  * 闸门答复 = 把「确认/取消」作为下一条用户消息发出(后端自动作为 resume 值恢复执行)。
  */
 
@@ -1031,14 +1031,6 @@ function AskSlot({ data }: { data: { missing?: string[] } }) {
   );
 }
 
-function GatePending() {
-  return (
-    <div className="w-fit rounded-full border border-amber-300/60 bg-amber-50/80 px-3 py-1 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300">
-      ⏸ 等待你确认 —— 回复「确认」执行,回复「取消」放弃
-    </div>
-  );
-}
-
 export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   if (type === "data-transfer-confirmation") {
     return <TransferCard data={(data ?? {}) as TransferCardData} />;
@@ -1092,7 +1084,9 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
     return <AskSlot data={(data ?? {}) as { missing?: string[] }} />;
   }
   if (type === "data-gate-pending") {
-    return <GatePending />;
+    // 不再渲染黄胶囊:确认卡已有按钮、播报也已说明如何确认/取消,底部再挂
+    // 一行「等待你确认」纯属重复。SSE 部件保持下发(契约不变,其他客户端可用)。
+    return null;
   }
   return null;
 }
