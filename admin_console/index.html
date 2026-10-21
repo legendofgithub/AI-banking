@@ -227,6 +227,10 @@ input.mono{font-family:var(--mono)}
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
         刷新
       </button>
+      <button type="button" class="btn icon" id="btnAdjustLog" title="跨用户查询管理员调账记录">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
+        调账记录
+      </button>
       <span class="hint">双击用户行（或点行内「进入管理」）进入该用户的管理台</span>
     </div>
     <div class="tbl-wrap">
@@ -482,9 +486,71 @@ input.mono{font-family:var(--mono)}
       <div><button type="submit" class="btn gold">提交调账</button></div>
     </form>
   </div>
+  <div class="card">
+    <h3>最近调账<span class="head-note">当前用户最近 10 条；跨用户查询请回用户总览点「调账记录」</span></h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>时间</th><th class="num">金额(元)</th><th class="num">调账前(元)</th><th class="num">调账后(元)</th><th>原因</th></tr></thead>
+        <tbody id="adjRecentBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </section>
 </main>
 </div><!-- /viewConsole -->
+
+<!-- ================= 第三级：跨用户调账记录查询 ================= -->
+<div id="viewAdjustLog" class="view">
+  <div class="crumbs">
+    <button type="button" class="btn" id="btnAdjustLogBack">← 返回用户列表</button>
+    <span class="path">用户总览 / <strong>调账记录</strong></span>
+  </div>
+  <main>
+    <div class="page-head">
+      <h2 class="page-title">调账记录</h2>
+      <p class="page-sub" id="adjustLogTotal">共 — 条</p>
+    </div>
+    <div class="card">
+      <div class="toolbar">
+        <label>关键词 <input id="adjLogQ" placeholder="姓名 / 原因 / 账户ID" style="width:200px"></label>
+        <label>方向
+          <select id="adjLogDirection">
+            <option value="all">全部</option>
+            <option value="increase">加款</option>
+            <option value="decrease">扣款</option>
+          </select>
+        </label>
+        <label>从 <input type="date" id="adjLogFrom" style="color-scheme:dark"></label>
+        <label>到 <input type="date" id="adjLogTo" style="color-scheme:dark"></label>
+        <label>每页
+          <select id="adjLogLimit">
+            <option value="20">20</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <button type="button" class="btn primary" id="btnAdjLogQuery">查询</button>
+        <button type="button" class="btn" id="btnAdjLogReset">重置</button>
+        <span class="hint" id="adjLogSummary">—</span>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>时间</th><th>用户</th><th>账户</th>
+            <th class="num">调账金额(元)</th><th class="num">调账前(元)</th><th class="num">调账后(元)</th>
+            <th>原因</th><th>操作方</th><th>操作</th>
+          </tr></thead>
+          <tbody id="adjustLogBody"><tr><td colspan="9" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="toolbar" style="margin:12px 0 0">
+        <button type="button" class="btn" id="adjLogPrev">上一页</button>
+        <span class="muted small" id="adjLogPage">第 1 页</span>
+        <button type="button" class="btn" id="adjLogNext">下一页</button>
+      </div>
+    </div>
+  </main>
+</div>
 
 <!-- Toast 容器（右上角） -->
 <div id="toasts"></div>
@@ -493,9 +559,9 @@ input.mono{font-family:var(--mono)}
 'use strict';
 /* =====================================================
    AI Banking 管理后台（零 LLM，数据全部来自 REST API）
-   两级结构：首页（用户总览）→ 双击用户行进入个人管理台（9 页签）
+   三级视图：用户总览 → 个人管理台（9 页签）→ 跨用户调账记录查询
    结构：通用工具 → 徽标/行渲染助手 → 首页用户列表 → 各页签加载器
-        → 页签路由与两级视图切换 → 事件绑定与启动
+        → 页签路由与视图切换 → 事件绑定与启动
    ===================================================== */
 
 /* ---------------- 通用工具 ---------------- */
@@ -576,9 +642,11 @@ async function api(path, opts = {}){
   return data;
 }
 
-/* ---------------- 两级结构全局状态 ---------------- */
-let currentView = 'users';  // 当前视图：users = 首页用户总览；console = 个人管理台
+/* ---------------- 视图全局状态 ---------------- */
+let currentView = 'users';  // 当前视图：users = 首页用户总览；console = 个人管理台；adjustLog = 跨用户调账记录
 let currentUser = null;     // 个人台当前管理的用户：{user_id, nickname}
+// 跨用户调账查询的筛选与分页状态（视图切换后保留，重置按钮清空）
+let adjLog = { q: '', direction: 'all', from: '', to: '', limit: 50, offset: 0, total: 0 };
 const LS_USER_KEY = 'admin_current_user'; // localStorage：记住上次选中的用户
 
 /** 给接口路径追加当前用户的 user_id 查询参数（GET 与写接口均为 query 参数，非 body）
@@ -958,12 +1026,69 @@ async function loadOrders(){
 
 /* ---------- 9. 调账 ---------- */
 async function loadAdjust(){
-  // 复用 /api/overview 拉账户下拉，同时刷新顶部昵称
-  const d = await api(withUser('/api/overview'));
+  // 账户下拉 + 当前用户最近调账（失败不阻断调账表单）
+  const [d, logs] = await Promise.all([
+    api(withUser('/api/overview')),
+    api(withUser('/api/adjust-records?limit=10')).catch(() => ({ records: [] })),
+  ]);
   $('#nickText').textContent = '当前用户：' + (d.nickname || '—');
   $('#adjAccount').innerHTML = (d.accounts || []).map(a =>
     `<option value="${esc(a.id)}">${esc(a.name)}（${esc(a.type)}）· 余额 ${money(a.balance_yuan)} 元</option>`).join('');
+  $('#adjRecentBody').innerHTML = (logs.records || []).map(r => `
+    <tr>
+      <td class="ts">${esc(fmtTime(r.ts))}</td>
+      <td class="num">${deltaHTML(r.delta_yuan)}</td>
+      <td class="num">${money(r.before_yuan)}</td>
+      <td class="num">${money(r.after_yuan)}</td>
+      <td class="muted small">${r.reason ? esc(r.reason) : '—'}</td>
+    </tr>`).join('') || emptyRow(5);
 }
+
+/* ---------- 10. 跨用户调账记录（首页第三级视图） ---------- */
+function adjLogRow(r){
+  const hasUser = r.user_id !== null && r.user_id !== undefined;
+  const who = r.nickname ? esc(r.nickname) : '<span class="muted">—</span>';
+  const acct = r.account_name
+    ? `${esc(r.account_name)} <span class="muted small">·账户${esc(r.account_id)}</span>`
+    : `<span class="muted">账户${esc(r.account_id)}</span>`;
+  return `<tr>
+    <td class="ts">${esc(fmtTime(r.ts))}</td>
+    <td>${who}${hasUser ? `<span class="muted small"> ·ID ${esc(r.user_id)}</span>` : ''}</td>
+    <td>${acct}</td>
+    <td class="num">${deltaHTML(r.delta_yuan)}</td>
+    <td class="num">${money(r.before_yuan)}</td>
+    <td class="num">${money(r.after_yuan)}</td>
+    <td class="muted small">${r.reason ? esc(r.reason) : '—'}</td>
+    <td>${operatorBadge(r.operator)}</td>
+    <td>${hasUser ? `<button type="button" class="btn mini js-adj-enter" data-id="${esc(r.user_id)}" data-nick="${esc(r.nickname || '')}">进入管理</button>` : '<span class="muted">—</span>'}</td>
+  </tr>`;
+}
+
+async function loadAdjustLog(){
+  $('#adjustLogBody').innerHTML = loadingRow(9);
+  const qs = new URLSearchParams({
+    limit: String(adjLog.limit),
+    offset: String(adjLog.offset),
+  });
+  if (adjLog.q) qs.set('q', adjLog.q);
+  if (adjLog.direction !== 'all') qs.set('direction', adjLog.direction);
+  if (adjLog.from) qs.set('date_from', adjLog.from);
+  if (adjLog.to) qs.set('date_to', adjLog.to);
+  const d = await api('/api/adjust-records?' + qs.toString());
+  const records = d.records || [];
+  adjLog.total = d.total ?? 0;
+  $('#adjustLogTotal').textContent = `共 ${adjLog.total} 条调账记录`;
+  const s = d.summary || {};
+  $('#adjLogSummary').textContent =
+    `累计 ${s.count ?? adjLog.total} 笔 · 加款 ${money(s.added_yuan)} 元 · 扣款 ${money(s.deducted_yuan)} 元 · 净额 ${signedMoney(s.net_yuan)} 元`;
+  $('#adjustLogBody').innerHTML = records.map(adjLogRow).join('') || emptyRow(9);
+  const page = Math.floor(adjLog.offset / adjLog.limit) + 1;
+  const pages = Math.max(1, Math.ceil(adjLog.total / adjLog.limit));
+  $('#adjLogPage').textContent = `第 ${page} / ${pages} 页`;
+  $('#adjLogPrev').disabled = adjLog.offset <= 0;
+  $('#adjLogNext').disabled = adjLog.offset + adjLog.limit >= adjLog.total;
+}
+const loadAdjustLogSafe = safe(loadAdjustLog);
 
 /* =====================================================
    页签路由（纯 JS 显示/隐藏，进入即拉取数据）
@@ -988,7 +1113,7 @@ function switchTab(key){
 }
 
 /* =====================================================
-   两级视图切换与用户上下文
+   视图切换与用户上下文
    ===================================================== */
 /** 渲染面包屑与顶栏昵称（昵称缺失时回退为 "用户{ID}"） */
 function renderCrumb(){
@@ -998,14 +1123,16 @@ function renderCrumb(){
   $('#nickText').textContent = '当前用户：' + (currentUser.nickname || '—');
 }
 
-/** 首页 ⇄ 个人台视图切换：users = 用户总览；console = 个人管理台 */
+/** 视图切换：users = 用户总览；console = 个人管理台；adjustLog = 跨用户调账记录 */
 function showView(name){
   currentView = name;
   $('#viewUsers').classList.toggle('active', name === 'users');
   $('#viewConsole').classList.toggle('active', name === 'console');
-  // 首页无用户上下文：隐藏顶栏"当前用户"胶囊；顶栏刷新按钮语义随视图切换
+  $('#viewAdjustLog').classList.toggle('active', name === 'adjustLog');
+  // 首页/调账记录无用户上下文：隐藏顶栏"当前用户"胶囊；顶栏刷新按钮语义随视图切换
   $('#nickChip').hidden = name !== 'console';
-  $('#btnRefresh').title = name === 'console' ? '刷新当前页签数据' : '刷新用户列表';
+  $('#btnRefresh').title = name === 'console' ? '刷新当前页签数据'
+    : name === 'adjustLog' ? '刷新调账记录' : '刷新用户列表';
 }
 
 /** 进入某用户的个人管理台：记住上下文 → 切视图 → 默认落在"总览"页签并拉取 */
@@ -1043,9 +1170,11 @@ async function cancelOrder(id){
 $('#tabNav').addEventListener('click', e => {
   const b = e.target.closest('.tab'); if (b) switchTab(b.dataset.tab);
 });
-// 顶栏刷新随视图：个人台刷新当前页签，首页刷新用户列表
+// 顶栏刷新随视图：个人台刷新当前页签，调账记录刷新查询，首页刷新用户列表
 $('#btnRefresh').addEventListener('click', () => {
-  if (currentView === 'console') TAB_LOADERS[currentTab](); else loadUsersSafe();
+  if (currentView === 'console') TAB_LOADERS[currentTab]();
+  else if (currentView === 'adjustLog') loadAdjustLogSafe();
+  else loadUsersSafe();
 });
 
 // ---- 首页（用户总览）----
@@ -1058,6 +1187,54 @@ $('#withinSeg').addEventListener('click', e => {
   loadUsersSafe();
 });
 $('#btnUsersRefresh').addEventListener('click', () => loadUsersSafe());
+
+// ---- 跨用户调账记录（首页入口 → 第三级视图）----
+$('#btnAdjustLog').addEventListener('click', () => {
+  adjLog.offset = 0;
+  showView('adjustLog');
+  loadAdjustLogSafe();
+});
+$('#btnAdjustLogBack').addEventListener('click', backToList);
+$('#btnAdjLogQuery').addEventListener('click', () => {
+  adjLog.q = $('#adjLogQ').value.trim();
+  adjLog.direction = $('#adjLogDirection').value;
+  adjLog.from = $('#adjLogFrom').value;
+  adjLog.to = $('#adjLogTo').value;
+  adjLog.limit = Number($('#adjLogLimit').value) || 50;
+  adjLog.offset = 0;
+  loadAdjustLogSafe();
+});
+$('#adjLogQ').addEventListener('keydown', e => {
+  if (e.key === 'Enter'){ e.preventDefault(); $('#btnAdjLogQuery').click(); }
+});
+$('#btnAdjLogReset').addEventListener('click', () => {
+  $('#adjLogQ').value = '';
+  $('#adjLogDirection').value = 'all';
+  $('#adjLogFrom').value = '';
+  $('#adjLogTo').value = '';
+  $('#adjLogLimit').value = '50';
+  Object.assign(adjLog, { q: '', direction: 'all', from: '', to: '', limit: 50, offset: 0, total: 0 });
+  loadAdjustLogSafe();
+});
+// 方向/日期/每页变更即查询，避免只改筛选忘了点查询
+['#adjLogDirection', '#adjLogFrom', '#adjLogTo', '#adjLogLimit'].forEach(sel => {
+  $(sel).addEventListener('change', () => $('#btnAdjLogQuery').click());
+});
+$('#adjLogPrev').addEventListener('click', () => {
+  if (adjLog.offset <= 0) return;
+  adjLog.offset = Math.max(0, adjLog.offset - adjLog.limit);
+  loadAdjustLogSafe();
+});
+$('#adjLogNext').addEventListener('click', () => {
+  if (adjLog.offset + adjLog.limit >= adjLog.total) return;
+  adjLog.offset += adjLog.limit;
+  loadAdjustLogSafe();
+});
+$('#adjustLogBody').addEventListener('click', e => {
+  const btn = e.target.closest('.js-adj-enter'); if (!btn) return;
+  enterConsole({ user_id: btn.dataset.id, nickname: btn.dataset.nick });
+});
+
 // 双击用户行 → 进入该用户管理台
 $('#usersBody').addEventListener('dblclick', e => {
   const tr = e.target.closest('tr.usr'); if (!tr) return;
@@ -1204,7 +1381,7 @@ $('#adjustForm').addEventListener('submit', async e => {
     toast(`调账成功，新余额 ${money(r.new_balance_yuan)} 元`);
     $('#adjAmount').value = '';
     $('#adjReason').value = '';
-    TAB_LOADERS.adjust(); // 刷新账户下拉中的余额展示
+    TAB_LOADERS.adjust(); // 刷新账户下拉与最近调账记录
   } catch (err) { toast(err.message, 'err'); }
 });
 
