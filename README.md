@@ -18,6 +18,8 @@ cd webui && pnpm install --registry=https://registry.npmmirror.com && cd ..
 # AUTH_SECRET 本机随机)并自动播种演示库;之后每次运行都是全量重启当前代码。
 # (启动演示.bat 需在 cmd/资源管理器里运行;Git Bash 下用 cmd //c 启动演示.bat)
 启动演示.bat
+# 启动后只保留一个进度窗口,四个服务在后台无窗口运行;日志在 logs/ 下。
+# 关掉进度窗口不影响服务,停止服务请运行 停止演示.bat。
 
 # —— 或手动分步 ——
 python -m venv .venv
