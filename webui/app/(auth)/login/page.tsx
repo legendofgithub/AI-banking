@@ -149,7 +149,24 @@ export default function LoginPage() {
         return;
       }
       storeBankAuth(json.token, json);
-      router.push("/");
+      // 手机登录后加入电脑端当前会话(与扫码登录同一口径);电脑端正常回首页
+      let target = "/";
+      if (typeof window !== "undefined" && window.innerWidth < 768) {
+        try {
+          const syncRes = await fetch(`${bankAgentBase()}/api/sync/state`, {
+            headers: { "x-bank-token": json.token },
+          });
+          const sync = (await syncRes.json().catch(() => null)) as {
+            thread_id?: string | null;
+          } | null;
+          if (sync?.thread_id) {
+            target = `/chat/${encodeURIComponent(sync.thread_id)}`;
+          }
+        } catch {
+          // 同步接口不可用时仍回首页,不阻断登录
+        }
+      }
+      router.push(target);
     } catch {
       setError("无法连接服务器,请稍后重试");
     } finally {

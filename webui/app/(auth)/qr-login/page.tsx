@@ -62,10 +62,29 @@ function QrLoginInner() {
         storeBankAuth(json.token, json);
         setNickname(json.nickname ?? "");
         setState("ok");
-        // 给"登录成功"一个可见瞬间再进首页,避免白屏式的突兀跳转
+        // 手机加入电脑端"当前会话":扫码登录后直接落到同一会话,不用手动找
+        // (没有当前会话/接口失败则回首页,不阻断登录)
+        let target = "/";
+        try {
+          const syncRes = await fetch(`${bankAgentBase()}/api/sync/state`, {
+            headers: { "x-bank-token": json.token },
+          });
+          const sync = (await syncRes.json().catch(() => null)) as {
+            thread_id?: string | null;
+          } | null;
+          if (sync?.thread_id) {
+            target = `/chat/${encodeURIComponent(sync.thread_id)}`;
+          }
+        } catch {
+          // 保持首页落地
+        }
+        if (cancelled) {
+          return;
+        }
+        // 给"登录成功"一个可见瞬间再跳转,避免白屏式的突兀
         setTimeout(() => {
           if (!cancelled) {
-            router.replace("/");
+            router.replace(target);
           }
         }, 600);
       } catch {

@@ -57,6 +57,12 @@ try {
   await page.getByRole("textbox", { name: /登录密码/ }).fill(PASSWORD);
   await page.getByRole("button", { exact: false, name: /登录/ }).click();
   await page.waitForSelector("textarea", { timeout: 30_000 });
+  // 手机登录会自动加入电脑端当前会话;本用例专门从首页走建议胶囊,主动回首页
+  await page.waitForTimeout(1200);
+  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="suggested-actions"]', {
+    timeout: 30_000,
+  });
   await page.waitForTimeout(3000); // 等水合
   await page.screenshot({ path: shot("mobile-t1_登录后首页") });
   await noHorizontalOverflow("T1 首页");
