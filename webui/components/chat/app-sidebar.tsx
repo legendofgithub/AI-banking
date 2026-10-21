@@ -53,6 +53,13 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
@@ -75,12 +82,8 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     toggleSidebar();
   }, [toggleSidebar]);
 
-  const handleNewChat = useCallback(() => {
-    setOpenMobile(false);
-    router.push("/");
-  }, [router, setOpenMobile]);
-
-  // 手机端「+」:先命名再建会话;名称最长 10 个字(前后端同口径)
+  // 新建会话(PC「New chat」与手机端「+」同一条流程):先命名再建会话,
+  // 名称最长 10 个字(前后端同口径),防止自动标题把会话列表弄乱。
   const openNewChat = useCallback(() => {
     setNewChatOpen(true);
     setNewChatTitle("");
@@ -92,6 +95,17 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     setNewChatTitle("");
     setCreateError("");
   }, []);
+
+  const handleNewChatDialogChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        openNewChat();
+      } else {
+        cancelNewChat();
+      }
+    },
+    [cancelNewChat, openNewChat]
+  );
 
   const handleQueryChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     setQuery(e.target.value);
@@ -142,16 +156,17 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     [creating, newChatTitle, router, setOpenMobile]
   );
 
-  // 弹窗关闭即清场:下次打开是干净的搜索/列表状态
+  // 手机端弹窗关闭即清场:下次打开是干净的搜索/列表状态
+  // (桌面端命名弹窗用 onOpenChange 自己收尾,不受 openMobile 影响)
   useEffect(() => {
-    if (!openMobile) {
+    if (isMobile && !openMobile) {
       setQuery("");
       setNewChatOpen(false);
       setNewChatTitle("");
       setCreateError("");
       setCreating(false);
     }
-  }, [openMobile]);
+  }, [isMobile, openMobile]);
 
   const handleShowDeleteAllDialog = useCallback(() => {
     setShowDeleteAllDialog(true);
@@ -289,7 +304,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                   <SidebarMenuItem>
                     <SidebarMenuButton
                       className="h-8 rounded-lg border border-sidebar-border text-[13px] text-sidebar-foreground/70 transition-colors duration-150 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                      onClick={handleNewChat}
+                      onClick={openNewChat}
                       tooltip="New Chat"
                     >
                       <PenSquareIcon className="size-4" />
@@ -319,6 +334,59 @@ export function AppSidebar({ user }: { user: User | undefined }) {
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
+
+      {isMobile ? null : (
+        <Dialog onOpenChange={handleNewChatDialogChange} open={newChatOpen}>
+          <DialogContent
+            className="sm:max-w-sm"
+            data-testid="pc-new-chat-dialog"
+          >
+            <DialogHeader>
+              <DialogTitle>新建会话</DialogTitle>
+              <DialogDescription>
+                先给会话起个名字,最多 10 个字;创建后不会被首条消息自动改名。
+              </DialogDescription>
+            </DialogHeader>
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={handleCreateNamedChat}
+            >
+              <div className="relative">
+                <Input
+                  aria-label="会话名称"
+                  autoFocus
+                  className="rounded-lg pr-12"
+                  data-testid="pc-session-name-input"
+                  maxLength={10}
+                  onChange={handleTitleChange}
+                  placeholder="例如:转账与账单整理"
+                  value={newChatTitle}
+                />
+                <span className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[10px] text-muted-foreground">
+                  {newChatTitle.length}/10
+                </span>
+              </div>
+              {createError ? (
+                <p className="rounded-md bg-red-50 px-2.5 py-1.5 text-[11px] text-red-600 dark:bg-red-950/40 dark:text-red-300">
+                  {createError}
+                </p>
+              ) : null}
+              <div className="flex justify-end gap-2">
+                <Button onClick={cancelNewChat} type="button" variant="ghost">
+                  取消
+                </Button>
+                <Button
+                  data-testid="pc-session-create-button"
+                  disabled={!newChatTitle.trim() || creating}
+                  type="submit"
+                >
+                  {creating ? "创建中…" : "创建并进入"}
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
 
       <AlertDialog
         onOpenChange={setShowDeleteAllDialog}

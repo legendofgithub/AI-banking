@@ -51,6 +51,50 @@ try {
   });
   console.log("T1 登录 + 首页建议胶囊(PC 顶栏无可见性切换): 通过");
 
+  // ---- T1b PC「New chat」强制先命名(≤10 字)后建会话 ----
+  await page.getByRole("button", { name: /New chat/i }).first().click();
+  const newChatDialog = page.locator('[data-testid="pc-new-chat-dialog"]');
+  await newChatDialog.waitFor({ timeout: 10_000 });
+  const nameInput = page.locator('[data-testid="pc-session-name-input"]');
+  const createSessionBtn = page.locator(
+    '[data-testid="pc-session-create-button"]'
+  );
+  if (!(await createSessionBtn.isDisabled())) {
+    throw new Error("T1b: 名称为空时「创建并进入」应禁用");
+  }
+  await nameInput.fill("一二三四五六七八九十甲"); // 11 字应截到 10
+  if ((await nameInput.inputValue()).length !== 10) {
+    throw new Error("T1b: 会话名称未限制 10 字");
+  }
+  const sessionName = `PC命名${String(Date.now()).slice(-6)}`; // 8 字
+  await nameInput.fill(sessionName);
+  await createSessionBtn.click();
+  await newChatDialog.waitFor({ state: "hidden", timeout: 10_000 });
+  await page.waitForURL(/\/chat\//, { timeout: 15_000 });
+  await page.waitForTimeout(1200);
+  const threadId = page.url().split("/chat/")[1];
+  const token = await page.evaluate(() =>
+    window.localStorage.getItem("bank-token")
+  );
+  const threadsRes = await page.request.get(
+    "http://127.0.0.1:8800/api/threads?limit=200",
+    { headers: { "x-bank-token": token ?? "" } }
+  );
+  const threads = await threadsRes.json();
+  const named = threads.chats?.find((chat) => chat.id === threadId);
+  if (!named || named.title !== sessionName) {
+    throw new Error(
+      `T1b: 会话标题未按用户命名保存 (thread=${threadId} title=${named?.title})`
+    );
+  }
+  console.log(`T1b PC 新建会话强制命名(${sessionName}): 通过`);
+
+  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="suggested-actions"]', {
+    timeout: 30_000,
+  });
+  await page.waitForTimeout(1500);
+
   // ---- T2 点「我要转账」自动弹出收款人列表 ----
   await page.getByRole("button", { exact: true, name: "我要转账" }).click();
   const dialog = page.locator('[data-testid="payee-picker"]');
