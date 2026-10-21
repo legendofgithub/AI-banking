@@ -20,6 +20,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *   data-linkage-plan           跨场景联动计划确认卡(预算锁定闸门,金色系)
  *   data-linkage-action         联动到期动作确认卡(逐项购买闸门,金色系)
  *   data-plan                   生日预算计划确认卡(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
+ *   data-analysis-plan          Agent Core 只读分析计划卡(目标/事实行/步骤/复盘/上次记忆,无按钮)
  *   data-wealth-confirmation    理财确认卡(kind=subscribe|redeem;order=产品/金额/
  *                               费率/锁定期/风险/付款账户 或 持仓/估值/费用/到手)
  *   data-card-confirmation      卡片确认卡(kind=apply|limits|status;card=card_id/
@@ -137,6 +138,39 @@ interface ContactCandidate {
   note?: string;
   phone?: string;
   relation?: string;
+}
+
+/*
+ * Agent Core 只读分析计划卡(agent/analysis.py → data-analysis-plan)。
+ * 与金色闸门卡的区别:它**没有任何按钮**——分析结论只做展示,动钱仍走各自闸门。
+ * facts 是后端算好的事实行(label/value/hint),前端不做任何金额运算。
+ */
+interface AnalysisFactRow {
+  hint?: string | null;
+  label?: string;
+  value?: string;
+}
+
+interface AnalysisStep {
+  gate?: string | null;
+  id?: string;
+  risk?: string;
+  skill?: string;
+  status?: string;
+  title?: string;
+}
+
+interface AnalysisPlanData {
+  facts?: AnalysisFactRow[];
+  goal?: string;
+  hint?: string;
+  intent?: string;
+  memory_used?: string[];
+  plan_id?: string;
+  plan_version?: number;
+  reflection?: { status?: string; summary?: string };
+  steps?: AnalysisStep[];
+  trace?: Array<{ at?: string; note?: string; phase?: string }>;
 }
 
 /*
@@ -1293,6 +1327,124 @@ function AskSlot({ data }: { data: { missing?: string[] } }) {
   );
 }
 
+const ANALYSIS_STATUS_CN: Record<string, string> = {
+  blocked: "被拦下",
+  delegated: "已转交链路",
+  done: "已完成",
+  failed: "未通过",
+  pending: "待执行",
+  running: "执行中",
+  skipped: "已跳过",
+};
+
+const ANALYSIS_RISK_STYLE: Record<
+  string,
+  { className: string; label: string }
+> = {
+  HIGH: { className: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300", label: "需密码" },
+  LOW: { className: "bg-muted text-muted-foreground", label: "低" },
+  MED: { className: "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300", label: "中" },
+  READ: { className: "bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300", label: "只读" },
+};
+
+/*
+ * Agent Core 只读分析计划卡:目标 → 事实行 → 步骤 → 复盘摘要 → 上次记忆。
+ * 只读,不带任何确认按钮:要取消订阅/申购请另行发起,仍要过支付密码。
+ */
+function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
+  const facts = data.facts ?? [];
+  const steps = data.steps ?? [];
+  const memory = data.memory_used ?? [];
+  const reflection = data.reflection ?? {};
+  return (
+    <div className="w-[min(100%,420px)] rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-50 to-blue-50 p-4 shadow-[var(--shadow-card)] dark:border-sky-500/30 dark:from-sky-950/30 dark:to-blue-950/20">
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-sky-700 dark:text-sky-300">
+        <span aria-hidden>🧭</span>
+        {data.intent === "wealth" ? "理财持仓分析" : "账单分析"}
+        {data.plan_version && data.plan_version > 1 ? (
+          <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground dark:bg-sky-950/40">
+            第 {data.plan_version} 版
+          </span>
+        ) : null}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <Row label="目标" value={data.goal} />
+        {facts.map((row, index) => (
+          <Row
+            key={`${row.label ?? "fact"}-${index}`}
+            label={row.label ?? ""}
+            value={
+              <span>
+                {row.value}
+                {row.hint ? (
+                  <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                    ({row.hint})
+                  </span>
+                ) : null}
+              </span>
+            }
+          />
+        ))}
+      </div>
+      {steps.length ? (
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-xs text-muted-foreground">计划步骤</div>
+          {steps.map((step, index) => {
+            const risk = ANALYSIS_RISK_STYLE[step.risk ?? ""] ?? {
+              className: "bg-muted text-muted-foreground",
+              label: step.risk || "未知",
+            };
+            return (
+              <div
+                className="flex items-start justify-between gap-3 rounded-md bg-sky-100/50 px-2 py-1 text-[13px] dark:bg-sky-900/20"
+                key={step.id ?? index}
+              >
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  <span className="mr-1 text-muted-foreground">
+                    {index + 1}.
+                  </span>
+                  {step.title}
+                  <span className="ml-1 text-[11px] text-muted-foreground">
+                    {ANALYSIS_STATUS_CN[step.status ?? ""] ?? step.status}
+                  </span>
+                </span>
+                <span
+                  className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${risk.className}`}
+                >
+                  {risk.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {reflection.summary ? (
+        <div className="mt-2 rounded-md bg-white/60 px-2 py-1 text-xs text-muted-foreground [overflow-wrap:anywhere] dark:bg-sky-950/30">
+          复盘:{reflection.summary}
+        </div>
+      ) : null}
+      {memory.length ? (
+        <div className="mt-2 flex flex-wrap gap-1">
+          <span className="text-xs text-muted-foreground">上次记忆:</span>
+          {memory.map((item) => (
+            <span
+              className="rounded-full bg-sky-100/70 px-1.5 py-0.5 text-[11px] text-sky-700 dark:bg-sky-900/30 dark:text-sky-200"
+              key={item}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {data.hint ? (
+        <div className="mt-2 text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+          {data.hint}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   if (type === "data-transfer-confirmation") {
     return <TransferCard data={(data ?? {}) as TransferCardData} />;
@@ -1344,6 +1496,9 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   }
   if (type === "data-subscription-precheck") {
     return <PrecheckCard data={(data ?? {}) as PrecheckView} />;
+  }
+  if (type === "data-analysis-plan") {
+    return <AnalysisPlanCard data={(data ?? {}) as AnalysisPlanData} />;
   }
   if (type === "data-ask-slot") {
     return <AskSlot data={(data ?? {}) as { missing?: string[] }} />;
