@@ -104,6 +104,15 @@ def mask_id_card(id_card: str) -> str:
 
 # ---------------------------------------------------------------- 身份证
 
+def is_id_card_shape(id_card: str) -> bool:
+    """演示阶段：只校验 18 位形状（17 位数字 + 数字/X），不校验 GB 11643 校验码。
+
+    正式实名 KYC 必须换回 is_valid_id_card()；当前演示允许任意 18 位假证件号，
+    但仍受 users.id_card 唯一索引约束（一张证件一个账户）。
+    """
+    return isinstance(id_card, str) and bool(_ID_CARD_RE.fullmatch(id_card))
+
+
 def is_valid_id_card(id_card: str) -> bool:
     """18 位二代身份证格式 + GB 11643 校验码核验（大小写 X 均接受）。"""
     if not isinstance(id_card, str) or not _ID_CARD_RE.fullmatch(id_card):

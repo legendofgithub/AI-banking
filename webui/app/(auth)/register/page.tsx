@@ -19,30 +19,45 @@ import {
 } from "@/hooks/use-bank-auth";
 
 /*
- * 注册页(实名口径):真实姓名 + 身份证号(18 位含校验位) + 手机号(必填,
+ * 注册页(实名口径):真实姓名 + 身份证号(18 位格式) + 手机号(必填,
  * 即登录账号) + 邮箱(选填) + 登录密码(实时策略清单) + 确认登录密码
  * + 支付密码(6 位纯数字) + 确认支付密码 → POST {agentBase}/api/auth/register。
- * 前端实时校验与后端同规则(身份证 GB 11643 校验码;登录密码 ≥8 位且
- * 大写/小写/数字/符号;支付密码 6 位纯数字),不满足或两次输入不一致时
- * 禁用提交;后端 400 的中文 error 直接红字展示。
+ * 前端实时校验与后端同规则(测试阶段身份证只校验 18 位形状,不校验 GB 11643
+ * 校验码;登录密码 ≥8 位且大写/小写/数字/符号;支付密码 6 位纯数字)。
+ * 点击注册时如仍有不合格字段:滚动聚焦到第一处,并让所有不合格字段闪烁两次。
  */
 
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const PHONE_RE = /^1\d{10}$/;
 const ID_CARD_RE = /^\d{17}[\dXx]$/;
-// GB 11643-1999:前 17 位 × 权重求和 mod 11 → 校验码(与后端同规则)
-const ID_WEIGHTS = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
-const ID_CHECK_CODES = "10X98765432";
 
-function isValidIdCard(v: string): boolean {
-  if (!ID_CARD_RE.test(v)) {
-    return false;
+// 演示阶段:只校验 18 位形状(前 17 位数字,末位数字或 X),不校验校验码。
+// 恢复实名 KYC 时改回 GB 11643 校验,并同步后端 agent/auth.py。
+function isIdCardShape(v: string): boolean {
+  return ID_CARD_RE.test(v);
+}
+
+const flashTimers = new WeakMap<HTMLElement, number>();
+
+function flashField(element: HTMLElement | null): void {
+  if (!element) {
+    return;
   }
-  let sum = 0;
-  for (let i = 0; i < 17; i += 1) {
-    sum += Number(v[i]) * ID_WEIGHTS[i];
+  const previous = flashTimers.get(element);
+  if (previous !== undefined) {
+    window.clearTimeout(previous);
   }
-  return ID_CHECK_CODES[sum % 11] === v[17].toUpperCase();
+  element.classList.remove("field-flash");
+  // 强制重排,连续点击也能重新播放两次闪烁
+  element.getBoundingClientRect();
+  element.classList.add("field-flash");
+  flashTimers.set(
+    element,
+    window.setTimeout(() => {
+      element.classList.remove("field-flash");
+      flashTimers.delete(element);
+    }, 1100)
+  );
 }
 
 type RegisterResponse = {
@@ -64,6 +79,7 @@ export default function RegisterPage() {
   const [payPassword, setPayPassword] = useState("");
   const [payPasswordConfirm, setPayPasswordConfirm] = useState("");
   const [error, setError] = useState("");
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleRealNameChange = useCallback(
@@ -118,36 +134,64 @@ export default function RegisterPage() {
   const passwordValid = passwordChecks.every((c) => c.ok);
 
   const payPasswordValid = /^\d{6}$/.test(payPassword);
-  const payConfirmMismatch =
-    payPasswordConfirm.length > 0 && payPasswordConfirm !== payPassword;
-  const passwordConfirmMismatch =
-    passwordConfirm.length > 0 && passwordConfirm !== password;
-
   const realNameValid =
     realName.trim().length >= 2 && realName.trim().length <= 20;
   const idCardDirty = idCard.length > 0;
-  const idCardValid = isValidIdCard(idCard);
+  const idCardValid = isIdCardShape(idCard);
   const phoneDirty = trimmedPhone.length > 0;
   const phoneValid = PHONE_RE.test(trimmedPhone);
   const emailDirty = trimmedEmail.length > 0;
   const emailValid = !emailDirty || EMAIL_RE.test(trimmedEmail);
+  const passwordConfirmInvalid =
+    passwordConfirm.length === 0 || passwordConfirm !== password;
+  const payPasswordConfirmInvalid =
+    payPasswordConfirm.length === 0 || payPasswordConfirm !== payPassword;
 
-  const canSubmit =
-    realNameValid &&
-    idCardValid &&
-    phoneValid &&
-    emailValid &&
-    passwordValid &&
-    password === passwordConfirm &&
-    payPasswordValid &&
-    payPassword === payPasswordConfirm &&
-    !loading;
+  // 标红/闪烁范围:输入过或点过注册后,仍不合格的字段
+  const realNameInvalid =
+    !realNameValid && (submitAttempted || realName.length > 0);
+  const idCardInvalid = !idCardValid && (submitAttempted || idCardDirty);
+  const phoneInvalid = !phoneValid && (submitAttempted || phoneDirty);
+  const emailInvalid = !emailValid && (submitAttempted || emailDirty);
+  const passwordInvalid =
+    !passwordValid && (submitAttempted || password.length > 0);
+  const passwordConfirmInvalidVisible =
+    passwordConfirmInvalid && (submitAttempted || passwordConfirm.length > 0);
+  const payPasswordInvalid =
+    !payPasswordValid && (submitAttempted || payPassword.length > 0);
+  const payPasswordConfirmInvalidVisible =
+    payPasswordConfirmInvalid &&
+    (submitAttempted || payPasswordConfirm.length > 0);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!canSubmit) {
+    if (loading) {
       return;
     }
+    const invalidFieldIds = [
+      !realNameValid && "real-name",
+      !idCardValid && "id-card",
+      !phoneValid && "phone",
+      !emailValid && "email",
+      !passwordValid && "password",
+      passwordConfirmInvalid && "password-confirm",
+      !payPasswordValid && "pay-password",
+      payPasswordConfirmInvalid && "pay-password-confirm",
+    ].filter((value): value is string => Boolean(value));
+
+    setSubmitAttempted(true);
+    if (invalidFieldIds.length > 0) {
+      requestAnimationFrame(() => {
+        const first = document.getElementById(invalidFieldIds[0]);
+        first?.scrollIntoView({ behavior: "smooth", block: "center" });
+        first?.focus({ preventScroll: true });
+        for (const id of invalidFieldIds) {
+          flashField(document.getElementById(id));
+        }
+      });
+      return;
+    }
+
     setError("");
     setLoading(true);
     try {
@@ -186,10 +230,15 @@ export default function RegisterPage() {
         填写以下信息,开通你的银行账户
       </p>
 
-      <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
+      <form
+        className="mt-6 flex flex-col gap-4"
+        noValidate
+        onSubmit={handleSubmit}
+      >
         <div className="flex flex-col gap-2">
           <Label htmlFor="real-name">真实姓名</Label>
           <Input
+            aria-invalid={realNameInvalid}
             id="real-name"
             maxLength={20}
             onChange={handleRealNameChange}
@@ -197,11 +246,17 @@ export default function RegisterPage() {
             required
             value={realName}
           />
+          {realNameInvalid ? (
+            <p className="text-xs text-destructive">
+              请输入 2-20 个字符的真实姓名
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="id-card">身份证号</Label>
           <Input
+            aria-invalid={idCardInvalid}
             autoComplete="off"
             className="font-mono"
             id="id-card"
@@ -212,9 +267,9 @@ export default function RegisterPage() {
             required
             value={idCard}
           />
-          {idCardDirty && !idCardValid ? (
+          {idCardInvalid ? (
             <p className="text-xs text-destructive">
-              身份证号不合法(需 18 位且校验位正确)
+              身份证号需为 18 位(前 17 位数字,末位数字或 X);测试阶段不校验校验码
             </p>
           ) : null}
         </div>
@@ -222,6 +277,7 @@ export default function RegisterPage() {
         <div className="flex flex-col gap-2">
           <Label htmlFor="phone">手机号</Label>
           <Input
+            aria-invalid={phoneInvalid}
             autoComplete="tel"
             id="phone"
             inputMode="numeric"
@@ -231,7 +287,7 @@ export default function RegisterPage() {
             required
             value={phone}
           />
-          {phoneDirty && !phoneValid ? (
+          {phoneInvalid ? (
             <p className="text-xs text-destructive">
               请输入合法的手机号(1 开头 11 位)
             </p>
@@ -243,6 +299,7 @@ export default function RegisterPage() {
             邮箱<span className="text-muted-foreground">(选填)</span>
           </Label>
           <Input
+            aria-invalid={emailInvalid}
             autoComplete="email"
             id="email"
             onChange={handleEmailChange}
@@ -250,7 +307,7 @@ export default function RegisterPage() {
             type="email"
             value={email}
           />
-          {emailDirty && !emailValid ? (
+          {emailInvalid ? (
             <p className="text-xs text-destructive">邮箱格式不正确</p>
           ) : null}
         </div>
@@ -258,6 +315,7 @@ export default function RegisterPage() {
         <div className="flex flex-col gap-2">
           <Label htmlFor="password">登录密码</Label>
           <Input
+            aria-invalid={passwordInvalid}
             autoComplete="new-password"
             id="password"
             onChange={handlePasswordChange}
@@ -281,11 +339,15 @@ export default function RegisterPage() {
               </li>
             ))}
           </ul>
+          {passwordInvalid ? (
+            <p className="text-xs text-destructive">登录密码未满足全部要求</p>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="password-confirm">确认登录密码</Label>
           <Input
+            aria-invalid={passwordConfirmInvalidVisible}
             autoComplete="new-password"
             id="password-confirm"
             onChange={handlePasswordConfirmChange}
@@ -294,14 +356,19 @@ export default function RegisterPage() {
             type="password"
             value={passwordConfirm}
           />
-          {passwordConfirmMismatch ? (
-            <p className="text-xs text-destructive">两次输入的登录密码不一致</p>
+          {passwordConfirmInvalidVisible ? (
+            <p className="text-xs text-destructive">
+              {passwordConfirm.length === 0
+                ? "请再次输入登录密码"
+                : "两次输入的登录密码不一致"}
+            </p>
           ) : null}
         </div>
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="pay-password">支付密码</Label>
           <Input
+            aria-invalid={payPasswordInvalid}
             className="w-36 tracking-[0.35em]"
             id="pay-password"
             inputMode="numeric"
@@ -318,11 +385,15 @@ export default function RegisterPage() {
           <p className="text-xs text-muted-foreground">
             6 位纯数字,动钱与敏感操作时使用
           </p>
+          {payPasswordInvalid ? (
+            <p className="text-xs text-destructive">支付密码需为 6 位数字</p>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-2">
           <Label htmlFor="pay-password-confirm">确认支付密码</Label>
           <Input
+            aria-invalid={payPasswordConfirmInvalidVisible}
             className="w-36 tracking-[0.35em]"
             id="pay-password-confirm"
             inputMode="numeric"
@@ -334,8 +405,12 @@ export default function RegisterPage() {
             type="text"
             value={payPasswordConfirm}
           />
-          {payConfirmMismatch ? (
-            <p className="text-xs text-destructive">两次输入的支付密码不一致</p>
+          {payPasswordConfirmInvalidVisible ? (
+            <p className="text-xs text-destructive">
+              {payPasswordConfirm.length === 0
+                ? "请再次输入支付密码"
+                : "两次输入的支付密码不一致"}
+            </p>
           ) : null}
         </div>
 
@@ -347,7 +422,7 @@ export default function RegisterPage() {
 
         <Button
           className="rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
-          disabled={!canSubmit}
+          disabled={loading}
           type="submit"
         >
           {loading ? "注册中…" : "注册"}

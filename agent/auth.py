@@ -20,7 +20,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from bank_core.auth_core import (hash_password, init_auth_tables,
-                                 is_valid_id_card, mask_identifier,
+                                 is_id_card_shape, mask_identifier,
                                  verify_password, verify_pay_password)
 from bank_core.db import migrate_users_kyc
 
@@ -111,8 +111,10 @@ def register(conn: sqlite3.Connection, *, real_name: str, id_card: str,
     if not (2 <= len(real_name) <= 20):
         raise AuthError("真实姓名需 2-20 个字符")
     id_card = (id_card or "").strip().upper()
-    if not is_valid_id_card(id_card):
-        raise AuthError("身份证号不合法（需 18 位且校验位正确）")
+    # 演示阶段临时放宽：只校验 18 位形状，不校验 GB 11643 校验码。
+    # 恢复实名 KYC 时换回 bank_core.auth_core.is_valid_id_card(id_card)。
+    if not is_id_card_shape(id_card):
+        raise AuthError("身份证号需为 18 位（测试阶段不校验校验码）")
     if conn.execute("SELECT 1 FROM users WHERE id_card=?", (id_card,)).fetchone():
         raise AuthError("该身份证号已注册，请直接登录")
     phone = (phone or "").strip()
