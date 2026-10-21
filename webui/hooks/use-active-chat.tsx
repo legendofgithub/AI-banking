@@ -28,8 +28,10 @@ import { toast } from "@/components/chat/toast";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { getStoredToken } from "@/hooks/use-bank-auth";
 import { useChatModel } from "@/hooks/use-chat-model";
+import { useDeviceSync } from "@/hooks/use-device-sync";
 import { getActiveConnection } from "@/lib/ai/byok";
 import type { Vote } from "@/lib/db/schema";
+import { getClientId } from "@/lib/device-client";
 import { ChatbotError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
@@ -186,6 +188,8 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
               : {}),
             // 登录态:bank-token 随请求生效(未登录不带,后端按匿名演示处理)
             ...(getStoredToken() ? { token: getStoredToken() } : {}),
+            // 跨设备同步:标记本轮写入来自哪个设备/标签页
+            client_id: getClientId(),
             messages: request.messages
               .map(toPlainMessage)
               .filter((message) => message.content.length > 0),
@@ -195,6 +199,16 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
         };
       },
     }),
+  });
+
+  // 手机 ↔ 电脑同步:跟随当前会话、拉取对方产生的新消息
+  useDeviceSync({
+    agentBase,
+    chatId,
+    isNewChat,
+    setMessages,
+    status,
+    token: getStoredToken(),
   });
 
   useEffect(() => {

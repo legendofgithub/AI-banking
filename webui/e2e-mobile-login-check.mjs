@@ -1,7 +1,6 @@
-// 手机扫码登录端到端实测(2026-10-20):
-//   电脑端点右上角「手机端登录」→ 出二维码(内嵌局域网 URL+一次性票据)→
-//   用第二个浏览器上下文模拟手机 375px 扫码打开 → 免密登录成功跳首页 →
-//   同一张票再扫被拒(一次性)。
+// 手机扫码登录 + 跨设备同步端到端实测(2026-10-21):
+//   电脑端建会话并发消息 → 出二维码 → 手机扫码登录后自动加入同一会话并看到
+//   电脑消息 → 手机输入新消息 → 电脑端自动看到(反向同步)→ 旧票重扫被拒。
 // 用法:cd webui && node e2e-mobile-login-check.mjs   (需 3000/8800 已起)
 // 注:真机扫码验证需手机与电脑同一 Wi-Fi,这里用第二个上下文等效覆盖
 // 「扫码打开 URL → 换 token → 存登录态 → 进首页」的完整链路。
@@ -49,6 +48,26 @@ try {
     );
   }
 
+  // ---- T1b 电脑端建立一个会话并输入内容,供手机扫码后自动加入 ----
+  const suffix = String(Date.now()).slice(-6);
+  const sessionName = `同步${suffix}`;
+  const desktopToken = `桌面暗号${suffix}`;
+  const mobileToken = `手机暗号${suffix}`;
+  await page.getByRole("button", { name: /New chat/i }).first().click();
+  const newChatDialog = page.locator('[data-testid="pc-new-chat-dialog"]');
+  await newChatDialog.waitFor({ timeout: 10_000 });
+  await page.locator('[data-testid="pc-session-name-input"]').fill(sessionName);
+  await page.locator('[data-testid="pc-session-create-button"]').click();
+  await newChatDialog.waitFor({ state: "hidden", timeout: 10_000 });
+  await page.waitForURL(/\/chat\//, { timeout: 15_000 });
+  await page.waitForSelector("textarea", { timeout: 30_000 });
+  await page.waitForTimeout(1000);
+  const desktopThreadId = page.url().split("/chat/")[1];
+  await page.fill("textarea", `请记住 ${desktopToken} 这个暗号`);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(6000); // 等消息落 checkpoint(手机端初始历史要用)
+  console.log(`T1b 电脑端会话就绪(${sessionName}/${desktopThreadId.slice(0, 8)}): 通过`);
+
   await mobileBtn.click();
   const qrBox = page.locator('[data-testid="mobile-qr"]');
   await qrBox.waitFor({ timeout: 15_000 });
@@ -76,6 +95,11 @@ try {
   }
   await page.screenshot({ path: shot("t1_电脑端二维码") });
   console.log(`T1 电脑端出码(局域网 URL + PNG ${naturalWidth}px): 通过`);
+  // 关掉二维码弹窗,让电脑端回到可交互状态(后续还要在这里看同步消息/切会话)
+  await page.keyboard.press("Escape");
+  await page
+    .locator('[data-testid="mobile-login-dialog"]')
+    .waitFor({ state: "hidden", timeout: 5000 });
 
   // ---- T2 模拟手机扫码:375px 上下文打开二维码里的 URL → 免密登录 ----
   const phoneCtx = await browser.newContext({
@@ -91,7 +115,16 @@ try {
   await phone.waitForSelector('[data-testid="qr-login-ok"]', {
     timeout: 20_000,
   });
-  await phone.waitForSelector("textarea", { timeout: 30_000 }); // 跳回首页
+  // 扫码登录后应自动落到电脑端当前会话(而不是停在首页)
+  await phone.waitForURL(new RegExp(`/chat/${desktopThreadId}`), {
+    timeout: 30_000,
+  });
+  await phone.waitForSelector("textarea", { timeout: 30_000 });
+  await phone
+    .locator('[data-role="user"]')
+    .filter({ hasText: desktopToken })
+    .first()
+    .waitFor({ timeout: 20_000 });
   const nickname = await phone.evaluate(() =>
     window.localStorage.getItem("bank-nickname")
   );
@@ -104,8 +137,10 @@ try {
   if (!token || token.length < 16) {
     throw new Error("T2: 手机端没有拿到会话 token");
   }
-  await phone.screenshot({ path: shot("t2_手机扫码登录成功") });
-  console.log(`T2 手机扫码免密登录(昵称=${nickname}): 通过`);
+  await phone.screenshot({ path: shot("t2_手机扫码登录并加入电脑端会话") });
+  console.log(
+    `T2 扫码登录后自动加入电脑端会话(昵称=${nickname},看到「${desktopToken}」): 通过`
+  );
 
   // ---- T3 同一张票再扫:一次性,必须被拒 ----
   const phone2Ctx = await browser.newContext({ viewport: { width: 375, height: 812 } });
@@ -117,19 +152,59 @@ try {
   await phone2.screenshot({ path: shot("t3_旧票重扫被拒") });
   console.log("T3 票据一次性(重扫被拒): 通过");
 
-  // ---- T4 手机端登录态可用:转账入口弹收款人(登录数据源通了) ----
+  // ---- T4 反向同步:手机输入 → 电脑端看到;桌面留在同一会话 ----
+  await phone.fill("textarea", `请记住 ${mobileToken} 这个暗号`);
+  await phone.keyboard.press("Enter");
   await phone
-    .getByRole("button", { exact: true, name: "我要转账" })
-    .click();
-  await phone.locator('[data-testid="payee-row"]').first().waitFor({
+    .locator('[data-role="user"]')
+    .filter({ hasText: mobileToken })
+    .first()
+    .waitFor({ timeout: 15_000 });
+  await page
+    .locator('[data-role="user"]')
+    .filter({ hasText: mobileToken })
+    .first()
+    .waitFor({ timeout: 30_000 });
+  await page.screenshot({ path: shot("t4_电脑端看到手机输入") });
+  console.log(
+    `T4 手机输入「${mobileToken}」已同步到电脑端: 通过`
+  );
+
+  // ---- T5 电脑端切换/新建会话 → 手机自动跟随 ----
+  await page.waitForTimeout(1500);
+  const switchedName = `切换${suffix}`;
+  await page.getByRole("button", { name: /New chat/i }).first().click();
+  await newChatDialog.waitFor({ timeout: 10_000 });
+  await page.locator('[data-testid="pc-session-name-input"]').fill(switchedName);
+  await page.locator('[data-testid="pc-session-create-button"]').click();
+  await newChatDialog.waitFor({ state: "hidden", timeout: 10_000 });
+  await page.waitForURL(/\/chat\//, { timeout: 15_000 });
+  const switchedThreadId = page.url().split("/chat/")[1];
+  await phone.waitForURL(new RegExp(`/chat/${switchedThreadId}`), {
     timeout: 15_000,
   });
-  await phone.screenshot({ path: shot("t4_手机端登录态可用") });
-  console.log("T4 手机端登录态可用(收款人列表拉到): 通过");
+  await phone.screenshot({ path: shot("t5_手机跟随电脑切换会话") });
+  console.log("T5 电脑切换会话,手机自动跟随: 通过");
+
+  // ---- T6 手机发起转账 → 电脑端同步出现转账确认卡(含支付密码框) ----
+  await phone.fill("textarea", "给张三转1元");
+  await phone.keyboard.press("Enter");
+  await page.waitForSelector('input[aria-label="支付密码"]', {
+    timeout: 60_000,
+  });
+  await page.locator('input[aria-label="支付密码"]').waitFor({
+    state: "visible",
+    timeout: 10_000,
+  });
+  await page.screenshot({ path: shot("t6_电脑端同步转账确认卡") });
+  // 取消这笔测试转账,避免留下悬空单
+  await page.getByRole("button", { exact: true, name: "取消" }).click();
+  await page.waitForSelector("text=/取消|已取消/", { timeout: 30_000 });
+  console.log("T6 手机发起转账,电脑端同步出现确认卡并可取消: 通过");
 
   await phoneCtx.close();
   await phone2Ctx.close();
-  console.log("E2E MOBILE LOGIN ALL PASSED");
+  console.log("E2E MOBILE LOGIN + CROSS-DEVICE SYNC ALL PASSED");
 } finally {
   await browser.close();
 }

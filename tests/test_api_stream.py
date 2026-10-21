@@ -355,6 +355,13 @@ def test_history_shows_pending_gate_question(tmp_path):
         texts = [m["parts"][0]["text"] for m in msgs]
         assert texts[0] == "给张三转 500 元"
         assert texts[-1].startswith("请确认转账")  # 闸门问题可见,不再是"没理人"
+        # 闸门卡片随历史恢复(跨设备/刷新都能看到转账确认卡,不只是文本)
+        pending_parts = [p for m in msgs for p in m["parts"]]
+        card = next((p for p in pending_parts
+                     if p.get("type") == "data-transfer-confirmation"), None)
+        assert card is not None
+        assert card["data"]["amount_yuan"] == "500.00"
+        assert card["data"]["pay_required"] is True
 
         _post_chat(client, "888888", "api-gq", token=_tok)
         msgs2 = client.get("/api/history",
@@ -362,6 +369,9 @@ def test_history_shows_pending_gate_question(tmp_path):
                            headers={"x-bank-token": _tok}).json()["messages"]
         texts2 = [m["parts"][0]["text"] for m in msgs2]
         assert any("已向张三" in t for t in texts2)
+        # 闸门已处理:历史里不再残留旧确认卡
+        assert not any(p.get("type") == "data-transfer-confirmation"
+                       for m in msgs2 for p in m["parts"])
         # 无连续重复消息(补写的问题在 resume 回流后被去重)
         assert all(texts2[i] != texts2[i - 1] for i in range(1, len(texts2)))
 
@@ -547,6 +557,57 @@ def test_thread_create_named_and_search(tmp_path):
                        headers=headers)
         assert r.json()["total"] == 0
         assert r.json()["chats"] == []
+
+
+# ----------------------------------------------------------------- 跨设备同步
+
+def test_device_sync_state_revision_and_active(tmp_path):
+    """跨设备同步:当前会话跟随、revision 每轮 +2、最后写入 client_id 可识别。"""
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "同步回复"])
+    headers = {"x-bank-token": tok}
+    with client:
+        # 未登录不参与同步
+        assert client.get("/api/sync/state").status_code == 401
+        assert client.post("/api/sync/active", json={
+            "thread_id": "t-sync"}).status_code == 401
+
+        r = client.get("/api/sync/state", headers=headers)
+        assert r.json()["thread_id"] is None
+
+        # 不存在/不属于自己的会话不能设为 active(同步提示尽力而为,返回 ok=false)
+        r = client.post("/api/sync/active", headers=headers, json={
+            "thread_id": "no-such"})
+        assert r.status_code == 200 and r.json()["ok"] is False
+
+        # 发一轮对话:开始与结束各 +1 revision,并记录写入设备
+        r = client.post("/api/chat", json={
+            "messages": [{"role": "user", "content": "你好"}],
+            "thread_id": "t-sync",
+            "token": tok,
+            "client_id": "desktop-tab",
+        })
+        assert r.status_code == 200
+        r = client.get("/api/sync/state", headers=headers)
+        state = r.json()
+        assert state["thread_id"] == "t-sync"
+        assert state["revision"] >= 2
+        assert state["last_client_id"] == "desktop-tab"
+
+        # 新命名会话创建后即成为当前会话(另一台设备应跟过去)
+        created = client.post("/api/threads", headers=headers,
+                              json={"title": "同步新会话"}).json()
+        r = client.get("/api/sync/state", headers=headers)
+        state = r.json()
+        assert state["thread_id"] == created["id"]
+        assert state["title"] == "同步新会话"
+        assert state["revision"] == 0
+
+        # 手动切回旧会话
+        r = client.post("/api/sync/active", headers=headers,
+                        json={"thread_id": "t-sync"})
+        assert r.status_code == 200
+        r = client.get("/api/sync/state", headers=headers)
+        assert r.json()["thread_id"] == "t-sync"
 
 
 # ----------------------------------------------------------------- BYOK / 模型切换

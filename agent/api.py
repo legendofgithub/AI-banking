@@ -131,6 +131,13 @@ class ChatRequest(BaseModel):
     # 登录会话(可选):注册/登录下发的 token;不带=观光模式(闲聊可用,
     # 业务意图被 auth_guard 引导登录)
     token: str | None = Field(default=None, max_length=128)
+    # 设备/标签页标识:跨设备同步时区分"自己写的"与"对方写的"
+    client_id: str | None = Field(default=None, max_length=64)
+
+
+class SyncActiveIn(BaseModel):
+    """当前设备打开的会话(手机/电脑互相跟随)。"""
+    thread_id: str = Field(min_length=1, max_length=128)
 
 
 class ValidateKeyRequest(BaseModel):
@@ -292,7 +299,10 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                  title             TEXT NOT NULL,
                  created_at        TEXT NOT NULL,
                  updated_at        TEXT NOT NULL,
-                 pending_question  TEXT NOT NULL DEFAULT '')""")
+                 pending_question  TEXT NOT NULL DEFAULT '',
+                 pending_payload   TEXT NOT NULL DEFAULT '',
+                 revision          INTEGER NOT NULL DEFAULT 0,
+                 last_client_id    TEXT NOT NULL DEFAULT '')""")
         try:  # 旧库补列(列已存在时忽略)
             await tconn.execute(
                 "ALTER TABLE threads ADD COLUMN pending_question "
@@ -304,6 +314,30 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 "ALTER TABLE threads ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
         except Exception:  # noqa: BLE001
             pass
+        try:  # 跨设备同步:会话内容版本号(每次对话开始/结束递增)
+            await tconn.execute(
+                "ALTER TABLE threads ADD COLUMN revision "
+                "INTEGER NOT NULL DEFAULT 0")
+        except Exception:  # noqa: BLE001
+            pass
+        try:  # 浏览器刷新/另一台设备恢复时重建闸门卡片(interrupt 原始载荷)
+            await tconn.execute(
+                "ALTER TABLE threads ADD COLUMN pending_payload "
+                "TEXT NOT NULL DEFAULT ''")
+        except Exception:  # noqa: BLE001
+            pass
+        try:  # 跨设备同步:最后写入的设备/标签页(自己写的更新不用回拉覆盖本地卡片)
+            await tconn.execute(
+                "ALTER TABLE threads ADD COLUMN last_client_id "
+                "TEXT NOT NULL DEFAULT ''")
+        except Exception:  # noqa: BLE001
+            pass
+        # 每个用户当前正在看的会话:手机扫码登录后自动跟随电脑端所在的会话
+        await tconn.execute(
+            """CREATE TABLE IF NOT EXISTS active_threads (
+                 user_id    INTEGER PRIMARY KEY,
+                 thread_id  TEXT NOT NULL,
+                 updated_at TEXT NOT NULL)""")
         await tconn.commit()
         # 账号库:auth 表建在 bank.db(注册即 users 行,管理后台天然同步);
         # 演示主用户陈明预置凭证(登录 Demo@12345 / 支付 888888,幂等)。
@@ -411,15 +445,29 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             msgs.append({"id": f"m{i}", "role": role,
                          "parts": [{"type": "text", "text": content}]})
         # 本 thread 停在闸门时,把待答问题补成最后一条助手消息
-        # (存在会话目录里;刷新恢复的现场不再是"没理人")
+        # (存在会话目录里;刷新/另一台设备恢复时不再是"没理人")
         prow = await app.state.threads.execute(
-            "SELECT pending_question FROM threads WHERE thread_id=?", (thread_id,))
+            "SELECT pending_question,pending_payload FROM threads "
+            "WHERE thread_id=?", (thread_id,))
         prow_row = await prow.fetchone()
         pending = (prow_row[0] if prow_row else "") or ""
-        if pending and not (msgs and msgs[-1]["role"] == "assistant"
-                            and msgs[-1]["parts"][0]["text"] == pending):
-            msgs.append({"id": "pending", "role": "assistant",
-                         "parts": [{"type": "text", "text": pending}]})
+        pending_payload_raw = (prow_row[1] if prow_row else "") or ""
+        if pending:
+            parts: list[dict] = [{"type": "text", "text": pending}]
+            if pending_payload_raw:
+                try:
+                    payload = json.loads(pending_payload_raw)
+                    if isinstance(payload, dict):
+                        # 恢复闸门卡片(转账/理财/卡片/联系人等),不只恢复文本
+                        parts.extend(await _interrupt_parts(payload, app))
+                except Exception:  # noqa: BLE001 —— 坏载荷只丢卡片,不丢文本
+                    pass
+            if (msgs and msgs[-1]["role"] == "assistant"
+                    and msgs[-1]["parts"][0]["text"] == pending):
+                msgs[-1]["parts"] = parts
+            else:
+                msgs.append({"id": "pending", "role": "assistant",
+                             "parts": parts})
         return {"isReadonly": False, "visibility": "private",
                 "userId": None, "messages": msgs}
 
@@ -865,9 +913,16 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         now = _now_iso()
         await app.state.threads.execute(
             """INSERT INTO threads (thread_id,title,created_at,updated_at,
-                                   pending_question,user_id)
-               VALUES (?,?,?,?, '',?)""",
+                                   pending_question,user_id,revision,last_client_id)
+               VALUES (?,?,?,?, '',?,0,'')""",
             (thread_id, title, now, now, owner))
+        await app.state.threads.execute(
+            """INSERT INTO active_threads (user_id,thread_id,updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 thread_id=excluded.thread_id,
+                 updated_at=excluded.updated_at""",
+            (owner, thread_id, now))
         await app.state.threads.commit()
         return {"id": thread_id, "title": title, "createdAt": now}
 
@@ -938,6 +993,69 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         chats = [{"id": r[0], "title": r[1], "createdAt": r[2],
                   "userId": None, "visibility": "private"} for r in rows]
         return {"chats": chats, "hasMore": has_more}
+
+    # ------------------------------------------------ 跨设备会话同步(手机 ↔ 电脑)
+    @app.get("/api/sync/state")
+    async def sync_state(x_bank_token: str | None = Header(default=None)):
+        """当前用户"正在看的会话"+内容版本号(前端轮询,约 1.5s 一次)。
+
+        active_threads 由打开会话/发消息时写入;缺失时回落到最近活跃会话。
+        revision 在同一轮对话开始/结束时各 +1,另一台设备据此拉取历史。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "登录后才能同步会话"})
+        uid = me["user_id"]
+        cur = await app.state.threads.execute(
+            """SELECT a.thread_id, t.title, t.updated_at, t.revision,
+                      t.last_client_id
+               FROM active_threads a
+               JOIN threads t
+                 ON t.thread_id=a.thread_id AND t.user_id=?
+               WHERE a.user_id=?""",
+            (uid, uid))
+        row = await cur.fetchone()
+        if not row:  # 没有 active 行/会话已被删除:回落到最近活跃会话
+            cur = await app.state.threads.execute(
+                """SELECT thread_id, title, updated_at, revision,
+                          last_client_id
+                   FROM threads WHERE user_id=?
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (uid,))
+            row = await cur.fetchone()
+        if not row:
+            return {"thread_id": None, "title": "", "updated_at": "",
+                    "revision": 0, "last_client_id": ""}
+        return {"thread_id": row[0], "title": row[1], "updated_at": row[2],
+                "revision": int(row[3] or 0), "last_client_id": row[4] or ""}
+
+    @app.post("/api/sync/active")
+    async def sync_active(req: SyncActiveIn,
+                          x_bank_token: str | None = Header(default=None)):
+        """登记当前设备打开的会话;另一台设备轮询到后会跟随切换。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "登录后才能同步会话"})
+        uid = me["user_id"]
+        row = await app.state.threads.execute(
+            "SELECT 1 FROM threads WHERE thread_id=? AND user_id=?",
+            (req.thread_id, uid))
+        if not await row.fetchone():
+            # 同步是"尽力而为"的提示:新会话刚 pushState、thread 行尚未落库时
+            # 会短暂查不到;返回 200+ok=false,避免浏览器控制台刷 404。
+            return {"ok": False, "error": "会话尚未登记"}
+        now = _now_iso()
+        await app.state.threads.execute(
+            """INSERT INTO active_threads (user_id,thread_id,updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 thread_id=excluded.thread_id,
+                 updated_at=excluded.updated_at""",
+            (uid, req.thread_id, now))
+        await app.state.threads.commit()
+        return {"ok": True, "thread_id": req.thread_id}
 
     @app.post("/api/validate-key")
     async def validate_key(req: ValidateKeyRequest) -> dict:
@@ -1035,23 +1153,53 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         return datetime.now().isoformat(timespec="microseconds")
 
     async def _touch_thread(thread_id: str, first_user_text: str,
-                            owner: int = 1) -> None:
+                            owner: int = 1, client_id: str = "") -> None:
         """登记/刷新会话目录:标题取首条用户消息(截断),时间取当下。
 
         owner=会话归属(user_id;观光=0)。已存在的会话不改归属——
         防止别人拿到 thread_id 就把会话挂到自己名下。
+
+        revision 每次对话开始/结束各 +1,跨设备同步靠它判断内容是否有更新;
+        last_client_id 记录最后写入的设备,自己写入的更新不回拉覆盖本地卡片。
+        同时把该用户"当前会话"指向这里,另一台设备会跟随。
         """
         title = first_user_text.strip().replace("\n", " ")
         title = title[:30] + ("…" if len(title) > 30 else "")
         now = _now_iso()
         await app.state.threads.execute(
             """INSERT INTO threads (thread_id,title,created_at,updated_at,
-                                   pending_question,user_id)
-               VALUES (?,?,?,?, '',?)
+                                   pending_question,user_id,revision,last_client_id)
+               VALUES (?,?,?,?, '',?,1,?)
                ON CONFLICT(thread_id) DO UPDATE SET
                  updated_at=excluded.updated_at,
-                 pending_question=''""",
-            (thread_id, title or "新会话", now, now, owner))
+                 pending_question='',
+                 pending_payload='',
+                 revision=revision+1,
+                 last_client_id=excluded.last_client_id""",
+            (thread_id, title or "新会话", now, now, owner, client_id))
+        await app.state.threads.execute(
+            """INSERT INTO active_threads (user_id,thread_id,updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 thread_id=excluded.thread_id,
+                 updated_at=excluded.updated_at""",
+            (owner, thread_id, now))
+        await app.state.threads.commit()
+
+    async def _bump_thread(thread_id: str, owner: int,
+                           client_id: str = "") -> None:
+        """一轮对话结束:revision +1,通知另一台设备拉取最终助手文本。"""
+        now = _now_iso()
+        await app.state.threads.execute(
+            """UPDATE threads SET revision=revision+1, updated_at=?,
+                                  last_client_id=?
+               WHERE thread_id=?""",
+            (now, client_id, thread_id))
+        # 只有该会话仍是用户当前会话时才刷新活跃时间;不抢回被另一台设备切走的焦点
+        await app.state.threads.execute(
+            """UPDATE active_threads SET updated_at=?
+               WHERE user_id=? AND thread_id=?""",
+            (now, owner, thread_id))
         await app.state.threads.commit()
 
     @app.post("/api/chat")
@@ -1069,7 +1217,8 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             base_url = normalize_base_url(req.base_url)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        await _touch_thread(req.thread_id, str(last_user), owner=uid or 0)
+        await _touch_thread(req.thread_id, str(last_user), owner=uid or 0,
+                            client_id=req.client_id or "")
 
         cfg = {"configurable": {"thread_id": req.thread_id},
                "recursion_limit": RECURSION_LIMIT}
@@ -1083,6 +1232,7 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         async def event_source() -> AsyncIterator[str]:
             yield _frame({"type": "start", "messageId": uuid4().hex})
             gate: dict | None = None
+            gate_payload: dict | None = None
             # BYOK/模型切换:本请求携带的 Key/端点/供应商覆盖图内所有 LLM 调用
             token = set_request_llm(api_key=req.api_key, model=req.model,
                                     base_url=base_url,
@@ -1105,6 +1255,7 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                                         yield f
                                     gate = {"gate_type": payload.get("type"),
                                             "question": question}
+                                    gate_payload = payload
                             elif node in ANNOUNCE_NODES and isinstance(update, dict):
                                 for m in update.get("messages") or []:
                                     if isinstance(m, AIMessage) and m.content:
@@ -1142,12 +1293,30 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 # interrupt 恢复语义,实测翻车):刷新恢复现场时 /api/history
                 # 把它补成最后一条助手消息,resume 后自然被真实消息取代。
                 try:
+                    now = _now_iso()
                     await app.state.threads.execute(
-                        "UPDATE threads SET pending_question=? WHERE thread_id=?",
-                        (gate.get("question") or "", req.thread_id))
+                        """UPDATE threads SET pending_question=?,
+                               pending_payload=?,
+                               revision=revision+1, updated_at=?,
+                               last_client_id=?
+                           WHERE thread_id=?""",
+                        (gate.get("question") or "",
+                         json.dumps(gate_payload or {}, ensure_ascii=False,
+                                    default=str),
+                         now, req.client_id or "", req.thread_id))
+                    await app.state.threads.execute(
+                        """UPDATE active_threads SET updated_at=?
+                           WHERE user_id=? AND thread_id=?""",
+                        (now, uid or 0, req.thread_id))
                     await app.state.threads.commit()
                 except Exception:  # noqa: BLE001 —— 补记失败不影响本轮收尾
                     pass
+            # 本轮结束再推一次版本:另一台设备据此拉取完整助手文本/待答问题
+            try:
+                await _bump_thread(req.thread_id, uid or 0,
+                                   req.client_id or "")
+            except Exception:  # noqa: BLE001 —— 同步标记失败不影响回复
+                pass
             yield _frame({"type": "finish", "finishReason": "stop"})
 
         return StreamingResponse(
@@ -1158,7 +1327,7 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                      "x-accel-buffering": "no"},  # 防代理缓冲 SSE
         )
 
-    async def _interrupt_frames(payload: dict, app: FastAPI) -> list[str]:
+    async def _interrupt_parts(payload: dict, app: FastAPI) -> list[dict]:
         """把图的 interrupt 载荷映射为 DATA-* 部件(问题文本由调用方另发 text 帧)。"""
         ptype = payload.get("type")
         tools: BankTools = app.state.bank
@@ -1166,51 +1335,55 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             card = await _transfer_card(payload.get("order") or {}, tools,
                                         app.state.policy_cache,
                                         pay_required=bool(payload.get("pay_required")))
-            return [_frame({"type": "data-transfer-confirmation", "data": card})]
+            return [{"type": "data-transfer-confirmation", "data": card}]
         if ptype == "confirm_split":
-            return [_frame({"type": "data-split-confirmation",
-                            "data": {**(payload.get("bill") or {}), "pay_required": bool(payload.get("pay_required"))}})]
+            return [{"type": "data-split-confirmation",
+                            "data": {**(payload.get("bill") or {}), "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "confirm_settle":
-            return [_frame({"type": "data-settle-confirmation",
-                            "data": {**(payload.get("settle") or {}), "pay_required": bool(payload.get("pay_required"))}})]
+            return [{"type": "data-settle-confirmation",
+                            "data": {**(payload.get("settle") or {}), "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "pick_contact":
-            return [_frame({"type": "data-contact-choices",
-                            "data": {"candidates": payload.get("candidates") or []}})]
+            return [{"type": "data-contact-choices",
+                            "data": {"candidates": payload.get("candidates") or []}}]
         if ptype == "confirm_contact":
-            return [_frame({"type": "data-contact-confirmation",
-                            "data": {**(payload.get("contact") or {}), "pay_required": bool(payload.get("pay_required"))}})]
+            return [{"type": "data-contact-confirmation",
+                            "data": {**(payload.get("contact") or {}), "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "confirm_linkage":
             # 联动计划闸门:整卡数据照载荷的 plan 视图(标题/日期/预算/各动作/锁定单)
-            return [_frame({"type": "data-linkage-plan",
-                            "data": {**(payload.get("plan") or {}), "pay_required": bool(payload.get("pay_required"))}})]
+            return [{"type": "data-linkage-plan",
+                            "data": {**(payload.get("plan") or {}), "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "confirm_linkage_action":
             # 到期动作闸门:what/merchant/amount + 计划定位字段
-            return [_frame({"type": "data-linkage-action",
-                            "data": {**(payload.get("action") or {}), "pay_required": bool(payload.get("pay_required"))}})]
+            return [{"type": "data-linkage-action",
+                            "data": {**(payload.get("action") or {}), "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "confirm_wealth":
             # 理财闸门(申购/赎回共用,kind 区分):kind 提升到顶层,
             # order 视图含 产品/金额/费率/锁定期/风险/账户(或持仓/估值/费用/到手)
             view = payload.get("order") or {}
-            return [_frame({"type": "data-wealth-confirmation",
+            return [{"type": "data-wealth-confirmation",
                             "data": {"kind": view.get("kind"), "order": view,
-                                     "pay_required": bool(payload.get("pay_required"))}})]
+                                     "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "confirm_card":
             # 卡片闸门(办卡/限额/状态共用,kind 区分):kind 提升到顶层,
             # card 视图含 card_id/尾号/类型/当前限额或状态/目标值
             view = payload.get("card") or {}
-            return [_frame({"type": "data-card-confirmation",
+            return [{"type": "data-card-confirmation",
                             "data": {"kind": view.get("kind"), "card": view,
-                                     "pay_required": bool(payload.get("pay_required"))}})]
+                                     "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "confirm_sub_cancel":
             # 订阅取消闸门:data-subscription-cancel 金色卡(商户/每期金额/
             # 下次扣费/年省);pay_required 时前端渲染支付密码框
             sub = payload.get("sub") or {}
-            return [_frame({"type": "data-subscription-cancel",
-                            "data": {**sub, "pay_required": bool(payload.get("pay_required"))}})]
+            return [{"type": "data-subscription-cancel",
+                            "data": {**sub, "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "ask_slot":
-            return [_frame({"type": "data-ask-slot",
-                            "data": {"missing": payload.get("missing") or []}})]
+            return [{"type": "data-ask-slot",
+                            "data": {"missing": payload.get("missing") or []}}]
         return []  # 未知类型只发问题文本,不臆造部件
+
+    async def _interrupt_frames(payload: dict, app: FastAPI) -> list[str]:
+        """SSE 帧封装；历史恢复复用同一套 data-* 映射（_interrupt_parts）。"""
+        return [_frame(part) for part in await _interrupt_parts(payload, app)]
 
     return app
 
