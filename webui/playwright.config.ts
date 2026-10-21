@@ -38,6 +38,10 @@ export default defineConfig({
       testMatch: /e2e\/.*.test.ts/,
       use: {
         ...devices["Desktop Chrome"],
+        // 本仓库的演示 e2e 脚本(e2e-*.mjs)一直复用系统 Chrome;
+        // 这里同样指定 channel,避免 npx playwright test 依赖
+        // `npx playwright install` 下载 Playwright 自带 Chromium。
+        channel: "chrome",
       },
     },
 
