@@ -37,7 +37,7 @@ from .db import now_iso
 _MONEY_DB_NAME = "money_ledger.sqlite"
 _CHANGE_DB_NAME = "change_log.sqlite"
 
-# 请求级操作方：agent(默认) / admin(管理端请求内)
+# 请求级操作方：agent(默认) / admin(管理端) / user(用户自助操作，如模拟入金)
 _operator: ContextVar[str] = ContextVar("bank_recorder_operator", default="agent")
 
 
@@ -45,6 +45,16 @@ _operator: ContextVar[str] = ContextVar("bank_recorder_operator", default="agent
 def admin_scope():
     """管理端调用范围：期间产生的记录 operator='admin'。"""
     token = _operator.set("admin")
+    try:
+        yield
+    finally:
+        _operator.reset(token)
+
+
+@contextmanager
+def user_scope():
+    """用户自助操作范围（非 LLM、非管理端）：期间记录 operator='user'。"""
+    token = _operator.set("user")
     try:
         yield
     finally:

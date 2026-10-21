@@ -127,6 +127,7 @@ td.empty{text-align:center;color:var(--faint);padding:28px 0}
 .badge{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;line-height:1.8;color:#aeb6c6;background:#232833;border:1px solid #2f3646;white-space:nowrap;vertical-align:middle}
 .b-agent{color:#7ab5f5;background:rgba(90,162,234,.10);border-color:rgba(90,162,234,.4)}
 .b-admin{color:#e6c87e;background:rgba(216,180,90,.10);border-color:rgba(216,180,90,.45)}
+.b-user{color:#5fd0a2;background:rgba(62,207,142,.10);border-color:rgba(62,207,142,.4)}
 .cat-contact{color:#7ab5f5;background:rgba(90,162,234,.10);border-color:rgba(90,162,234,.4)}
 .cat-card{color:#63cfd6;background:rgba(99,207,214,.10);border-color:rgba(99,207,214,.4)}
 .cat-wealth{color:#e6c87e;background:rgba(216,180,90,.10);border-color:rgba(216,180,90,.45)}
@@ -683,6 +684,7 @@ function prettyJSON(d){
 function operatorBadge(op){
   if (op === 'admin') return '<span class="badge b-admin">admin</span>';
   if (op === 'agent') return '<span class="badge b-agent">agent</span>';
+  if (op === 'user') return '<span class="badge b-user">user</span>';
   return op ? `<span class="badge">${esc(op)}</span>` : '<span class="muted">—</span>';
 }
 
