@@ -19,6 +19,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *   data-contact-choices        同名联系人选择(卡片式消歧)
  *   data-linkage-plan           跨场景联动计划确认卡(预算锁定闸门,金色系)
  *   data-linkage-action         联动到期动作确认卡(逐项购买闸门,金色系)
+ *   data-plan                   生日预算计划确认卡(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
  *   data-wealth-confirmation    理财确认卡(kind=subscribe|redeem;order=产品/金额/
  *                               费率/锁定期/风险/付款账户 或 持仓/估值/费用/到手)
  *   data-card-confirmation      卡片确认卡(kind=apply|limits|status;card=card_id/
@@ -74,6 +75,61 @@ interface LinkageActionCardData extends LinkageAction {
   pay_required?: boolean;
   plan_id?: number;
   plan_title?: string;
+}
+
+/*
+ * 生日预算计划卡(api.py confirm_plan → data-plan):
+ * plan 视图冻结在 agent/plan.py::plan_card_view —— 只做拷贝,不含内部字段
+ * (event_found/candidates 等绝不下发)。字段与 plan_card_view 一一对应,
+ * 另由 api.py 追加 pay_required(恒 false:确认计划本身不扣款)。
+ */
+interface PlanFacts {
+  days_left?: number;
+  disposable_yuan?: string;
+  event_date?: string;
+  event_title?: string;
+  expense_yuan?: string | null;
+  formula?: string;
+  income_yuan?: string | null;
+  safety_buffer_yuan?: string;
+  source?: string;
+  upcoming_yuan?: string;
+}
+
+interface PlanStep {
+  done?: boolean;
+  gate?: string | null;
+  idx?: number;
+  risk?: string;
+  title?: string;
+}
+
+/* 候选订阅视图(plan.py::_candidate_view 的键);selected_cut 额外带 reason */
+interface PlanCutCandidate {
+  amount_yuan?: string;
+  annual_yuan?: string;
+  category?: string;
+  merchant?: string;
+  next_charge_date?: string;
+  period_text?: string;
+  reason?: string;
+  sub_id?: number;
+}
+
+interface PlanCardData {
+  constraints?: string[];
+  cut_candidates?: PlanCutCandidate[];
+  facts?: PlanFacts;
+  goal?: string;
+  note?: string;
+  pay_required?: boolean;
+  plan_id?: string;
+  plan_version?: number;
+  recommended_budget_yuan?: string;
+  requested_budget_yuan?: string;
+  selected_cut?: PlanCutCandidate | null;
+  shortfall_yuan?: string;
+  steps?: PlanStep[];
 }
 
 interface ContactCandidate {
@@ -407,6 +463,212 @@ function LinkageActionCard({ data }: { data: LinkageActionCardData }) {
       <ConfirmButtons payRequired={data.pay_required === true} />
       <div className="mt-2 text-xs text-muted-foreground">
         确认后按计划真实扣款购买;取消则跳过这一项
+      </div>
+    </GoldCard>
+  );
+}
+
+/* 计划步骤的风险标签(plan.py build_plan 的 risk 取值:READ/LOW/HIGH) */
+const PLAN_RISK_STYLE: Record<string, { className: string; label: string }> = {
+  HIGH: {
+    className:
+      "bg-red-100/70 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+    label: "动钱",
+  },
+  LOW: {
+    className:
+      "bg-blue-100/70 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300",
+    label: "提醒",
+  },
+  READ: {
+    className:
+      "bg-emerald-100/70 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+    label: "只读",
+  },
+};
+
+/* facts.source → 人话(与 plan.py compute_disposable 的三种口径一一对应) */
+const PLAN_SOURCE_CN: Record<string, string> = {
+  balance: "活期余额(月报不可用,已回退)",
+  monthly_report: "本月月报",
+  prev_month: "上月整月(本月工资未到账)",
+};
+
+function planDaysText(daysLeft: number | undefined): string {
+  if (daysLeft === undefined) {
+    return "";
+  }
+  if (daysLeft < 0) {
+    return "已过期";
+  }
+  if (daysLeft === 0) {
+    return "今天";
+  }
+  return daysLeft === 1 ? "明天" : `${daysLeft} 天后`;
+}
+
+function PlanCard({ data }: { data: PlanCardData }) {
+  const facts = data.facts ?? {};
+  const steps = data.steps ?? [];
+  const candidates = data.cut_candidates ?? [];
+  const selected = data.selected_cut ?? null;
+  const eventText =
+    [facts.event_title, facts.event_date, planDaysText(facts.days_left)]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  const shortfallText =
+    data.shortfall_yuan && data.shortfall_yuan !== "0.00"
+      ? `¥${data.shortfall_yuan}`
+      : undefined;
+  // 1-9 号本月工资未到账时,plan.py 回退用上月整月收支;标签必须跟着口径走,
+  // 否则卡片数字和同一张卡的公式("上月收入…")自相矛盾。
+  const prevMonth = facts.source === "prev_month";
+  return (
+    <GoldCard title="生日预算计划确认">
+      <div className="flex flex-col gap-1.5">
+        <Row label="目标" value={data.goal} />
+        <Row
+          label="约束"
+          value={data.constraints?.length ? data.constraints.join(" · ") : "无"}
+        />
+        <Row label="事件" value={eventText} />
+        <Row
+          label="数据依据"
+          value={PLAN_SOURCE_CN[facts.source ?? ""] ?? facts.source}
+        />
+        <Row
+          label={prevMonth ? "上月收入" : "本月收入"}
+          value={facts.income_yuan && `¥${facts.income_yuan}`}
+        />
+        <Row
+          label={prevMonth ? "上月已支出" : "本月已支出"}
+          value={facts.expense_yuan && `¥${facts.expense_yuan}`}
+        />
+        <Row
+          label="生日前订阅扣款"
+          value={facts.upcoming_yuan && `¥${facts.upcoming_yuan}`}
+        />
+        <Row
+          label="安全垫"
+          value={facts.safety_buffer_yuan && `¥${facts.safety_buffer_yuan}`}
+        />
+        <Row
+          label="可支配额度"
+          value={
+            facts.disposable_yuan && (
+              <span className="text-base">¥{facts.disposable_yuan}</span>
+            )
+          }
+        />
+      </div>
+      {facts.formula ? (
+        <div className="mt-1 rounded-md bg-white/60 px-2 py-1 text-xs text-muted-foreground [overflow-wrap:anywhere] dark:bg-amber-950/30">
+          {facts.formula}
+        </div>
+      ) : null}
+      <div className="mt-2 flex flex-col gap-1 rounded-lg bg-amber-100/50 px-2 py-1.5 dark:bg-amber-900/20">
+        <Row
+          label="原预算"
+          value={data.requested_budget_yuan && `¥${data.requested_budget_yuan}`}
+        />
+        <Row
+          label="建议锁定"
+          value={
+            <span className="text-base">
+              ¥{data.recommended_budget_yuan ?? "—"}
+            </span>
+          }
+        />
+        <Row label="差额" value={shortfallText} />
+      </div>
+      {steps.length ? (
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-xs text-muted-foreground">执行步骤</div>
+          {steps.map((step, index) => {
+            const risk = PLAN_RISK_STYLE[step.risk ?? ""] ?? {
+              className: "bg-muted text-muted-foreground",
+              label: step.risk || "未知",
+            };
+            return (
+              <div
+                className="flex items-start justify-between gap-3 rounded-md bg-amber-100/50 px-2 py-1 text-[13px] dark:bg-amber-900/20"
+                key={step.idx ?? index}
+              >
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  <span className="mr-1 text-muted-foreground">
+                    {index + 1}.
+                  </span>
+                  {step.title}
+                  {step.done ? (
+                    <span className="ml-1 text-[11px] text-emerald-700 dark:text-emerald-300">
+                      已完成
+                    </span>
+                  ) : null}
+                </span>
+                <span
+                  className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] ${risk.className}`}
+                >
+                  {risk.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {candidates.length ? (
+        <div className="mt-2 flex flex-col gap-1">
+          <div className="text-xs text-muted-foreground">
+            可取消的会员订阅(只列真实会员)
+          </div>
+          {candidates.map((candidate, index) => {
+            const picked =
+              candidate.sub_id !== undefined &&
+              selected?.sub_id === candidate.sub_id;
+            return (
+              <div
+                className={`rounded-md border px-2 py-1 text-[13px] ${
+                  picked
+                    ? "border-amber-400/80 bg-amber-100/70 dark:border-amber-500/40 dark:bg-amber-900/30"
+                    : "border-transparent bg-amber-100/40 dark:bg-amber-900/10"
+                }`}
+                key={candidate.sub_id ?? candidate.merchant ?? index}
+              >
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                    {candidate.merchant}
+                    {picked ? (
+                      <span className="ml-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-normal text-white">
+                        计划取消
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 text-right text-muted-foreground">
+                    ¥{candidate.amount_yuan}/{candidate.period_text ?? "期"}
+                  </span>
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-3 text-[11px] text-muted-foreground">
+                  <span>下次扣费 {candidate.next_charge_date ?? "—"}</span>
+                  <span>年化 ¥{candidate.annual_yuan ?? "—"}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {selected?.reason ? (
+        <div className="mt-1 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+          {selected.reason}
+        </div>
+      ) : null}
+      {data.note ? (
+        <div className="mt-1 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+          {data.note}
+        </div>
+      ) : null}
+      {/* 计划闸门是普通确认(pay_required 恒 false):确认本身不扣款 */}
+      <ConfirmButtons payRequired={false} />
+      <div className="mt-2 text-xs text-muted-foreground">
+        确认计划不扣款，取消订阅/锁定预算仍需支付密码。回复「预算改成800」可调整预算，回复「取消」放弃。
       </div>
     </GoldCard>
   );
@@ -1070,6 +1332,9 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   }
   if (type === "data-linkage-action") {
     return <LinkageActionCard data={(data ?? {}) as LinkageActionCardData} />;
+  }
+  if (type === "data-plan") {
+    return <PlanCard data={(data ?? {}) as PlanCardData} />;
   }
   if (type === "data-wealth-confirmation") {
     return <WealthCard data={(data ?? {}) as WealthCardData} />;

@@ -88,6 +88,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from agent.bank import BankTools, load_bank_tools
+from agent.plan import (DEFAULT_ACTIONS, build_plan, compute_disposable,
+                        constraints_of, filter_cut_candidates,
+                        filter_upcoming_outflows, find_event, make_plan_id,
+                        parse_budget_edit, plan_card_view, wants_cut)
 from agent.state import AgentState
 
 # 缺槽/纠偏反问的最大轮次(评审修复:interrupt-resume 循环不受 LangGraph 递归上限
@@ -285,6 +289,11 @@ _FALLBACK_TEXT = {
     "card_status_set": "卡片状态已变更。",
     "card_cancelled": "好的,没有执行这次卡片操作。",
     "no_card": "没有找到这张卡,请说明卡号尾号后再试。",
+    # ---- 生日预算计划(p_ 前缀) ----
+    "plan_cancelled": "好的,已取消这次生日计划:没有锁定预算,也没有改动任何订阅。",
+    "plan_blocked": ("本月可支配额度不足以锁定预算,已停止执行。"
+                     "可以先取消订阅或降低预算,再对我说「规划生日」。"),
+    "plan_need_info": "还差生日日期或预算,这次先不生成计划。补齐后再说一次即可。",
 }
 
 
@@ -366,6 +375,11 @@ _AFFIRM_WORDS = frozenset({
     "yes", "y", "true", "转吧", "确认执行", "确认转账", "同意执行", "确定执行",
     "确定转", "确认转", "就这么办", "就这么转", "办吧", "转吧确认",
     "确认一下", "确定一下", "就这么确认",
+})
+# 计划闸门(p_gate)专用肯定词:回复「确认计划」等明确执行整份计划的整句。
+# 不放进 _AFFIRM_WORDS,避免影响既有转账/联动等闸门的语义(旧路径零变化)。
+_PLAN_AFFIRM_EXTRA = frozenset({
+    "确认计划", "执行计划", "开始执行", "按计划执行", "确认执行计划",
 })
 _TAIL_PARTICLES = "吧呀啊哈呢了哟哦嘞哒"
 
@@ -636,6 +650,72 @@ def _plan_view(p: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------- 生日预算计划文案/视图(确定性)
+
+def _plan_slot_question(missing: list[str]) -> str:
+    """计划缺槽反问(与 _linkage_slot_question 同风格;日期上限写在问句里)。"""
+    if "event_date" in missing:
+        return ("生日(或纪念日)是哪一天?请说明未来一年内的具体日期"
+                "(如:10月25日 或 2026-10-25)。")
+    if "budget_yuan" in missing:
+        return "这次生日准备花多少预算?请用数字说明(如:3000)。"
+    return "请补充生日日期和预算。"
+
+
+def _plan_confirm_question(card: dict) -> str:
+    """计划卡确认问句:复述可支配/原预算/建议预算/差额/取消项,并明示不扣款。"""
+    facts = card.get("facts") or {}
+    note = str(card.get("note") or "")
+    req = card.get("requested_budget_yuan")
+    rec = card.get("recommended_budget_yuan")
+    short = str(card.get("shortfall_yuan") or "")
+    source = str(facts.get("source") or "")
+    basis = ("上月可支配" if source == "prev_month"
+             else "活期可支配" if source == "balance" else "本月可支配")
+    line = (f"请确认生日计划《{card.get('goal')}》:生日 {facts.get('event_date')},"
+            f"{basis} ¥{facts.get('disposable_yuan')}"
+            f"(公式:{facts.get('formula')}),建议锁定预算 ¥{rec}(原预算 ¥{req}"
+            + (f",差额 ¥{short}" if short and short != "0.00" else "") + ")。")
+    cut = card.get("selected_cut") or {}
+    if cut.get("merchant"):
+        line += (f"计划包含:取消「{cut['merchant']}」自动扣费"
+                 f"(年省 ¥{cut.get('annual_yuan')})。")
+    line += ("确认后:取消订阅需输入 6 位支付密码,锁定预算需再输入一次支付密码;"
+             "确认计划本身不扣款。回复「预算改成800」可调整预算,回复「取消」放弃。")
+    # 砍单降级后的重新确认:note 以"订阅保留（原因）"开头,必须先让用户看到
+    if "订阅保留" in note:
+        return f"{note}\n{line}"
+    return line
+
+
+def _plan_actions(actions: Any) -> list[dict]:
+    """规范化抽取到的礼物动作;全部非法时回退默认剧本(每次深拷贝)。
+
+    金额合法性由确定性代码判(_cents),days_before 夹到 0-90(与 bank_core 校验同口径)。
+    """
+    out: list[dict] = []
+    for raw in actions if isinstance(actions, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        what = str(raw.get("what") or "").strip()
+        amount = _cents(raw.get("amount_yuan"))
+        if not what or amount is None or amount <= 0:
+            continue
+        try:
+            days_before = int(raw.get("days_before", 2))
+        except (TypeError, ValueError):
+            days_before = 2
+        out.append({
+            "what": what,
+            "merchant": str(raw.get("merchant") or "商户"),
+            "days_before": max(0, min(90, days_before)),
+            "amount_yuan": str(raw.get("amount_yuan")),
+        })
+    if out:
+        return out
+    return [dict(a) for a in DEFAULT_ACTIONS]
+
+
 def _due_action_question(due: dict) -> str:
     a = (due or {}).get("action") or {}
     return (f"计划《{due.get('title')}》的【{a.get('what')}】到期了:"
@@ -658,6 +738,19 @@ _DUE_TRIGGER_WORDS = ("到期", "提醒", "该准备")
 def _is_due_message(text: str) -> bool:
     t = str(text or "")
     return t.startswith("(到期提醒)") or any(w in t for w in _DUE_TRIGGER_WORDS)
+
+
+# 生日预算计划触发词(硬约束:绝不能用"预算"单独触发——旧联动消息
+# "帮我准备林悦的生日,预算1000,..." 必须继续走 l_extract)
+_PLAN_TRIGGER_WORDS = ("规划", "钱不够", "砍订阅", "取消订阅", "省钱")
+
+
+def _wants_plan(text: str) -> bool:
+    """确定性判定"本轮是否要生日预算规划"(router 用,不靠 LLM 二次判断)。"""
+    t = str(text or "")
+    if any(w in t for w in _PLAN_TRIGGER_WORDS):
+        return True
+    return "计划" in t and any(w in t for w in ("生日", "预算", "准备"))
 
 
 def _plan_title_from_text(text: str) -> str | None:
@@ -1134,13 +1227,30 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         # 本轮触发指令原文:幂等键的组成部分(同文本重放=同一笔;换说法=新一笔)
         turn_text = next((m.content for m in reversed(state["messages"])
                           if isinstance(m, HumanMessage)), "")
+        # 生日预算计划:仅当 LLM 判 linkage 且消息含明确"规划/省钱"信号时走 p_ 管线。
+        # 到期优先级(实测 "我的生日计划到期了，帮我处理一下" 两个谓词都命中):
+        # - 强触发词(规划/钱不够/砍订阅/取消订阅/省钱)= 用户明确要计划,压过到期文本;
+        # - 弱触发(计划+生日/预算/准备)遇到 _is_due_message(到期/提醒/该准备)时,
+        #   仍走 l_due,防止把系统提醒/到期处理劫持成规划。
+        # - 系统到期提醒文本(api 生成,固定前缀 '(到期提醒)')一律走 l_due:
+        #   计划标题可能自带"省钱/规划"等强触发词,但这不是用户要新计划。
+        # 白名单不新增 plan:LLM 提示词与真实模型行为零变化,只是确定性改写。
+        if intent == "linkage":
+            latest = str(turn_text or "")
+            if _wants_plan(latest) and not latest.startswith("(到期提醒)"):
+                strong = any(w in latest for w in _PLAN_TRIGGER_WORDS)
+                if strong or not _is_due_message(latest):
+                    intent = "plan"
         # 新一轮对话:清掉上一轮的控制态(notice/order/decision 会误导下游路由),
         # 但保留 slots/split/contact_draft/linkage/bill_slots/wealth/card 等业务记忆,
-        # 支持"改成1000""换成上个月"这类跨轮补充。
+        # 支持"改成1000""换成上个月"这类跨轮补充。plan_slots 同样跨轮保留。
         return {"intent": intent, "notice": None, "order": None, "decision": "",
                 "candidates": None, "contact": None, "missing": [], "settle": None,
                 "split_missing": [], "contact_missing": [], "turn_text": str(turn_text),
                 "plan": None, "due": None, "linkage_missing": [],
+                "plan_missing": [], "plan_facts": None, "plan_draft": None,
+                "plan_card": None, "plan_stage": "", "plan_edit_budget": None,
+                "plan_edit_round": 0, "plan_cut": None, "plan_force_no_cut": False,
                 "bill_missing": [], "wealth_missing": [], "card_missing": [],
                 "clarify_round": 0, "gate_round": 0, "pick_round": 0}
 
@@ -2491,10 +2601,21 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                     "notice": {"kind": "bank_error", "where": "cancel_subscription",
                                "error": err}}
         v = draft.get("sub") or {}
-        return {"bank_calls": calls,
-                "notice": {"kind": "sub_cancelled",
-                           "merchant": v.get("merchant_name"),
-                           "annual_yuan": v.get("annual_yuan")}}
+        notice = {"kind": "sub_cancelled",
+                  "merchant": v.get("merchant_name"),
+                  "annual_yuan": v.get("annual_yuan")}
+        update: dict = {"bank_calls": calls, "notice": notice}
+        cut = state.get("plan_cut")
+        if isinstance(cut, dict) and state.get("plan_stage") == "cutting":
+            # 计划砍单:把这次取消的结果记进 plan_cut(商户/年省/notice)。
+            # 否则随后 l_report 只播报锁定预算,用户看不到"订阅已取消"。
+            update["plan_cut"] = {
+                **cut, "status": "cancelled",
+                "merchant": v.get("merchant_name") or cut.get("merchant"),
+                "annual_yuan": v.get("annual_yuan") or cut.get("annual_yuan"),
+                "notice": notice,
+            }
+        return update
 
     async def s_decide(state: AgentState) -> dict:
         """预审决策执行:allow/skip 落库(LOW,不动钱,审计+change_log);
@@ -2524,6 +2645,312 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     async def s_report(state: AgentState) -> dict:
         return await _announce(state)
 
+    # ---------------------------------------------------------------- 生日预算计划(p_ 前缀)
+    # 与 l_*/s_* 并列的只读规划管线:router 只把"LLM 判 linkage 且含规划触发词"的
+    # 消息确定性改写成 intent="plan" 后进来。
+    # 资金铁律落点:
+    # - confirm_plan 前零业务写:只调 5 个只读工具,计划是纯计算底稿;
+    # - 计划确认本身不扣款、不要支付密码;确认后各步骤仍分别过
+    #   confirm_sub_cancel(取消订阅)与 confirm_linkage(锁定预算)两道支付密码闸门;
+    # - 可支配为 0 → plan_blocked,不产出任何锁定步骤。
+
+    async def p_extract(state: AgentState) -> dict:
+        history = state["messages"]
+        extra = ("【已有槽位】" + json.dumps(state.get("plan_slots") or {},
+                                            ensure_ascii=False)
+                 + "\n请输出抽取结果。")
+        parsed = json_from_content(
+            await ask_llm(LINKAGE_EXTRACT_SYS, history, extra)) or {}
+        slots: dict = dict(state.get("plan_slots") or {})
+        for key in ("event_title", "event_date", "budget_yuan", "actions"):
+            if parsed.get(key) is not None:
+                slots[key] = parsed[key]
+
+        # 确定性赋值(铁律 1:意图判断/约束提取/动作规范化全在代码)
+        goal = str(state.get("turn_text") or "")
+        slots["goal"] = goal
+        slots["constraints"] = constraints_of(goal)
+        slots["wants_cut"] = wants_cut(goal)
+        slots["actions"] = _plan_actions(slots.get("actions"))
+
+        # 缺槽校验:日期只接受未来 0-365 天(保证用户给的日期就是"下一次发生日",
+        # bank_core.linkage._next_occurrence 会把年度事件滚到今年/明年)。
+        missing: list[str] = []
+        date_ok = _valid_date(slots.get("event_date"))
+        days_left = 0
+        if date_ok:
+            days_left = (datetime.strptime(str(slots["event_date"]), "%Y-%m-%d").date()
+                         - date.today()).days
+            if not 0 <= days_left <= 365:
+                date_ok = False
+        if not date_ok:
+            missing.append("event_date")
+        budget = _cents(slots.get("budget_yuan"))
+        if budget is None or budget <= 0:
+            missing.append("budget_yuan")
+        return {"plan_slots": slots, "plan_missing": missing}
+
+    p_clarify = _make_clarify_node("plan_missing", _plan_slot_question)
+
+    async def p_snapshot(state: AgentState) -> dict:
+        """只读事实快照:事件/账户/月报/订阅/生日前扣费 → 可支配额度。
+
+        白名单只读(绝不允许 add_event/create_linkage_plan/cancel_subscription):
+        list_events → get_accounts → monthly_report(本月,必要时上月)
+        → list_subscriptions → list_upcoming_precharges。
+        """
+        slots = state.get("plan_slots") or {}
+        calls: list[dict] = []
+        events = await tools.call("list_events")
+        calls.append(_jr("list_events", {}, events))
+        err = _has_error(events)
+        if err or not isinstance(events, list):
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "list_events",
+                               "error": err or "事件查询失败"}}
+        accounts = await tools.call("get_accounts")
+        calls.append(_jr("get_accounts", {}, accounts))
+        err = _has_error(accounts)
+        if err or not isinstance(accounts, list) or not accounts:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "get_accounts",
+                               "error": err or "没有可用账户"}}
+
+        # 事件匹配只接受同日事件:用户明说的日期不能被旧名同事件静默覆盖
+        ev = find_event(events, slots.get("event_title"), slots.get("event_date"))
+        event_date = str(slots.get("event_date") or "")
+        if isinstance(ev, dict):
+            event_title = str(ev.get("title") or slots.get("event_title") or "生日")
+            event_date = str(ev.get("date") or event_date)
+            try:
+                days_left = int(ev.get("days_left"))
+            except (TypeError, ValueError):
+                days_left = 0
+            event_found = True
+        else:
+            event_title = str(slots.get("event_title") or "生日")
+            try:
+                days_left = (datetime.strptime(event_date, "%Y-%m-%d").date()
+                             - date.today()).days
+            except (TypeError, ValueError):
+                days_left = 0
+            event_found = False
+
+        # 月报:失败不致命(回退活期余额);本月收入为 0(1-9 号工资未到账)
+        # 时回退上一个完整月,否则主场景会被误判 blocked。
+        today = date.today()
+        month = today.strftime("%Y-%m")
+        report = await tools.call("monthly_report", month=month)
+        calls.append(_jr("monthly_report", {"month": month}, report))
+        source = "monthly_report"
+        income_yuan = expense_yuan = None
+        if _has_error(report) or not isinstance(report, dict):
+            source = "balance"
+        else:
+            income_yuan = report.get("income_yuan")
+            expense_yuan = report.get("expense_yuan")
+            if (_cents(str(income_yuan or "")) or 0) == 0:
+                prev = _shift_month(today, -1).strftime("%Y-%m")
+                prev_report = await tools.call("monthly_report", month=prev)
+                calls.append(_jr("monthly_report", {"month": prev}, prev_report))
+                if (not _has_error(prev_report) and isinstance(prev_report, dict)
+                        and (_cents(str(prev_report.get("income_yuan") or "")) or 0) > 0):
+                    source = "prev_month"
+                    income_yuan = prev_report.get("income_yuan")
+                    expense_yuan = prev_report.get("expense_yuan")
+
+        subs = await tools.call("list_subscriptions")
+        calls.append(_jr("list_subscriptions", {}, subs))
+        err = _has_error(subs)
+        if err or not isinstance(subs, list):
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "list_subscriptions",
+                               "error": err or "订阅查询失败"}}
+        candidates = filter_cut_candidates(subs)
+
+        # 生日前可能发生的订阅扣费:窗口截到生日当天,并夹在 1..30 天
+        within_days = max(1, min(30, days_left))
+        upcoming = await tools.call("list_upcoming_precharges", within_days=within_days)
+        calls.append(_jr("list_upcoming_precharges", {"within_days": within_days}, upcoming))
+        err = _has_error(upcoming)
+        if err or not isinstance(upcoming, list):
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error",
+                               "where": "list_upcoming_precharges",
+                               "error": err or "预扣查询失败"}}
+        items = [i for i in upcoming if isinstance(i, dict)
+                 and str(i.get("next_charge_date") or "") <= event_date]
+        # upcoming_precharges 没有月报的内部划转过滤:理财申购/还款/账户互转必须剔除,
+        # 否则窗口内的自有资金会被重复当成支出,可支配额度系统性低估。
+        items = filter_upcoming_outflows(items, [a.get("name") for a in accounts])
+
+        if source == "balance":
+            account = pick_account(accounts)
+            if account is None:
+                return {"bank_calls": calls,
+                        "notice": {"kind": "bank_error", "where": "get_accounts",
+                                   "error": "没有可用付款账户"}}
+            facts = compute_disposable(upcoming_items=items, source="balance",
+                                       balance_yuan=account.get("balance_yuan"))
+        else:
+            facts = compute_disposable(income_yuan=income_yuan,
+                                       expense_yuan=expense_yuan,
+                                       upcoming_items=items, source=source)
+        facts.update({"event_title": event_title, "event_date": event_date,
+                      "days_left": days_left, "event_found": event_found,
+                      "candidates": candidates})
+        return {"bank_calls": calls, "notice": None, "plan_facts": facts}
+
+    async def p_build(state: AgentState) -> dict:
+        """纯计算:预算编辑落到槽位 → plan.build_plan 重算底稿与卡片(无工具)。"""
+        slots = state.get("plan_slots") or {}
+        facts = state.get("plan_facts") or {}
+        edit = state.get("plan_edit_budget")
+        if edit:
+            slots = {**slots, "budget_yuan": str(edit)}  # 预算编辑落到槽位
+        prev = state.get("plan_draft") or {}
+        force_no_cut = bool(state.get("plan_force_no_cut"))
+        cut = state.get("plan_cut") or {}
+        thread_id = str((get_config().get("configurable") or {}).get("thread_id", ""))
+        plan_id = prev.get("plan_id") or make_plan_id(thread_id,
+                                                      state.get("turn_text") or "")
+        draft = build_plan(
+            plan_id=plan_id,
+            plan_version=int(prev.get("plan_version") or 0) + 1,
+            goal=slots.get("goal") or state.get("turn_text") or "",
+            constraints=slots.get("constraints") or [],
+            wants_cut=False if force_no_cut else bool(slots.get("wants_cut")),
+            facts=facts,
+            requested_budget_yuan=slots.get("budget_yuan"),
+            actions=slots.get("actions") or [],
+            cut_candidates=[] if force_no_cut else (facts.get("candidates") or []),
+            degrade_reason=(cut.get("reason") if force_no_cut else None))
+        card = plan_card_view(draft)
+        return {"plan_slots": slots, "plan_draft": draft, "plan_card": card,
+                "plan_edit_budget": None,
+                "notice": ({"kind": "plan_blocked", "plan": card}
+                           if draft["blocked"] else None)}
+
+    async def p_gate(state: AgentState) -> dict:
+        """计划确认闸门(普通确认,不是支付密码):支持预算编辑与两问封顶。
+
+        与 _make_gate_node 同款约束:单一 interrupt() 调用点 + 状态计数 + 自环边
+        (两个连续调用点会反复重新中断,见 MAX_GATE_ASKS 注释)。
+        预算编辑必须在 parse_confirmation 之前识别(后者的犹豫词表含"改")。
+        """
+        card = state.get("plan_card") or {}
+        gate_round = int(state.get("gate_round") or 0)
+        edit_round = int(state.get("plan_edit_round") or 0)
+        if gate_round >= MAX_GATE_ASKS:  # 两问仍不可识别 → 一律按取消(铁律)
+            return {"decision": "no", "gate_round": 0,
+                    "notice": {"kind": "plan_cancelled", "plan": card}}
+        question = _plan_confirm_question(card)
+        if gate_round:
+            question = "刚才没听清你的确认。" + question
+        # 契约测试要求 `interrupt({` 连续出现:保持单行调用形式,勿折行。
+        value = interrupt({"type": "confirm_plan", "question": question,
+                           "plan": card, "pay_required": False})
+        update = {"messages": [AIMessage(content=question),
+                               HumanMessage(content=str(value))]}
+        edit = parse_budget_edit(value)
+        if edit is not None and edit_round < MAX_CLARIFY_ROUNDS:
+            # 预算编辑不计入两问封顶;p_build 重算后会清掉 plan_edit_budget
+            return {**update, "decision": "", "plan_edit_budget": edit,
+                    "plan_edit_round": edit_round + 1}
+        if edit is not None:  # 编辑次数超限 → 当不可识别,进入两问封顶
+            value = "（预算编辑次数已达上限）"
+        decision = parse_confirmation(value)
+        if decision is None and _normalize_affirm(str(value)) in _PLAN_AFFIRM_EXTRA:
+            decision = "yes"
+        if decision == "yes":
+            return {**update, "decision": "yes", "gate_round": 0}
+        if decision == "no":
+            return {**update, "decision": "no", "gate_round": 0,
+                    "notice": {"kind": "plan_cancelled", "plan": card}}
+        return {**update, "decision": "", "gate_round": gate_round + 1}  # 自环重问
+
+    async def p_cut(state: AgentState) -> dict:
+        """把计划选中的订阅映射到现有取消链路(只写图状态,不写库)。"""
+        cut = (state.get("plan_draft") or {}).get("selected_cut") or {}
+        if not cut.get("merchant"):
+            return {"plan_stage": "",
+                    "notice": {"kind": "plan_blocked",
+                               "plan": state.get("plan_card")}}
+        return {"plan_stage": "cutting",
+                "plan_cut": {"sub_id": cut.get("sub_id"),
+                             "merchant": cut.get("merchant"),
+                             "amount_yuan": cut.get("amount_yuan"),
+                             "annual_yuan": cut.get("annual_yuan"),
+                             "status": "pending"},
+                "sub": {"action": "cancel", "merchant": cut.get("merchant"),
+                        "sub_id": cut.get("sub_id"), "sub": dict(cut)},
+                "decision": "", "notice": None}
+
+    async def p_degrade(state: AgentState) -> dict:
+        """砍单失败(订阅找不到/用户在取消密码闸门拒绝)→ 强制不砍,重算后重确认。
+
+        不能静默收尾:用户既没锁预算也没再确认。plan_force_no_cut 让 p_build
+        忽略 wants_cut 与候选订阅,按可支配额度下调;reason 写进计划卡说明。
+        """
+        cut = state.get("plan_cut") or {}
+        merchant = str(cut.get("merchant") or "")
+        reason = (f"「{merchant}」的自动扣费未取消" if merchant else "订阅未取消")
+        return {"plan_force_no_cut": True, "plan_stage": "",
+                "plan_cut": {**cut, "status": "kept", "reason": reason},
+                "decision": "", "notice": None}
+
+    async def p_lock(state: AgentState) -> dict:
+        """把计划底稿映射成联动建计划入参,交给 l_plan(建 pending 锁定单,不动钱)。
+
+        event_found=False(库里没有同日事件)时先 add_event 建在用户指定日期上:
+        l_plan 先找同日同名、再只按标题匹配,不先建就会被库里的同名旧事件绑走,
+        预算锁定与提醒排到另一天(规格 §6.7)。
+        """
+        draft = state.get("plan_draft") or {}
+        facts = draft.get("facts") or {}
+        budget = str(draft.get("recommended_budget_yuan") or "0.00")
+        cut = state.get("plan_cut")
+        notice = state.get("notice") or {}
+        if isinstance(cut, dict) and cut:
+            if str(notice.get("kind") or "") == "sub_cancelled":
+                cut = {**cut, "status": "cancelled"}
+            cut = {**cut, "locked_budget_yuan": budget}
+        if (_cents(budget) or 0) <= 0:  # 防御:可支配<=0 绝不建锁定单
+            return {"plan_cut": cut,
+                    "notice": {"kind": "plan_blocked",
+                               "plan": state.get("plan_card")}}
+        calls: list[dict] = []
+        snapshot = state.get("plan_facts") or {}
+        if snapshot.get("event_found") is False:
+            title = str(facts.get("event_title") or "生日")
+            is_birthday = "生日" in title
+            add_args = {"event_type": "birthday" if is_birthday else "custom",
+                        "title": title,
+                        "event_date": str(facts.get("event_date") or ""),
+                        "repeat_yearly": is_birthday}
+            res = await tools.call("add_event", **add_args)
+            calls.append(_jr("add_event", add_args, res))
+            err = _has_error(res)
+            if err or not isinstance(res, dict) or not res.get("event_id"):
+                return {"bank_calls": calls,
+                        "notice": {"kind": "bank_error", "where": "add_event",
+                                   "error": err or "事件创建失败"}}
+        return {"bank_calls": calls, "plan_stage": "locking", "plan_cut": cut,
+                "linkage": {"event_title": facts.get("event_title") or "生日",
+                            "event_date": facts.get("event_date"),
+                            "budget_yuan": budget,
+                            "actions": [dict(a) for a in draft.get("actions") or []]},
+                "linkage_missing": [], "notice": None}
+
+    async def p_report(state: AgentState) -> dict:
+        """计划支线的收尾播报(反问超限/快照失败/blocked/取消);成功路径走 l_report。"""
+        notice = state.get("notice")
+        if isinstance(notice, dict) and notice.get("kind") == "clarify_gaveup":
+            state = {**state,
+                     "notice": {"kind": "plan_need_info",
+                                "missing": state.get("plan_missing") or []}}
+        return await _announce(state)
+
     # ---------------------------------------------------------------- 闲聊兜底
 
     async def auth_guard(state: AgentState) -> dict:
@@ -2544,12 +2971,25 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         facts = {"notice": state.get("notice"), "order": state.get("order"),
                  "bill": state.get("bill"), "plan": state.get("plan"),
                  "due": state.get("due"),
+                 # 生日计划:卡片与订阅取消结果(计划支线的 l_report 也要播报)
+                 "plan_card": state.get("plan_card"),
+                 "plan_cut": state.get("plan_cut"),
                  "bank_calls": state.get("bank_calls", [])[-6:]}
         text = await ask_llm(REPORT_SYS, state["messages"],
                              "【事实】" + json.dumps(facts, ensure_ascii=False, default=str))
         if not text or not text.strip():
             text = _fallback_announcement(state.get("notice"))
         text = _with_followup(text, state.get("notice"))
+        # 砍单结果确定性收尾:计划支线最后一步是 l_report(播报锁定预算),
+        # 模型容易漏说"订阅已取消",用户就只看到锁钱、看不到取消的事实。
+        # 只在 plan_cut 已确认取消时追加,任何旧播报(plan_cut=None)零影响。
+        cut = state.get("plan_cut") or {}
+        if isinstance(cut, dict) and cut.get("status") == "cancelled":
+            merchant = str(cut.get("merchant") or "")
+            if merchant and merchant not in text:
+                text = (text.rstrip()
+                        + f" 已取消「{merchant}」的自动扣费"
+                          f"(年省 ¥{cut.get('annual_yuan')})。")
         return {"messages": [AIMessage(content=text)]}
 
     # ---------------------------------------------------------------- 路由函数
@@ -2779,11 +3219,17 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     def after_s_clarify(state: AgentState) -> str:
         return "s_report" if state.get("notice") else "s_extract"
 
+    def _cut_degraded(state: AgentState) -> bool:
+        """计划砍单在取消订阅阶段失败(订阅找不到/用户拒绝)→ 走降级重确认。"""
+        notice = state.get("notice") or {}
+        return (state.get("plan_stage") == "cutting"
+                and notice.get("kind") in ("sub_not_found", "sub_cancel_kept"))
+
     def after_s_pick(state: AgentState) -> str:
-        # 没定位到商户(notice 已设)→ 直接播报;
+        # 没定位到商户(notice 已设)→ 计划砍单降级重确认,其余直接播报;
         # cancel → 支付密码闸门;allow/skip(预审决策)→ s_decide 直接落库
         if state.get("notice"):
-            return "s_report"
+            return "p_degrade" if _cut_degraded(state) else "s_report"
         action = (state.get("sub") or {}).get("action")
         return "s_decide" if action in ("allow", "skip") else "s_gate"
 
@@ -2792,8 +3238,50 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         if decision == "yes":
             return "s_exec"
         if decision == "no":
-            return "s_report"   # notice=sub_cancel_kept 已由闸门设好
+            # notice=sub_cancel_kept 已由闸门设好;计划砍单被拒 → 降级重确认
+            return "p_degrade" if _cut_degraded(state) else "s_report"
         return "s_gate"
+
+    # ---- 生日预算计划路由 ----
+
+    def after_p_extract(state: AgentState) -> str:
+        return "p_clarify" if state.get("plan_missing") else "p_snapshot"
+
+    def after_p_clarify(state: AgentState) -> str:
+        # 反问超限(notice=clarify_gaveup)→ 兜底收尾,不再循环
+        return "p_report" if state.get("notice") else "p_extract"
+
+    def after_p_snapshot(state: AgentState) -> str:
+        return "p_report" if state.get("notice") else "p_build"
+
+    def after_p_build(state: AgentState) -> str:
+        return "p_report" if state.get("notice") else "p_gate"
+
+    def after_p_gate(state: AgentState) -> str:
+        if state.get("plan_edit_budget") is not None:
+            return "p_build"  # 预算编辑 → 重算后重新确认
+        decision = state.get("decision")
+        if decision == "yes":
+            return ("p_cut" if (state.get("plan_draft") or {}).get("selected_cut")
+                    else "p_lock")
+        if decision == "no":
+            return "p_report"
+        return "p_gate"  # 不可识别 → 自环重问(计数封顶后按取消)
+
+    def after_p_cut(state: AgentState) -> str:
+        return "p_report" if state.get("notice") else "s_pick"
+
+    def after_p_lock(state: AgentState) -> str:
+        return "p_report" if state.get("notice") else "l_plan"
+
+    def after_s_exec(state: AgentState) -> str:
+        # 计划砍单成功 → 接着锁定预算(p_lock → l_plan);其余(含普通订阅取消)
+        # 仍走 s_report,旧行为逐字不变。
+        notice = state.get("notice") or {}
+        if (state.get("plan_stage") == "cutting"
+                and notice.get("kind") == "sub_cancelled"):
+            return "p_lock"
+        return "s_report"
 
     # ---------------------------------------------------------------- 组装
 
@@ -2832,6 +3320,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                      ("s_pick", s_pick),
                      ("s_gate", s_gate), ("s_exec", s_exec),
                      ("s_decide", s_decide), ("s_report", s_report),
+                     ("p_extract", p_extract), ("p_clarify", p_clarify),
+                     ("p_snapshot", p_snapshot), ("p_build", p_build),
+                     ("p_gate", p_gate), ("p_cut", p_cut),
+                     ("p_degrade", p_degrade),
+                     ("p_lock", p_lock), ("p_report", p_report),
                      ("auth_guard", auth_guard), ("chat", chat)]:
         g.add_node(name, fn)
 
@@ -2842,7 +3335,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         "split_settle": "ss_extract", "contact_add": "c_extract",
         "l_extract": "l_extract", "l_due": "l_due",
         "bill_analysis": "b_extract", "wealth": "w_extract",
-        "card": "k_extract", "subscription": "s_extract", "chat": "chat"})
+        "card": "k_extract", "subscription": "s_extract",
+        "plan": "p_extract", "chat": "chat"})
     g.add_conditional_edges("t_extract", after_extract, ["t_clarify", "t_resolve"])
     g.add_conditional_edges("t_clarify", after_clarify, ["t_extract", "t_report"])
     g.add_conditional_edges("t_resolve", after_resolve,
@@ -2934,12 +3428,23 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     g.add_edge("s_list", "s_report")
     g.add_edge("s_precheck", "s_report")
     g.add_conditional_edges("s_pick", after_s_pick,
-                            ["s_report", "s_gate", "s_decide"])
+                            ["s_report", "s_gate", "s_decide", "p_degrade"])
     g.add_conditional_edges("s_gate", after_s_gate,
-                            ["s_exec", "s_report", "s_gate"])
-    g.add_edge("s_exec", "s_report")
+                            ["s_exec", "s_report", "s_gate", "p_degrade"])
+    g.add_conditional_edges("s_exec", after_s_exec, ["s_report", "p_lock"])
     g.add_edge("s_decide", "s_report")
     g.add_edge("s_report", END)
+    # ---- 生日预算计划(p_) ----
+    g.add_conditional_edges("p_extract", after_p_extract, ["p_clarify", "p_snapshot"])
+    g.add_conditional_edges("p_clarify", after_p_clarify, ["p_extract", "p_report"])
+    g.add_conditional_edges("p_snapshot", after_p_snapshot, ["p_build", "p_report"])
+    g.add_conditional_edges("p_build", after_p_build, ["p_gate", "p_report"])
+    g.add_conditional_edges("p_gate", after_p_gate,
+                            ["p_build", "p_cut", "p_lock", "p_report", "p_gate"])
+    g.add_conditional_edges("p_cut", after_p_cut, ["p_report", "s_pick"])
+    g.add_edge("p_degrade", "p_build")   # 降级:强制不砍 → p_build → p_gate 重确认
+    g.add_conditional_edges("p_lock", after_p_lock, ["p_report", "l_plan"])
+    g.add_edge("p_report", END)
     g.add_edge("auth_guard", "t_report")
     g.add_edge("chat", END)
 

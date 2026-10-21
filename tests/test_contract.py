@@ -217,6 +217,26 @@ PART_FIELD_CONTRACT: list[dict] = [
     {"interface": "LinkageActionCardData", "required": {
         "amount_yuan", "days_before", "idx", "merchant", "pay_required",
         "plan_id", "plan_title", "run_at", "what"}, "frontend_only": set()},
+    # plan 视图冻结在纯函数层 agent/plan.py::plan_card_view(graph/api 只做透传),
+    # 故该条目用 backend_sources 追加 plan.py 供契约 6 的特征键扫描。
+    {"interface": "PlanCardData", "required": {
+        "constraints", "cut_candidates", "facts", "goal", "note",
+        "pay_required", "plan_id", "plan_version", "recommended_budget_yuan",
+        "requested_budget_yuan", "selected_cut", "shortfall_yuan", "steps"},
+     "frontend_only": set(), "backend_sources": ("plan.py",)},
+    # 嵌套视图同样冻结:顶层字段没改名、嵌套字段改名时前端照样会静默少行。
+    {"interface": "PlanFacts", "required": {
+        "days_left", "disposable_yuan", "event_date", "event_title",
+        "expense_yuan", "formula", "income_yuan", "safety_buffer_yuan",
+        "source", "upcoming_yuan"},
+     "frontend_only": set(), "backend_sources": ("plan.py",)},
+    {"interface": "PlanStep", "required": {
+        "done", "gate", "idx", "risk", "title"},
+     "frontend_only": set(), "backend_sources": ("plan.py",)},
+    {"interface": "PlanCutCandidate", "required": {
+        "amount_yuan", "annual_yuan", "category", "merchant",
+        "next_charge_date", "period_text", "reason", "sub_id"},
+     "frontend_only": set(), "backend_sources": ("plan.py",)},
     {"interface": "WealthOrder", "required": {
         "amount_yuan", "code", "est_value_yuan", "fee_yuan",
         "from_account_name", "lock_days", "product", "redeem_net_yuan",
@@ -283,6 +303,14 @@ def _declared_keys(entry: dict) -> set[str]:
     return set()
 
 
+def _backend_src_for(entry: dict) -> str:
+    """条目对应的后端源码:默认 graph+api;视图在纯函数层的条目可追加源文件。"""
+    src = _read(GRAPH_PY) + _read(API_PY)
+    for name in entry.get("backend_sources", ()):
+        src += _read(ROOT / "agent" / name)
+    return src
+
+
 def test_part_field_contract_interfaces_match() -> None:
     """前端每个部件类型的字段集合,必须与冻结表完全一致。
 
@@ -325,11 +353,12 @@ def test_part_field_contract_backend_keys_exist(entry: dict) -> None:
     这里红灯报警。注意:字面量存在≠一定在该部件视图里(同键多视图共用),
     定位需人工;作为"改名/删除"报警线足够。
     """
-    backend_src = _read(GRAPH_PY) + _read(API_PY)
+    backend_src = _backend_src_for(entry)
     keys = (entry.get("required", set()) | entry.get("grep_only", set())) - _SKIP_KEY_GREP
     missing = [k for k in sorted(keys) if f'"{k}"' not in backend_src]
     where = entry.get("interface") or entry.get("label_map") or "ask-slot"
     assert not missing, (
-        f"{where} 的冻结键 {missing} 在 agent/graph.py+api.py 里已不存在——"
+        f"{where} 的冻结键 {missing} 在 agent/graph.py+api.py"
+        f"(及条目声明的 backend_sources)里已不存在——"
         f"疑似后端改名/删除,前端将渲染 undefined。请同步两端并更新契约表。"
     )
