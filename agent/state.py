@@ -50,6 +50,20 @@ class LinkageSlots(TypedDict, total=False):
     actions: list[dict] | None        # [{"what","merchant","days_before","amount_yuan"}]
 
 
+class PlanSlots(TypedDict, total=False):
+    """生日预算计划抽取槽位(LLM 只抽事实;金额/可支配/订阅筛选全在 agent/plan.py)。
+
+    命名说明:状态键不叫 plan——plan 已被联动计划回执占用(见 AgentState)。
+    """
+    event_title: str | None           # 事件名,如 "林悦的生日";缺省按 "生日" 语义
+    event_date: str | None            # 'YYYY-MM-DD'(确定性校验,只接受未来 0-365 天)
+    budget_yuan: str | None           # 用户期望预算,"元"数字字符串(纯数字,可带小数)
+    actions: list[dict] | None        # [{"what","merchant","days_before","amount_yuan"}]
+    goal: str | None                  # 本轮用户原话(router.turn_text)
+    constraints: list[str] | None     # 确定性提取的约束,如 ["不动房租"]
+    wants_cut: bool                   # 用户明确要求砍订阅/省钱(带否定词窗口)
+
+
 class BillSlots(TypedDict, total=False):
     """账单分析抽取槽位(只读场景,无闸门)。
 
@@ -104,7 +118,7 @@ class AgentState(TypedDict, total=False):
     # ---- 对话 ----
     messages: Annotated[list[AnyMessage], add_messages]
     intent: str | None                 # transfer | split_bill | split_settle | contact_add |
-                                       # linkage | bill_analysis | wealth | card | chat
+                                       # linkage | plan | bill_analysis | wealth | card | chat
     auth_user_id: int | None           # 登录用户 id(api 按 token 注入;None=观光模式,
                                        # 业务意图统一被 auth_guard 拦截引导登录)
 
@@ -141,6 +155,20 @@ class AgentState(TypedDict, total=False):
     due: dict | None
     linkage: LinkageSlots              # 联动抽取槽位(每次全量合并)
     linkage_missing: list[str]         # 联动待补项(event_date/budget_yuan/actions);非空 → 反问
+
+    # ---- 生日预算计划(p_ 前缀节点) ----
+    # 与联动(l_ 前缀)并列的只读规划管线:plan 键已被联动计划回执占用,勿复用。
+    # 计划确认本身不扣款;确认后按所选分支复用 s_*(取消订阅)/l_*(锁定预算)。
+    plan_slots: PlanSlots              # 抽取槽位(跨轮保留,与 linkage 同款)
+    plan_missing: list[str]            # 待补项(event_date/budget_yuan);非空 → p_clarify
+    plan_facts: dict | None            # p_snapshot 事实快照(可支配公式+候选订阅,内部字段)
+    plan_draft: dict | None            # plan.build_plan() 结果(可执行底稿)
+    plan_card: dict | None             # plan.plan_card_view() 结果(闸门卡片载荷)
+    plan_stage: str                    # "" | "cutting"(取消订阅中) | "locking"(锁定预算中)
+    plan_edit_budget: str | None       # p_gate 收到的预算编辑值 → p_build 重算
+    plan_edit_round: int               # 预算编辑轮次(封顶 MAX_CLARIFY_ROUNDS)
+    plan_cut: dict | None              # 订阅取消结果(商户/年省/状态/notice),播报事实用
+    plan_force_no_cut: bool            # 砍单降级标记:下一轮 p_build 不再选砍单
 
     # ---- 账单分析(b_ 前缀节点,只读) ----
     bill_slots: BillSlots              # 账单抽取槽位(键名说明见 BillSlots 注释)
@@ -193,6 +221,10 @@ NOTICE_KINDS = (
     "linkage_plan_done", # 到期动作全部完成,计划 done
     "linkage_progress",  # 到期处理进度(部分完成/有跳过)
     "no_due_plan",       # 到期消息没匹配到可处理的 active 计划
+    # ---- 生日预算计划(p_ 前缀节点) ----
+    "plan_cancelled",    # 计划闸门被拒/追问超限(零写、零扣款)
+    "plan_blocked",      # 可支配额度<=0 或预算不可执行,停止执行
+    "plan_need_info",    # 缺槽反问超限,计划未生成
     # ---- 账单分析 ----
     "bill_report",       # 账单工具结果(月报/分类/Top/异常),交播报原样转述
     # ---- 理财 ----

@@ -1499,3 +1499,540 @@ def test_subscription_precheck_allow_executes(tmp_path):
             assert row[1] == "active"
 
     run(scenario())
+
+
+# ---------------------------------------------------------------- 生日预算计划(p_ 管线)
+# 新增的只读规划管线:router(linkage + 规划触发词 → plan)→ p_extract
+# → p_snapshot(5 个只读工具)→ p_build(纯计算)→ p_gate(confirm_plan,无密码)
+# → 确认后按需 s_*(取消订阅)/l_*(锁定预算),两段动钱各自过支付密码闸门。
+# 本段全部是追加用例,上面的旧用例一行未改。剧本日期相对今天推算(生日 = 今天+4),
+# 断言不随日期流逝翻车。
+
+_PLAN_BIRTHDAY = (date.today() + timedelta(days=4)).isoformat()
+
+
+def _seed_month_flow(db: Path, income_yuan: str = "5000",
+                     expense_yuan: str = "1000") -> None:
+    """本月一笔工资收入 + 一笔消费:月报口径 → 可支配 3500.00。
+
+    monthly_report 会排除 subscribe/redeem 与"收款方是本人账户"的内部划转,
+    这里用普通商户名,确保计入收支。
+    """
+    from bank_core.money import yuan_to_cents
+
+    ts = f"{date.today().isoformat()}T10:00:00"
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            """INSERT INTO transactions
+               (account_id, ts, direction, amount_cents, balance_after_cents,
+                tx_type, counterparty, category, memo)
+               VALUES (1, ?, 'in', ?, 0, 'salary', '示例公司', '工资', '')""",
+            (ts, yuan_to_cents(income_yuan)))
+        conn.execute(
+            """INSERT INTO transactions
+               (account_id, ts, direction, amount_cents, balance_after_cents,
+                tx_type, counterparty, category, memo)
+               VALUES (1, ?, 'out', ?, 0, 'pos', '示例超市', '生活', '')""",
+            (ts, yuan_to_cents(expense_yuan)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# (id, merchant, category, amount_cents, period_days, status)
+_PLAN_SUB_SEED = [
+    (1, "腾讯视频VIP", "订阅", 3000, 31, "active"),
+    (2, "Keep会员", "订阅", 1900, 31, "active"),
+    (3, "张阿姨", "房租", 680000, 30, "active"),
+    (4, "理财专户", "转账", 200000, 30, "active"),
+    (5, "余额+货币基金", "理财", 200000, 30, "active"),
+    (6, "信用卡还款(0231)", "还款", 300000, 30, "active"),
+    (7, "中国移动", "通讯", 12800, 31, "active"),
+    (8, "旧会员", "订阅", 990, 31, "cancelled"),
+]
+
+
+def _seed_plan_subs(db: Path) -> None:
+    """订阅候选种子(行数据来自 bank_core.seed 的真实商户)。
+
+    next_charge_date 统一设成"今天 + 20 天",远于"生日 + 4 天"的预扣窗口,
+    保证 facts.upcoming_yuan = 0.00、可支配稳定为 3500.00。
+    """
+    nxt = (date.today() + timedelta(days=20)).isoformat()
+    conn = sqlite3.connect(db)
+    try:
+        conn.executemany(
+            """INSERT INTO subscriptions
+               (id, user_id, merchant_name, category, amount_cents, period_days,
+                next_charge_date, status, detected_at)
+               VALUES (?,1,?,?,?,?,?,?, '2026-09-01T00:00:00')""",
+            [(i, m, c, a, p, nxt, s)
+             for (i, m, c, a, p, s) in _PLAN_SUB_SEED])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _plan_slots_json(budget: str = "3000", title: str = "林悦的生日") -> str:
+    """p_extract 的 FakeLLM 抽取结果(日期运行时推算)。"""
+    return json.dumps(
+        {"event_title": title, "event_date": _PLAN_BIRTHDAY,
+         "budget_yuan": budget,
+         "actions": [
+             {"what": "鲜花", "merchant": "花店",
+              "days_before": 2, "amount_yuan": "300"},
+             {"what": "蛋糕", "merchant": "蛋糕店",
+              "days_before": 1, "amount_yuan": "200"}]},
+        ensure_ascii=False)
+
+
+def _plan_steps_gates(card: dict) -> list:
+    return [step.get("gate") for step in card.get("steps") or []]
+
+
+class _CountingLLM(FakeMessagesListChatModel):
+    """FakeLLM + 调用计数:FakeMessagesListChatModel 的 responses 会**循环**,
+    不能用 i 当计数;计划路径要钉死"router+p_extract+播报 = 3 次"。"""
+
+    calls: int = 0
+
+    async def ainvoke(self, *args, **kwargs):
+        self.calls += 1
+        return await super().ainvoke(*args, **kwargs)
+
+
+class _PlanSession:
+    """计划支线测试脚手架:与 _AgentSession 同构,额外暴露 LLM 调用计数。"""
+
+    def __init__(self, db: Path, tmp_path: Path, responses: list[str]):
+        self._db, self._tmp, self._resp = db, tmp_path, responses
+        self.llm: _CountingLLM | None = None
+        self.graph = None
+        self._conn = None
+
+    async def __aenter__(self):
+        tools = await load_bank_tools(self._db)
+        saver, self._conn = await make_sqlite_checkpointer(
+            self._tmp / "plan_agent_ckpt.sqlite")
+        self.llm = _CountingLLM(
+            responses=[AIMessage(content=r) for r in self._resp])
+        self.graph = build_agent_graph(self.llm, tools, saver)
+        return self
+
+    async def __aexit__(self, *exc):
+        if self._conn is not None:
+            await self._conn.close()
+        return False
+
+
+def _assert_plan_zero_writes(db: Path) -> None:
+    """confirm_plan 前的"零写"口径:只看业务表(audit_log 留痕不计)。"""
+    assert _count(db, "transfer_orders") == 0
+    assert _count(db, "linkage_plans") == 0
+    assert _count(db, "scheduled_tasks") == 0
+    assert _count(db, "user_events") == 0
+    assert _balance(db) == DEFAULT_BALANCE
+
+
+def test_plan_path_budget_fits_gate_then_lock(tmp_path):
+    """预算在可支配内:confirm_plan(无密码)前零写 → 确认后出现支付密码闸门
+    → 888888 后锁定单 executed、余额减预算、提醒任务落库;全程 3 次 LLM 调用。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',   # LLM 仍判 linkage;router 确定性改写成 plan
+            _plan_slots_json("3000"),
+            "生日预算已锁定。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "pp1"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我规划林悦的生日,预算3000")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "confirm_plan"
+            assert payload["pay_required"] is False  # 计划确认不是支付密码
+            card = payload["plan"]
+            assert card["requested_budget_yuan"] == "3000.00"
+            assert card["recommended_budget_yuan"] == "3000.00"
+            assert card["shortfall_yuan"] == "0.00"
+            assert card["facts"]["event_date"] == _PLAN_BIRTHDAY
+            assert card["facts"]["disposable_yuan"] == "3500.00"
+            assert card["selected_cut"] is None
+            assert "confirm_sub_cancel" not in _plan_steps_gates(card)
+            # 计划确认前:零业务写、无锁定单、余额分文未动
+            _assert_plan_zero_writes(db)
+
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            lock_gate = _interrupt_payload(r2)
+            assert lock_gate["type"] == "confirm_linkage"  # 锁定预算的支付密码闸门
+            assert lock_gate["pay_required"] is True
+            plan = lock_gate["plan"]
+            assert plan["budget_yuan"] == "3000.00"
+            order_id = plan["lock_order"]["order_id"]
+            # 建锁定单后、确认前:仍待确认、未扣款(两步走铁律)
+            assert _order(db, order_id)["status"] == "pending_confirm"
+            assert _balance(db) == DEFAULT_BALANCE
+
+            r3 = await graph.ainvoke(Command(resume="000000"), cfg)
+            assert _interrupt_payload(r3)["type"] == "confirm_linkage"
+            assert _balance(db) == DEFAULT_BALANCE
+
+            r4 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert not r4.get("__interrupt__")
+            order = _order(db, order_id)
+            assert order["status"] == "executed"
+            assert order["amount_cents"] == 300_000          # 恰好 3000 元
+            assert _balance(db) == DEFAULT_BALANCE - 300_000
+            assert _count(db, "linkage_plans") == 1
+            assert _count(db, "scheduled_tasks") == 2        # 每动作一条提醒
+            # router + p_extract + 最终播报 = 3 次;闸门/建计划/锁单不调 LLM
+            assert session.llm.calls == 3
+
+    run(scenario())
+
+
+def test_plan_path_budget_exceeds_lowers_recommended(tmp_path):
+    """预算 9000 > 可支配 3500 且没说砍订阅:建议预算下调为可支配,卡片体现差额,
+    确认前零业务写;取消后 plan_cancelled。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("9000"),
+            "好的,已取消这次生日计划。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "pp2"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我规划林悦的生日,预算9000")]}, cfg)
+            card = _interrupt_payload(r1)["plan"]
+            assert card["requested_budget_yuan"] == "9000.00"
+            assert card["recommended_budget_yuan"] == "3500.00"   # 下调到可支配
+            assert card["shortfall_yuan"] == "5500.00"            # 差额可见
+            assert card["selected_cut"] is None                   # 没说要砍就不砍
+            gates = _plan_steps_gates(card)
+            assert "confirm_sub_cancel" not in gates
+            assert "confirm_linkage" in gates
+            _assert_plan_zero_writes(db)
+
+            r2 = await graph.ainvoke(Command(resume="取消"), cfg)
+            assert not r2.get("__interrupt__")
+            snap = await graph.aget_state(cfg)
+            assert (snap.values.get("notice") or {}).get("kind") == "plan_cancelled"
+            _assert_plan_zero_writes(db)   # 取消后也没有任何业务写
+            assert session.llm.calls == 3
+
+    run(scenario())
+
+
+def test_plan_path_cut_subscription_then_lock(tmp_path):
+    """预算 3600 超出可支配 3500 + 钱不够就砍订阅:
+    confirm_plan → confirm_sub_cancel(密码)→ s_exec → confirm_linkage(再要一次密码)
+    → 锁定单 executed;房租/理财/话费类不可成为候选。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3600"),
+            "生日预算已锁定。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "pp3"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage(
+                     "帮我规划林悦的生日,预算3600,钱不够就砍订阅")]}, cfg)
+            card = _interrupt_payload(r1)["plan"]
+            # 候选只列真实会员:房租(张阿姨)/理财专户/货基/信用卡还款/中国移动全部排除
+            assert [c["merchant"] for c in card["cut_candidates"]] == [
+                "腾讯视频VIP", "Keep会员"]
+            assert card["selected_cut"]["merchant"] == "腾讯视频VIP"
+            assert card["selected_cut"]["amount_yuan"] == "30.00"
+            assert card["selected_cut"]["annual_yuan"] == "353.23"
+            assert card["recommended_budget_yuan"] == "3530.00"  # min(3600, 3500+30)
+            assert card["shortfall_yuan"] == "70.00"
+            assert _plan_steps_gates(card) == [
+                None, "confirm_sub_cancel", "confirm_linkage", None, None]
+            _assert_plan_zero_writes(db)
+
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            sub_gate = _interrupt_payload(r2)
+            assert sub_gate["type"] == "confirm_sub_cancel"
+            assert sub_gate["pay_required"] is True
+            assert sub_gate["sub"]["merchant_name"] == "腾讯视频VIP"
+            assert sub_gate["sub"]["sub_id"] == 1
+            assert _sub_status(db, 1) == "active"   # 密码闸门前不取消
+            assert _balance(db) == DEFAULT_BALANCE
+
+            r3 = await graph.ainvoke(Command(resume="888888"), cfg)
+            lock_gate = _interrupt_payload(r3)
+            # 取消订阅后进入锁定预算:再要一次支付密码(两个动钱动作各自过闸)
+            assert lock_gate["type"] == "confirm_linkage"
+            assert lock_gate["pay_required"] is True
+            assert lock_gate["plan"]["budget_yuan"] == "3530.00"
+            assert _sub_status(db, 1) == "cancelled"
+            assert _balance(db) == DEFAULT_BALANCE
+            order_id = lock_gate["plan"]["lock_order"]["order_id"]
+            assert _order(db, order_id)["status"] == "pending_confirm"
+
+            r4 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert not r4.get("__interrupt__")
+            assert _order(db, order_id)["status"] == "executed"
+            assert _order(db, order_id)["amount_cents"] == 353_000
+            assert _balance(db) == DEFAULT_BALANCE - 353_000
+            assert _count(db, "scheduled_tasks") == 2
+            # 最后一步是 l_report(锁定预算),确定性收尾必须让用户看到订阅已取消
+            text = _ai_text(r4)
+            assert "腾讯视频VIP" in text and "取消" in text
+            assert session.llm.calls == 3
+
+    run(scenario())
+
+
+def test_plan_path_budget_edit_rebuilds(tmp_path):
+    """计划卡上回"预算改成800":p_build 重算、计划卡变化,仍停在 confirm_plan,
+    零业务写;再取消 → plan_cancelled。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3000"),
+            "好的,已取消这次生日计划。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "pp4"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我规划林悦的生日,预算3000")]}, cfg)
+            first = _interrupt_payload(r1)
+            assert first["type"] == "confirm_plan"
+            assert first["plan"]["plan_version"] == 1
+            assert first["plan"]["requested_budget_yuan"] == "3000.00"
+
+            r2 = await graph.ainvoke(Command(resume="预算改成800"), cfg)
+            second = _interrupt_payload(r2)   # 重算后重新出卡,仍停在计划闸门
+            assert second["type"] == "confirm_plan"
+            card = second["plan"]
+            assert card["plan_version"] == 2
+            assert card["requested_budget_yuan"] == "800.00"
+            assert card["recommended_budget_yuan"] == "800.00"
+            assert card["shortfall_yuan"] == "0.00"
+            assert card["facts"]["disposable_yuan"] == "3500.00"  # 事实快照不重读
+            _assert_plan_zero_writes(db)      # 预算编辑不产生任何业务写
+
+            r3 = await graph.ainvoke(Command(resume="取消"), cfg)
+            assert not r3.get("__interrupt__")
+            snap = await graph.aget_state(cfg)
+            assert (snap.values.get("notice") or {}).get("kind") == "plan_cancelled"
+            _assert_plan_zero_writes(db)
+            assert session.llm.calls == 3     # 重算/重问都不调 LLM
+
+    run(scenario())
+
+
+def test_plan_cut_decline_reconfirms_without_cut(tmp_path):
+    """取消订阅的支付密码闸门回「取消」→ 不静默收尾(复核修复):
+    p_degrade(强制不砍)→ p_build(按可支配 3500 重算)→ p_gate 重新确认,
+    用户再次确认后才进 confirm_linkage 锁定预算。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3600"),
+            "生日预算已锁定。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "pp6"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage(
+                     "帮我规划林悦的生日,预算3600,钱不够就砍订阅")]}, cfg)
+            card = _interrupt_payload(r1)["plan"]
+            assert card["selected_cut"]["merchant"] == "腾讯视频VIP"
+
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            assert _interrupt_payload(r2)["type"] == "confirm_sub_cancel"
+
+            r3 = await graph.ainvoke(Command(resume="取消"), cfg)
+            again = _interrupt_payload(r3)      # 降级后重新出计划卡
+            assert again["type"] == "confirm_plan"
+            card2 = again["plan"]
+            assert card2["plan_version"] == 2
+            assert card2["selected_cut"] is None
+            assert card2["recommended_budget_yuan"] == "3500.00"
+            assert "订阅保留" in card2["note"]
+            assert _sub_status(db, 1) == "active"
+            assert _count(db, "linkage_plans") == 0   # 重新确认前不建锁定计划
+            assert _balance(db) == DEFAULT_BALANCE
+
+            r4 = await graph.ainvoke(Command(resume="确认"), cfg)
+            gate = _interrupt_payload(r4)
+            assert gate["type"] == "confirm_linkage"
+            assert gate["plan"]["budget_yuan"] == "3500.00"
+
+            r5 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert not r5.get("__interrupt__")
+            assert _balance(db) == DEFAULT_BALANCE - 350_000
+            assert _count(db, "linkage_plans") == 1
+            assert _count(db, "scheduled_tasks") == 2
+            assert session.llm.calls == 3
+
+    run(scenario())
+
+
+def test_plan_cut_subscription_gone_reconfirms_without_cut(tmp_path):
+    """计划选中的订阅在确认后已不存在(s_pick not_found)→ 同样降级重确认:
+    p_degrade → p_build(不砍)→ p_gate,而不是既没锁预算也没再确认。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3600"),
+            "生日预算已锁定。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "pp7"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage(
+                     "帮我规划林悦的生日,预算3600,钱不够就砍订阅")]}, cfg)
+            assert _interrupt_payload(r1)["plan"]["selected_cut"]["merchant"] == "腾讯视频VIP"
+
+            # 计划确认后、执行前,该订阅已在别处被取消 → s_pick 定位不到
+            conn = sqlite3.connect(db)
+            try:
+                conn.execute("UPDATE subscriptions SET status='cancelled' WHERE id=1")
+                conn.commit()
+            finally:
+                conn.close()
+
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            again = _interrupt_payload(r2)
+            assert again["type"] == "confirm_plan"
+            card2 = again["plan"]
+            assert card2["selected_cut"] is None
+            assert card2["recommended_budget_yuan"] == "3500.00"
+            assert "订阅保留" in card2["note"]
+            assert _count(db, "linkage_plans") == 0
+            assert _balance(db) == DEFAULT_BALANCE
+
+            r3 = await graph.ainvoke(Command(resume="确认"), cfg)
+            gate = _interrupt_payload(r3)
+            assert gate["type"] == "confirm_linkage"
+            assert gate["plan"]["budget_yuan"] == "3500.00"
+
+            r4 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert not r4.get("__interrupt__")
+            assert _balance(db) == DEFAULT_BALANCE - 350_000
+            assert _count(db, "linkage_plans") == 1
+
+    run(scenario())
+
+
+def test_plan_lock_creates_same_day_event_when_title_exists_other_day(tmp_path):
+    """计划卡日期=用户指定日:库里只有同名但不同日的事件时,p_lock 先建同日事件,
+    锁定预算/提醒都落在用户指定的那一天(复核修复:按标题绑回旧事件是错的)。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+    old_date = (date.today() + timedelta(days=10)).isoformat()
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            """INSERT INTO user_events
+               (id, user_id, event_type, title, event_date, repeat_yearly, note)
+               VALUES (1, 1, 'birthday', '林悦的生日', ?, 1, '')""",
+            (old_date,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3000"),
+            "生日预算已锁定。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "pp8"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我规划林悦的生日,预算3000")]}, cfg)
+            card = _interrupt_payload(r1)["plan"]
+            assert card["facts"]["event_date"] == _PLAN_BIRTHDAY
+            snap = await graph.aget_state(cfg)
+            assert snap.values["plan_facts"]["event_found"] is False   # 同日事件不存在
+
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            gate = _interrupt_payload(r2)
+            assert gate["type"] == "confirm_linkage"
+            assert gate["plan"]["event"]["date"] == _PLAN_BIRTHDAY
+            assert gate["plan"]["title"] == "林悦的生日联动"
+            # 提醒按用户指定的生日排:提前 2 天 / 提前 1 天
+            assert [a["run_at"][:10] for a in gate["plan"]["actions"]] == [
+                (date.today() + timedelta(days=2)).isoformat(),
+                (date.today() + timedelta(days=3)).isoformat()]
+
+            conn = _ro(db)
+            try:
+                rows = [tuple(r) for r in conn.execute(
+                    "SELECT title, event_date FROM user_events ORDER BY id").fetchall()]
+            finally:
+                conn.close()
+            assert rows == [("林悦的生日", old_date),
+                            ("林悦的生日", _PLAN_BIRTHDAY)]
+
+    run(scenario())
+
+
+def test_due_reminder_with_plan_trigger_word_stays_due(tmp_path):
+    """系统到期提醒(api.py 生成的文本)里计划标题自带"省钱"等强触发词时,
+    router 不得改写成 p_ 规划管线——旧 l_due 到期处理必须照常进动作闸门。"""
+    db = _mk_linkage_db(tmp_path)
+    plan_id = _seed_linkage_plan(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute("UPDATE linkage_plans SET title='省钱生日联动' WHERE id=?",
+                     (plan_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            "两样都买好了,联动计划完成。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "pp9"}}
+            msg = "(到期提醒) 计划《省钱生日联动》的【鲜花】今天到期,请帮我处理"
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage(msg)]}, cfg)
+            g1 = _interrupt_payload(r1)
+            assert g1["type"] == "confirm_linkage_action"
+            assert g1["action"]["plan_id"] == plan_id
+            assert g1["action"]["plan_title"] == "省钱生日联动"
+            assert g1["action"]["what"] == "鲜花"
+            assert _balance(db) == DEFAULT_BALANCE
+
+    run(scenario())

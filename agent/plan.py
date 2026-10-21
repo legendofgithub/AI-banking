@@ -481,8 +481,10 @@ def build_plan(*, plan_id: str | None = None, plan_version: int = 1,
     if blocked and not past:
         recommended = 0
         selected_cut = None
+        basis = ("上月" if fact_view["source"] == "prev_month"
+                 else "活期" if fact_view["source"] == "balance" else "本月")
         if disposable <= 0:
-            note = "本月可支配为 ¥0.00，无法锁定预算；建议先取消订阅或降低预算。"
+            note = f"{basis}可支配为 ¥0.00，无法锁定预算；建议先取消订阅或降低预算。"
         else:
             # 可支配足够但预算为 0：不能把"本月可支配为 0"这种假话说给用户
             note = "预算金额必须大于 0，无法生成可执行计划；请调整预算后再确认。"

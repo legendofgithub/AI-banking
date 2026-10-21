@@ -37,6 +37,7 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
     data-settle-confirmation    AA 成员结算确认卡片(评审修复后新增的闸门)
     data-linkage-plan           跨场景联动计划确认卡片(建计划后的预算锁定闸门)
     data-linkage-action         联动到期动作确认卡片(逐项购买闸门)
+    data-plan                   生日预算计划确认卡片(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
     data-wealth-confirmation    理财确认卡片(kind=subscribe|redeem;order=产品/金额/费率/锁定期/风险/账户)
     data-card-confirmation      卡片确认卡片(kind=apply|limits|status;card=card_id/尾号/类型/当前值/目标值)
     data-contact-choices        同名联系人选项(卡片式消歧,而非开放反问)
@@ -99,7 +100,7 @@ STREAM_HEADER_VALUE = "v1"  # 依据:ai-sdk.dev stream-protocol(自定义后端�
 # 不播报其他节点的消息(如 t_gate 复放的问题文本),避免与闸门卡片重复。
 ANNOUNCE_NODES = frozenset({"t_report", "sb_report", "ss_report", "c_report",
                             "l_report", "b_report", "w_report", "k_report",
-                            "s_report", "chat"})
+                            "s_report", "p_report", "chat"})
 
 TEXT_CHUNK_SIZE = 96  # 文本切片粒度(字节近似;假模型无 token 流,切片仅为产生增量帧)
 
@@ -1376,6 +1377,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             sub = payload.get("sub") or {}
             return [{"type": "data-subscription-cancel",
                             "data": {**sub, "pay_required": bool(payload.get("pay_required"))}}]
+        if ptype == "confirm_plan":
+            # 生日预算计划闸门(普通确认,确认本身不扣款):plan 视图由
+            # plan.plan_card_view 冻结;pay_required 恒为 False,取消订阅与
+            # 锁定预算各自还有一道支付密码闸门(p_cut→s_gate / p_lock→l_gate)
+            return [{"type": "data-plan",
+                            "data": {**(payload.get("plan") or {}), "pay_required": False}}]
         if ptype == "ask_slot":
             return [{"type": "data-ask-slot",
                             "data": {"missing": payload.get("missing") or []}}]
