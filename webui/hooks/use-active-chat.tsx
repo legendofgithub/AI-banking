@@ -18,7 +18,6 @@ import {
 } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
-import { getStoredApiKey } from "@/components/chat/api-key-settings";
 import { useDataStream } from "@/components/chat/data-stream-provider";
 import {
   type PayeeContact,
@@ -28,11 +27,8 @@ import { getChatHistoryPaginationKey } from "@/components/chat/sidebar-history";
 import { toast } from "@/components/chat/toast";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { getStoredToken } from "@/hooks/use-bank-auth";
-import {
-  type ChatModel,
-  DEFAULT_CHAT_MODEL,
-  pickDefaultModel,
-} from "@/lib/ai/models";
+import { useChatModel } from "@/hooks/use-chat-model";
+import { getStoredApiKey } from "@/lib/ai/byok";
 import type { Vote } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
@@ -53,7 +49,6 @@ type ActiveChatContextValue = {
   isLoading: boolean;
   votes: Vote[] | undefined;
   currentModelId: string;
-  setCurrentModelId: (id: string) => void;
   /** 打开「我要转账」收款人选择器(搜索/新建都在弹窗内完成) */
   openPayeePicker: () => void;
 };
@@ -86,46 +81,13 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   // 跟随页面主机,localhost / 127.0.0.1 / 局域网 IP 打开都能用
   const agentBase = `${typeof window === "undefined" ? "http://127.0.0.1" : `${window.location.protocol}//${window.location.hostname}`}:${process.env.NEXT_PUBLIC_AGENT_API_PORT ?? "8800"}`;
 
-  const [currentModelId, setCurrentModelId] = useState(DEFAULT_CHAT_MODEL);
+  // 当前模型由全局 ChatModelProvider 持有(左下角设置与输入框信息共用),
+  // 这里只保留 ref 给发送请求取最新值,避免流式回调里读到旧 state。
+  const { currentModelId } = useChatModel();
   const currentModelIdRef = useRef(currentModelId);
   useEffect(() => {
     currentModelIdRef.current = currentModelId;
   }, [currentModelId]);
-
-  // 默认模型自动落位(与后端同规则:清单里最新的 flash 级):
-  // 用户没选过(cookie 无 chat-model)时,清单一到就切到快模型,
-  // 避免默认 glm-4.6 把对话拖慢;选过则尊重选择。
-  // 清单走 webui 自己的 /api/models(BYOK 时把 Key 放请求头,由服务端代理拉取)。
-  const { data: autoModelsData } = useSWR(
-    `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/models`,
-    (url: string) => {
-      const key = getStoredApiKey();
-      return fetch(url, {
-        headers: key ? { "x-zai-key": key } : undefined,
-      }).then((r) => r.json());
-    },
-    { dedupingInterval: 60_000, revalidateOnFocus: false }
-  );
-  useEffect(() => {
-    const models = autoModelsData?.models as ChatModel[] | undefined;
-    if (!models?.length) {
-      return;
-    }
-    const cookie = document.cookie
-      .split("; ")
-      .find((row) => row.startsWith("chat-model="));
-    if (cookie) {
-      const picked = decodeURIComponent(cookie.split("=")[1] ?? "");
-      if (picked && models.some((m) => m.id === picked)) {
-        setCurrentModelId(picked);
-      }
-      return;
-    }
-    const auto = pickDefaultModel(models);
-    if (auto && currentModelIdRef.current === DEFAULT_CHAT_MODEL) {
-      setCurrentModelId(auto.id);
-    }
-  }, [autoModelsData]);
 
   const [input, setInput] = useState("");
   const [payeePickerOpen, setPayeePickerOpen] = useState(false);
@@ -259,18 +221,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     }
   }, [chatId, isNewChat, setMessages]);
 
-  useEffect(() => {
-    if (chatData && !isNewChat) {
-      const cookieModel = document.cookie
-        .split("; ")
-        .find((row) => row.startsWith("chat-model="))
-        ?.split("=")[1];
-      if (cookieModel) {
-        setCurrentModelId(decodeURIComponent(cookieModel));
-      }
-    }
-  }, [chatData, isNewChat]);
-
   const hasAppendedQueryRef = useRef(false);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -355,7 +305,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       openPayeePicker,
       regenerate,
       sendMessage,
-      setCurrentModelId,
       setInput,
       setMessages,
       status,

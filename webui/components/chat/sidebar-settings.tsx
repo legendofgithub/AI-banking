@@ -8,6 +8,7 @@
  */
 
 import {
+  BotIcon,
   GlobeIcon,
   LogOutIcon,
   MonitorIcon,
@@ -39,6 +40,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useBankAuth } from "@/hooks/use-bank-auth";
+import { useChatModel } from "@/hooks/use-chat-model";
 
 const ZOOM_KEY = "ui-zoom";
 const ZOOM_OPTIONS = [
@@ -78,6 +80,7 @@ function SettingRow({
 export function SidebarSettings() {
   const router = useRouter();
   const { user, logout } = useBankAuth();
+  const { selectedModel, setModelSettingsOpen } = useChatModel();
   const { setTheme, theme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [zoom, setZoom] = useState<ZoomKey>("default");
@@ -117,6 +120,10 @@ export function SidebarSettings() {
   const handleRegister = useCallback(() => {
     router.push("/register");
   }, [router]);
+
+  const handleOpenModelSettings = useCallback(() => {
+    setModelSettingsOpen(true);
+  }, [setModelSettingsOpen]);
 
   const nickname = user?.nickname?.trim() || "";
   const themeValue = mounted ? (theme ?? "system") : "";
@@ -195,6 +202,18 @@ export function SidebarSettings() {
                 </Button>
               </div>
             )}
+            <DropdownMenuSeparator />
+            {/* 大模型:模型清单 + 外接 API Key 统一在设置弹窗管理(2026-10-21) */}
+            <DropdownMenuItem
+              data-testid="settings-model"
+              onSelect={handleOpenModelSettings}
+            >
+              <SettingRow
+                icon={<BotIcon />}
+                label="大模型"
+                value={mounted ? selectedModel.name : ""}
+              />
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             {/* 界面语言:当前仅中文,英文留位不假开 */}
             <DropdownMenuSub>
