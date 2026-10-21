@@ -74,6 +74,53 @@ def test_transfer_two_step_and_balance(tmp_path):
     assert tx["balance_after_cents"] == 950000
 
 
+def test_deposit_creates_balance_and_is_idempotent(tmp_path):
+    """模拟入金:入账产生余额、写流水/资金记录(operator=user),同幂等键只加一次。"""
+    from bank_core import recorder
+
+    conn = init_db(tmp_path / "d.db")
+    acct = _mk_account(conn, 100000)  # 1000.00 元
+    led = LedgerService(conn, 1)
+
+    res = led.deposit(acct, 50000, note="测试入金", idempotency_key="dep-1")
+    assert res["duplicate"] is False
+    assert res["amount_yuan"] == "500.00"
+    assert res["balance_after_yuan"] == "1500.00"
+    bal = conn.execute("SELECT balance_cents FROM accounts WHERE id=?",
+                       (acct,)).fetchone()
+    assert bal["balance_cents"] == 150000
+
+    tx = conn.execute(
+        "SELECT * FROM transactions WHERE external_ref=?",
+        ("deposit:1:dep-1",)).fetchone()
+    assert tx["direction"] == "in" and tx["tx_type"] == "transfer_in"
+    assert tx["amount_cents"] == 50000 and tx["balance_after_cents"] == 150000
+
+    rc = sqlite3.connect(recorder.money_db_path(conn))
+    rc.row_factory = sqlite3.Row
+    try:
+        rec = rc.execute(
+            "SELECT * FROM money_records WHERE tool='deposit'").fetchone()
+        assert rec["delta_cents"] == 50000
+        assert rec["operator"] == "user"
+        assert rec["note"] == "测试入金"
+    finally:
+        rc.close()
+
+    # 同一个幂等键重放:返回第一次结果,余额不再增加
+    again = led.deposit(acct, 50000, note="重复", idempotency_key="dep-1")
+    assert again["duplicate"] is True
+    assert again["balance_after_yuan"] == "1500.00"
+    bal = conn.execute("SELECT balance_cents FROM accounts WHERE id=?",
+                       (acct,)).fetchone()
+    assert bal["balance_cents"] == 150000
+
+    with pytest.raises(LedgerError, match="大于 0"):
+        led.deposit(acct, 0, idempotency_key="dep-zero")
+    with pytest.raises(LedgerError, match="账户"):
+        led.deposit(999, 100, idempotency_key="dep-missing")
+
+
 def test_transfer_insufficient_funds(tmp_path):
     conn = init_db(tmp_path / "t.db")
     acct = _mk_account(conn, 1000)  # 10 元

@@ -14,6 +14,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage
 
 from agent.api import STREAM_HEADER, STREAM_HEADER_VALUE, create_app
+from bank_core.money import cents_to_yuan
 from test_agent_graph import DEFAULT_BALANCE, _balance, _mk_db, _order
 
 
@@ -84,6 +85,43 @@ def test_health_and_validation(tmp_path):
                          json={"messages": [{"role": "assistant", "content": "x"}],
                                "thread_id": "bad"})
         assert r2.status_code == 400
+
+
+def test_accounts_and_deposit_endpoint(tmp_path):
+    """新用户自助入金:登录后可查账户;入金产生余额,幂等键防重复。"""
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    headers = {"x-bank-token": tok}
+    with client:
+        accounts = client.get("/api/accounts", headers=headers)
+        assert accounts.status_code == 200
+        account = accounts.json()["accounts"][0]
+        before = account["balance_cents"]
+
+        payload = {
+            "account_id": account["id"],
+            "amount_yuan": "100",
+            "note": "测试入金",
+            "idempotency_key": "api-dep-1",
+        }
+        r = client.post("/api/deposit", headers=headers, json=payload)
+        assert r.status_code == 200
+        result = r.json()
+        assert result["duplicate"] is False
+        assert result["balance_after_yuan"] == cents_to_yuan(before + 10000)
+
+        # 同一个幂等键重放:余额不再增加
+        again = client.post("/api/deposit", headers=headers, json=payload)
+        assert again.status_code == 200
+        assert again.json()["duplicate"] is True
+        now = client.get("/api/accounts", headers=headers).json()["accounts"][0]
+        assert now["balance_cents"] == before + 10000
+
+        # 未登录不可入金;单笔上限
+        assert client.post("/api/deposit", json=payload).status_code == 401
+        over = {**payload, "amount_yuan": "100001",
+                "idempotency_key": "api-dep-over"}
+        assert client.post("/api/deposit", headers=headers,
+                           json=over).status_code == 400
 
 
 # ----------------------------------------------------------------- SSE 基本协议

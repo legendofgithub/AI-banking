@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 from .db import audit, now_iso
 from .money import cents_to_yuan
-from .recorder import record_change, record_money
+from .recorder import record_change, record_money, user_scope
 
 # 默认风控策略（policy_check 与 confirm 共用；后续可配置化）
 POLICY = {
@@ -50,6 +50,92 @@ class LedgerService:
             out.append(d)
         audit(self.conn, "list_accounts", {"user_id": self.user_id}, {"count": len(out)})
         return out
+
+    def deposit(self, account_id: int, amount_cents: int, *,
+                note: str = "", idempotency_key: str = "") -> dict:
+        """[MED] 模拟入金：演示外部账户 → 本人账户，入账即产生余额。
+
+        只做入账，不动用户现有资金，所以不需要支付密码；幂等键写入
+        external_ref，重复请求返回第一次结果。生产环境必须换成银行/持牌
+        机构的入金回调与对账，不能让用户自助凭空加余额。
+        """
+        if amount_cents <= 0:
+            raise LedgerError("入金金额必须大于 0")
+        key = (idempotency_key or uuid.uuid4().hex).strip()
+        ref = f"deposit:{self.user_id}:{key}"
+        conn = self.conn
+
+        def existing_result() -> dict | None:
+            row = conn.execute(
+                "SELECT * FROM transactions WHERE external_ref=?", (ref,)
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "account_id": row["account_id"],
+                "amount_yuan": cents_to_yuan(row["amount_cents"]),
+                "balance_after_yuan": cents_to_yuan(row["balance_after_cents"]),
+                "transaction_id": row["id"],
+                "duplicate": True,
+            }
+
+        found = existing_result()
+        if found:
+            return found
+
+        ts = now_iso()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            acct = conn.execute(
+                "SELECT * FROM accounts WHERE id=? AND user_id=?",
+                (account_id, self.user_id)).fetchone()
+            if not acct:
+                raise LedgerError("账户不存在")
+            # 并发下同一幂等键只入账一次
+            found = existing_result()
+            if found:
+                conn.rollback()
+                return found
+            before = acct["balance_cents"]
+            new_balance = before + amount_cents
+            conn.execute("UPDATE accounts SET balance_cents=? WHERE id=?",
+                         (new_balance, account_id))
+            cur = conn.execute(
+                """INSERT INTO transactions
+                   (account_id, ts, direction, amount_cents, balance_after_cents,
+                    tx_type, counterparty, category, channel, memo, external_ref)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (account_id, ts, "in", amount_cents, new_balance,
+                 "transfer_in", "模拟入金", "入金", "app",
+                 note or "模拟外部账户转入(演示)", ref))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            found = existing_result()
+            if found:
+                return found
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+        result = {
+            "account_id": account_id,
+            "amount_yuan": cents_to_yuan(amount_cents),
+            "balance_after_yuan": cents_to_yuan(new_balance),
+            "transaction_id": cur.lastrowid,
+            "duplicate": False,
+        }
+        audit(conn, "deposit",
+              {"account_id": account_id, "amount_cents": amount_cents,
+               "note": note, "user_id": self.user_id},
+              result, risk="MED")
+        with user_scope():
+            record_money(conn, self.user_id, tool="deposit",
+                         delta_cents=amount_cents, before_cents=before,
+                         after_cents=new_balance, account_id=account_id,
+                         ref=ref, note=note or "模拟入金")
+        return result
 
     def get_transactions(self, start: str | None = None, end: str | None = None,
                          category: str | None = None, counterparty: str | None = None,

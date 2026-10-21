@@ -8,6 +8,7 @@
  */
 
 import {
+  BanknoteIcon,
   BotIcon,
   GlobeIcon,
   LogOutIcon,
@@ -125,6 +126,11 @@ export function SidebarSettings() {
     setModelSettingsOpen(true);
   }, [setModelSettingsOpen]);
 
+  const handleOpenDeposit = useCallback(() => {
+    // 弹窗挂在 chat layout，侧栏收起/移动端时也能打开
+    window.dispatchEvent(new Event("open-deposit"));
+  }, []);
+
   const nickname = user?.nickname?.trim() || "";
   const themeValue = mounted ? (theme ?? "system") : "";
   const zoomValue =
@@ -171,14 +177,23 @@ export function SidebarSettings() {
               </div>
             </div>
             {user ? (
-              <DropdownMenuItem
-                className="text-red-500 focus:text-red-500"
-                data-testid="settings-logout"
-                onSelect={handleLogout}
-              >
-                <LogOutIcon />
-                退出登录
-              </DropdownMenuItem>
+              <>
+                <DropdownMenuItem
+                  data-testid="settings-deposit"
+                  onSelect={handleOpenDeposit}
+                >
+                  <BanknoteIcon />
+                  模拟入金
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  className="text-red-500 focus:text-red-500"
+                  data-testid="settings-logout"
+                  onSelect={handleLogout}
+                >
+                  <LogOutIcon />
+                  退出登录
+                </DropdownMenuItem>
+              </>
             ) : (
               <div className="flex gap-2 px-3 pb-2">
                 <Button

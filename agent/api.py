@@ -84,7 +84,7 @@ from agent import auth as auth_mod
 from agent.bank import BankTools, load_bank_tools
 from agent.graph import build_agent_graph, make_sqlite_checkpointer
 from bank_core.ledger import LedgerError, LedgerService
-from bank_core.money import cents_to_yuan
+from bank_core.money import cents_to_yuan, yuan_to_cents
 from agent.llm import (RequestLLM, fetch_models_json, get_llm,
                        normalize_base_url, pick_default_model,
                        reset_request_llm, set_request_llm)
@@ -154,6 +154,15 @@ class LoginIn(BaseModel):
 
 class TokenIn(BaseModel):
     token: str = Field(min_length=16, max_length=128)
+
+
+class DepositIn(BaseModel):
+    """模拟入金入参：account_id 为空时用本人第一个账户。"""
+
+    account_id: int | None = None
+    amount_yuan: str = Field(min_length=1, max_length=20)
+    note: str = Field(default="", max_length=200)
+    idempotency_key: str = Field(default="", max_length=80)
 
 
 class ContactIn(BaseModel):
@@ -448,6 +457,60 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         if not me:
             raise HTTPException(status_code=401, detail="未登录或会话过期")
         return me
+
+    # ------------------------------------------------ 账户 / 模拟入金(新用户自己产生余额)
+    @app.get("/api/accounts")
+    async def accounts(x_bank_token: str | None = Header(default=None)) -> dict:
+        """当前登录用户的账户与实时余额(入金弹窗/余额展示用)。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后查看账户"})
+        svc = LedgerService(app.state.auth_conn, user_id=me["user_id"])
+        return {"accounts": svc.list_accounts()}
+
+    @app.post("/api/deposit")
+    async def deposit(req: DepositIn,
+                      x_bank_token: str | None = Header(default=None)):
+        """模拟入金:演示外部账户 → 本人账户，入账即产生余额。
+
+        刻意不接真实银行卡:入账不是动用户现有资金，因此不需要支付密码;
+        但仍要求登录、单笔有上限、幂等键防重复入账。生产接入必须换成
+        银行/持牌机构入金回调与对账，不能允许用户自助凭空加余额。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后再入金"})
+        try:
+            amount_cents = yuan_to_cents(req.amount_yuan.strip())
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        if amount_cents > 10_000_000:  # 100,000 元/笔（演示上限）
+            return JSONResponse(
+                status_code=400,
+                content={"error": "单笔模拟入金上限 100,000 元"})
+        uid = me["user_id"]
+        account_id = req.account_id
+        if account_id is None:
+            row = app.state.auth_conn.execute(
+                "SELECT id FROM accounts WHERE user_id=? ORDER BY id LIMIT 1",
+                (uid,)).fetchone()
+            if not row:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "当前账号没有可用账户"})
+            account_id = row["id"]
+        key = req.idempotency_key.strip() or uuid4().hex
+        try:
+            result = LedgerService(
+                app.state.auth_conn, user_id=uid).deposit(
+                    account_id, amount_cents,
+                    note=req.note.strip(), idempotency_key=key)
+        except LedgerError as exc:
+            return JSONResponse(status_code=400,
+                                content={"error": str(exc)})
+        return result
 
     # ------------------------------------------------ 手机扫码登录(电脑端已登录 → 手机免密登录)
     @app.post("/api/auth/qr-ticket")
