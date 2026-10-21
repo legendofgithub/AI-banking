@@ -161,6 +161,11 @@ interface AnalysisStep {
 }
 
 interface AnalysisPlanData {
+  diff?: {
+    added?: string[];
+    changed?: Record<string, string[]>;
+    removed?: string[];
+  } | null;
   facts?: AnalysisFactRow[];
   goal?: string;
   hint?: string;
@@ -1356,6 +1361,19 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
   const steps = data.steps ?? [];
   const memory = data.memory_used ?? [];
   const reflection = data.reflection ?? {};
+  const diff = data.diff;
+  // 重规划 diff:只展示"改了哪些步骤",不渲染内部字段
+  const diffText = diff
+    ? [
+        diff.changed && Object.keys(diff.changed).length
+          ? `修改步骤 ${Object.keys(diff.changed).join("、")}`
+          : "",
+        diff.added?.length ? `新增步骤 ${diff.added.join("、")}` : "",
+        diff.removed?.length ? `删除步骤 ${diff.removed.join("、")}` : "",
+      ]
+        .filter(Boolean)
+        .join("；")
+    : "";
   return (
     <div className="w-[min(100%,420px)] rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-50 to-blue-50 p-4 shadow-[var(--shadow-card)] dark:border-sky-500/30 dark:from-sky-950/30 dark:to-blue-950/20">
       <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-sky-700 dark:text-sky-300">
@@ -1416,6 +1434,11 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
               </div>
             );
           })}
+        </div>
+      ) : null}
+      {diffText ? (
+        <div className="mt-2 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-800 [overflow-wrap:anywhere] dark:bg-amber-900/30 dark:text-amber-200">
+          计划调整:{diffText}(已完成步骤不重跑)
         </div>
       ) : null}
       {reflection.summary ? (

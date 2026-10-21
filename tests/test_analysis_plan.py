@@ -18,6 +18,7 @@ from agent.analysis import (
     ANALYSIS_HINT,
     bill_facts,
     build_analysis_card,
+    diff_text,
     failed_note,
     wealth_facts,
 )
@@ -193,7 +194,7 @@ def test_analysis_card_shape_is_frozen():
                                      "categories": CATEGORIES})
     assert set(card) == {"plan_id", "plan_version", "goal", "intent", "hint",
                          "facts", "steps", "reflection", "memory_used",
-                         "trace"}
+                         "trace", "diff"}
     assert card["plan_id"] == "aplan-1"
     assert card["intent"] == "bill"
     assert card["memory_used"] == ["上次关注餐饮"]
@@ -228,6 +229,25 @@ def test_analysis_card_switch_to_wealth_facts():
     labels = [r["label"] for r in card["facts"]]
     assert "风险等级" in labels
     assert "统计期间" not in labels
+
+
+def test_analysis_card_carries_replan_diff():
+    """重规划"改了什么"必须在卡片上可见(迭代计划 §12 验收第 4 条)。"""
+    plan = _observed_plan()
+    amended = {**plan, "steps": [
+        {**plan["steps"][0], "args": {"month": "2026-08"}}],
+               "plan_version": 2}
+    amended["diff_from_version"] = {"added": [], "removed": [],
+                                    "changed": {"s1": ["args"]}}
+    card = build_analysis_card(amended, intent="bill",
+                               bill={"report": REPORT})
+    assert card["diff"]["changed"] == {"s1": ["args"]}
+    assert diff_text(card["diff"]) == "修改步骤 s1"
+
+
+def test_diff_text_empty_without_replan():
+    assert diff_text(None) == ""
+    assert diff_text({"added": [], "removed": [], "changed": {}}) == ""
 
 
 def test_analysis_card_carries_reflection():

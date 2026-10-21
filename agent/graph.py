@@ -769,11 +769,53 @@ _ANALYSIS_TRIGGER_WORDS = ("分析", "复盘", "诊断", "规划", "行动方案
                            "省出", "省下", "给点建议", "出个方案")
 _BILL_TRIGGER_WORDS = ("账单", "开支", "开销", "消费", "收支", "流水", "月报")
 _WEALTH_TRIGGER_WORDS = ("理财", "持仓", "基金", "定投", "收益", "资产", "配置")
+# 生日目标词:只有用户明说"要过生日/准备生日"才把 plan_birthday 编进计划,
+# 避免"分析账单,生日那天花了多少"这类纯查询被误判成要建生日计划。
+_BIRTHDAY_GOAL_WORDS = ("过生日", "生日预算", "生日准备", "准备生日",
+                        "生日计划", "生日安排", "生日礼物")
 
 
 def _wants_analysis(text: str) -> bool:
     """是否交给 Agent Core 做只读分析编排(确定性,不新增 LLM 调用)。"""
     return any(w in str(text or "") for w in _ANALYSIS_TRIGGER_WORDS)
+
+
+def _repair_bill_args(args: dict) -> dict | None:
+    """账单步骤的确定性局部修复:该月没有可播报事实 → 回退到上一个完整月。
+
+    只改这一步的入参,已完成的其他步骤不动(迭代计划 §3.1:绝不整段重跑)。
+    """
+    raw = str((args or {}).get("month") or "")
+    m = re.search(r"(20\d{2})-(\d{2})", raw)
+    if not m:
+        return None
+    try:
+        cur = date(int(m.group(1)), int(m.group(2)), 1)
+    except ValueError:
+        return None
+    prev = _shift_month(cur, -1)
+    start, end = _month_bounds(prev.year, prev.month)
+    return {"month": f"{prev.year:04d}-{prev.month:02d}", "start": start,
+            "end": end,
+            "days": (date.fromisoformat(end) - date.fromisoformat(start)).days + 1}
+
+
+def _replan_step_id(plan: dict) -> str | None:
+    """计划里是否还有可以确定性局部修复的失败步骤(重规划次数已封顶则 None)。"""
+    plan = plan if isinstance(plan, dict) else {}
+    if int(plan.get("plan_version") or 1) >= core_mod.MAX_PLAN_VERSION:
+        return None  # 重规划上限:无限重试是反模式(自主规划计划 §7)
+    for step in (plan.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        if step.get("status") != core_mod.STEP_FAILED:
+            continue
+        skill = str(step.get("skill") or "")
+        reason = str((step.get("observation") or {}).get("reason") or "")
+        if skill == "analyze_bill" and "成功条件未满足" in reason:
+            if _repair_bill_args(step.get("args") or {}):
+                return str(step.get("id"))
+    return None
 
 
 def _select_analysis_skills(text: str, intent: str | None) -> list[str]:
@@ -797,12 +839,47 @@ def _select_analysis_skills(text: str, intent: str | None) -> list[str]:
         picks.insert(0, "analyze_bill")
     if intent == "wealth" and "analyze_wealth" not in picks:
         picks.append("analyze_wealth")
+    # 组合两个技能域的例子:"分析上个月账单,看看能不能省出 1000 给老婆过生日"
+    # → 一个计划里既有只读分析(analyze_bill),也有受闸门的行动(plan_birthday)。
+    if any(w in t for w in _BIRTHDAY_GOAL_WORDS) and "plan_birthday" not in picks:
+        picks.append("plan_birthday")
     return picks
 
 
 def _plan_title_from_text(text: str) -> str | None:
     m = re.search(r"《(.+?)》", str(text or ""))
     return m.group(1) if m else None
+
+
+def _remember_birthday(user_id: Any, patch: dict) -> None:
+    """写生日技能经验(失败软处理:记忆不可用绝不影响主流程)。"""
+    if not isinstance(patch, dict) or not patch:
+        return
+    try:
+        memory_mod.merge(user_id, "birthday", patch)
+    except Exception:  # noqa: BLE001 —— 记忆是旁路,不参与资金链路
+        pass
+
+
+def _birthday_patch(state: AgentState, result: str) -> dict:
+    """从图状态拼出"下次有用"的生日记忆摘要(只存短摘要,不存流水/完整报告)。"""
+    draft = state.get("plan_draft") or {}
+    cut = state.get("plan_cut") or {}
+    patch: dict = {
+        "last_budget_yuan": str(draft.get("recommended_budget_yuan") or ""),
+        "last_goal": str(draft.get("goal") or "")[:120],
+        "last_result": str(result or ""),
+        "at": datetime.now().isoformat(timespec="seconds"),
+    }
+    status = str(cut.get("status") or "")
+    merchant = str(cut.get("merchant") or "")
+    if status == "cancelled":  # 订阅确实取消了:下次仍可推荐
+        patch["accepted_cut_merchant"] = merchant
+        patch["rejected_cut"] = False
+    elif status == "kept":     # 保留订阅:下次默认不再推荐砍单
+        patch["rejected_cut"] = True
+        patch["rejected_cut_merchant"] = merchant
+    return patch
 
 
 def _latest_human(state: AgentState) -> str:
@@ -1787,6 +1864,23 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                            "plan": _plan_view(plan)}}
 
     async def l_report(state: AgentState) -> dict:
+        # 生日预算支线(plan_draft 存在=本轮是 Core/生日计划路径)收尾时写长期记忆;
+        # 纯联动流程没有 plan_draft,记忆读写一律不触发——旧行为逐字不变。
+        draft = state.get("plan_draft") or {}
+        if draft:
+            notice = state.get("notice") or {}
+            kind = str(notice.get("kind") or "")
+            _remember_birthday(
+                state.get("auth_user_id"),
+                _birthday_patch(state, "locked" if kind == "linkage_locked"
+                                else kind or "done"))
+            memory_mod.push_plan_history(state.get("auth_user_id"), {
+                "plan_id": draft.get("plan_id"),
+                "goal": str(draft.get("goal") or "")[:60],
+                "skills": "plan_birthday",
+                "result": "locked" if kind == "linkage_locked" else kind,
+                "plan_version": draft.get("plan_version"),
+            })
         return await _announce(state)
 
     # ------------------------------------------------------------ 到期处理
@@ -2737,7 +2831,21 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         budget = _cents(slots.get("budget_yuan"))
         if budget is None or budget <= 0:
             missing.append("budget_yuan")
-        return {"plan_slots": slots, "plan_missing": missing}
+
+        update: dict = {"plan_slots": slots, "plan_missing": missing}
+        # 记忆驱动(迭代计划 §6.4):上次用户在支付密码闸门前保留了订阅,
+        # 本次默认不再推荐取消它——默认值因记忆而变,而不是每次从零开始。
+        if slots.get("wants_cut") and not state.get("plan_force_no_cut") \
+                and not state.get("plan_stage"):
+            mem = memory_mod.recall(state.get("auth_user_id"), "birthday") or {}
+            if mem.get("rejected_cut"):
+                update["plan_force_no_cut"] = True
+                update["plan_cut"] = {
+                    "status": "kept",
+                    "merchant": str(mem.get("rejected_cut_merchant") or ""),
+                    "reason": "上次你保留了订阅,本次默认不再推荐取消",
+                }
+        return update
 
     p_clarify = _make_clarify_node("plan_missing", _plan_slot_question)
 
@@ -2944,6 +3052,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         cut = state.get("plan_cut") or {}
         merchant = str(cut.get("merchant") or "")
         reason = (f"「{merchant}」的自动扣费未取消" if merchant else "订阅未取消")
+        # 记忆:用户在支付密码闸门退却 → 下次默认不再推荐砍这个订阅(§6.4)
+        _remember_birthday(state.get("auth_user_id"), {
+            "rejected_cut": True, "rejected_cut_merchant": merchant,
+            "at": datetime.now().isoformat(timespec="seconds")})
         return {"plan_force_no_cut": True, "plan_stage": "",
                 "plan_cut": {**cut, "status": "kept", "reason": reason},
                 "decision": "", "notice": None}
@@ -2998,6 +3110,19 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             state = {**state,
                      "notice": {"kind": "plan_need_info",
                                 "missing": state.get("plan_missing") or []}}
+        # 计划没走成(取消/不可执行/缺信息)也要记一笔:下次别再默认给同一个方案
+        kind = str((state.get("notice") or {}).get("kind") or "")
+        draft = state.get("plan_draft") or {}
+        if draft and kind in ("plan_cancelled", "plan_blocked", "plan_need_info"):
+            _remember_birthday(state.get("auth_user_id"),
+                               _birthday_patch(state, kind))
+            memory_mod.push_plan_history(state.get("auth_user_id"), {
+                "plan_id": draft.get("plan_id"),
+                "goal": str(draft.get("goal") or "")[:60],
+                "skills": "plan_birthday",
+                "result": kind,
+                "plan_version": draft.get("plan_version"),
+            })
         return await _announce(state)
 
     # ---------------------------------------------------------------- Agent Core(a_ 前缀)
@@ -3069,6 +3194,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         for sid in core_mod.schedule(plan):
             step = core_mod.get_step(plan, sid) or {}
             name = str(step.get("skill") or "")
+            # 已完成/已转交/已跳过的步骤绝不重跑(重放会重复查库,转交步骤还会重复建单)
+            if step.get("status") in (core_mod.STEP_DONE, core_mod.STEP_DELEGATED,
+                                      core_mod.STEP_SKIPPED):
+                continue
             if name not in CORE_RUNNABLE:
                 # 资金/受闸门技能:交给既有链路(Core 不替用户确认、不绕支付密码)
                 plan = core_mod.set_step(plan, sid, status=core_mod.STEP_DELEGATED,
@@ -3100,6 +3229,21 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                                        wealth=observations.get("analyze_wealth"))
             update["analysis_view"] = card
         return update
+
+    async def a_replan(state: AgentState) -> dict:
+        """Replan:只改受影响的步骤,输出 plan diff,已完成步骤保持不动。"""
+        plan = state.get("agent_plan") or {}
+        sid = _replan_step_id(plan)
+        if not sid:  # 没有可确定性修复的步骤 → 交给 a_reflect 如实复盘
+            return {"agent_plan": plan}
+        step = core_mod.get_step(plan, sid) or {}
+        new_args = _repair_bill_args(step.get("args") or {}) or {}
+        amended = core_mod.set_step(plan, sid, args=new_args,
+                                    status=core_mod.STEP_PENDING,
+                                    observation=None)
+        diff = core_mod.diff_plans(plan, amended)
+        amended = core_mod.bump_version(amended, diff)
+        return {"agent_plan": amended, "analysis_view": None}
 
     async def a_reflect(state: AgentState) -> dict:
         """Reflect + Remember:对照成功条件复盘,写长期记忆与计划历史。"""
@@ -3523,11 +3667,14 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         return "a_report" if notice.get("kind") == "analysis_blocked" else "a_exec"
 
     def after_a_exec(state: AgentState) -> str:
-        """计划里若有受闸门技能步骤(如生日预算)→ 交给既有 p_* 链路执行。"""
-        steps = (state.get("agent_plan") or {}).get("steps") or []
+        """转交既有受闸门链路 / 局部重规划 / 收尾复盘,三条路互斥。"""
+        plan = state.get("agent_plan") or {}
+        steps = plan.get("steps") or []
         if any(isinstance(s, dict) and s.get("status") == core_mod.STEP_DELEGATED
                for s in steps):
-            return "p_extract"
+            return "p_extract"       # 生日等资金技能:既有确认 + 支付密码
+        if _replan_step_id(plan):
+            return "a_replan"        # 只改受影响步骤,展示 plan diff
         return "a_reflect"
 
     # ---------------------------------------------------------------- 组装
@@ -3574,8 +3721,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                      ("p_lock", p_lock), ("p_report", p_report),
                      # ---- Agent Core(迭代计划 §3:一个 Core + 六个技能) ----
                      ("a_perceive", a_perceive), ("a_plan", a_plan),
-                     ("a_exec", a_exec), ("a_reflect", a_reflect),
-                     ("a_report", a_report),
+                     ("a_exec", a_exec), ("a_replan", a_replan),
+                     ("a_reflect", a_reflect), ("a_report", a_report),
                      ("auth_guard", auth_guard), ("chat", chat)]:
         g.add_node(name, fn)
 
@@ -3593,7 +3740,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     # ---- Agent Core 闭环 ----
     g.add_edge("a_perceive", "a_plan")
     g.add_conditional_edges("a_plan", after_a_plan, ["a_exec", "a_report"])
-    g.add_conditional_edges("a_exec", after_a_exec, ["a_reflect", "p_extract"])
+    g.add_conditional_edges("a_exec", after_a_exec,
+                            ["a_reflect", "a_replan", "p_extract"])
+    g.add_edge("a_replan", "a_exec")
     g.add_edge("a_reflect", "a_report")
     g.add_edge("a_report", END)
     g.add_conditional_edges("t_extract", after_extract, ["t_clarify", "t_resolve"])
