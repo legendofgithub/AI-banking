@@ -117,8 +117,14 @@ def cancel_transfer_order(order_id: int) -> dict:
 
 @mcp.tool
 def get_policy() -> dict:
-    """[READ] 当前风控策略（单笔/日限额等），供 Agent 向用户解释拦截原因。"""
-    return {k: f"{v/100:.0f}元" if k.endswith("_cents") else v for k, v in POLICY.items()}
+    """[READ] 当前风控策略（单笔/日限额等，已叠加当前用户的账户级限额），
+    供 Agent 向用户解释拦截原因。"""
+    limits = _ledger.transfer_limits()
+    merged = dict(POLICY)
+    merged["single_tx_limit_cents"] = limits["single_limit_cents"]
+    merged["daily_out_limit_cents"] = limits["daily_limit_cents"]
+    return {k: f"{v/100:.0f}元" if k.endswith("_cents") else v
+            for k, v in merged.items()}
 
 
 @mcp.tool

@@ -277,6 +277,43 @@ def test_admin_sees_bound_card_virtual_balance(rec_env, client):
     assert row["balance_yuan"] == "50000.00"
 
 
+def test_admin_transfer_limits(client):
+    """总览业务参数:查看/保存/恢复账户级每日与单笔转账限额,写审计与功能修改。"""
+    d = client.get("/api/overview").json()
+    assert d["limits"]["daily_limit_yuan"] == "10000.00"
+    assert d["limits"]["single_limit_yuan"] == "50000.00"
+    assert d["limits"]["daily_overridden"] is False
+
+    r = client.post("/api/transfer-limits", json={
+        "daily_limit_yuan": "8000", "single_limit_yuan": "3000"})
+    assert r.status_code == 200
+    assert r.json()["limits"]["daily_limit_yuan"] == "8000.00"
+    assert r.json()["limits"]["single_limit_yuan"] == "3000.00"
+    assert r.json()["limits"]["daily_overridden"] is True
+
+    ov = client.get("/api/overview").json()
+    assert ov["limits"]["daily_limit_yuan"] == "8000.00"
+    assert ov["limits"]["single_limit_yuan"] == "3000.00"
+    recs = client.get("/api/change-records", params={"category": "admin"}
+                      ).json()["records"]
+    assert recs[0]["action"] == "transfer_limits"
+    assert recs[0]["operator"] == "admin"
+
+    # 非法金额拒绝
+    assert client.post("/api/transfer-limits", json={
+        "daily_limit_yuan": "abc", "single_limit_yuan": "3000"}).status_code == 400
+    assert client.post("/api/transfer-limits", json={
+        "daily_limit_yuan": "-1", "single_limit_yuan": "3000"}).status_code == 400
+
+    # 0/空恢复系统默认
+    r = client.post("/api/transfer-limits", json={
+        "daily_limit_yuan": "0", "single_limit_yuan": "0"})
+    assert r.status_code == 200
+    assert r.json()["limits"]["daily_limit_yuan"] == "10000.00"
+    assert r.json()["limits"]["single_limit_yuan"] == "50000.00"
+    assert r.json()["limits"]["daily_overridden"] is False
+
+
 def test_admin_cancel_pending_order(rec_env, client):
     """建一张待确认单（模拟前端幂等未命中的孤儿单）→ 管理端撤销 + 留痕。"""
     ledger = LedgerService(rec_env, 1)
