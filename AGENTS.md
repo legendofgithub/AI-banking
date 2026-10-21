@@ -104,6 +104,9 @@ cd webui && node e2e-payee-check.mjs
 # 手机扫码登录 e2e(电脑端出码 → 模拟手机 375px 扫码免密登录 → 票据一次性)
 cd webui && node e2e-mobile-login-check.mjs
 
+# 大模型管理 e2e(设置→新增供应商→测试连接→刷新/重登仍在;校验接口 mock)
+cd webui && node e2e-model-settings-check.mjs
+
 # 手机端 e2e(375px 视口:登录→转账→支付密码卡→扣款,断言无横向溢出、
 # 收款人弹窗不溢出且搜索可用、悬浮提醒不遮输入区;改动银行卡片/输入区布局后必跑)
 cd webui && node e2e-mobile-check.mjs

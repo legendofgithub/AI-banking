@@ -203,14 +203,14 @@ export function SidebarSettings() {
               </div>
             )}
             <DropdownMenuSeparator />
-            {/* 大模型:模型清单 + 外接 API Key 统一在设置弹窗管理(2026-10-21) */}
+            {/* 大模型管理:供应商连接 + 模型清单统一在设置弹窗管理(2026-10-21) */}
             <DropdownMenuItem
               data-testid="settings-model"
               onSelect={handleOpenModelSettings}
             >
               <SettingRow
                 icon={<BotIcon />}
-                label="大模型"
+                label="大模型管理"
                 value={mounted ? selectedModel.name : ""}
               />
             </DropdownMenuItem>

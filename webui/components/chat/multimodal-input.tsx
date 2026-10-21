@@ -646,7 +646,7 @@ function PureAttachmentsButton({
 
 const AttachmentsButton = memo(PureAttachmentsButton);
 
-/* 底部只读信息:当前已连接模型。配置入口统一在左下角「设置 → 大模型」,
+/* 底部只读信息:当前使用的模型。配置入口统一在左下角「设置 → 大模型管理」,
    这里不再放下拉选择器,也不再放 API Key 钥匙图标。 */
 function ConnectedModelInfo() {
   const { selectedModel } = useChatModel();
@@ -655,15 +655,10 @@ function ConnectedModelInfo() {
     <div
       className="flex h-7 max-w-[180px] items-center gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground"
       data-testid="connected-model-info"
-      title="当前已连接模型;在左下角「设置 → 大模型」中管理"
+      title="当前使用的模型;在左下角「设置 → 大模型管理」中管理"
     >
       <ModelSelectorLogo provider={selectedModel.provider} />
       <span className="truncate">{selectedModel.name}</span>
-      <span
-        aria-hidden="true"
-        className="ml-0.5 size-1.5 shrink-0 rounded-full bg-emerald-500"
-      />
-      <span className="sr-only">已连接</span>
     </div>
   );
 }

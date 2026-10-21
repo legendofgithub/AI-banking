@@ -461,13 +461,15 @@ def test_thread_create_named_and_search(tmp_path):
 # ----------------------------------------------------------------- BYOK / 模型切换
 
 def test_chat_request_accepts_byok_fields(tmp_path):
-    """请求携带 api_key/model 字段:假模型注入路径下被安全忽略,流程不受影响。"""
+    """请求携带供应商连接字段:假模型注入路径下被安全忽略,流程不受影响。"""
     client, _db, _tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
     with client:
         r = client.post("/api/chat", json={
             "messages": [{"role": "user", "content": "你好"}],
             "thread_id": "byok-1",
             "api_key": "x" * 40,
+            "base_url": "https://api.deepseek.com/v1",
+            "provider": "deepseek",
             "model": "glm-5.3-flash",
         })
         assert r.status_code == 200
@@ -479,18 +481,33 @@ def test_validate_key_endpoint(tmp_path, monkeypatch):
     import agent.llm as llm_mod
     client, _db, _tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
 
-    def fake_ok(base, key):
+    def fake_ok(base, key, provider="openai"):
         assert key == "k" * 40
+        assert base == "https://api.deepseek.com/v1"
+        assert provider == "deepseek"
         return {"data": [{"id": "glm-5.3"}, {"id": "glm-5.3-flash"}]}
 
-    def bad(base, key):
+    def bad(base, key, provider="openai"):
         raise OSError("401 unauthorized")
 
     with client:
         monkeypatch.setattr(llm_mod, "fetch_models_json", fake_ok)
-        r = client.post("/api/validate-key", json={"api_key": "k" * 40})
+        r = client.post("/api/validate-key", json={
+            "api_key": "k" * 40,
+            "base_url": "https://api.deepseek.com/v1/",
+            "provider": "deepseek",
+        })
         assert r.status_code == 200
         assert r.json() == {"ok": True, "model_count": 2}
+
+        # 非法 Base URL 在发起请求前就被拒(不允许 file:// 等协议)
+        r_bad_base = client.post("/api/validate-key", json={
+            "api_key": "k" * 40,
+            "base_url": "file:///etc/passwd",
+            "provider": "openai",
+        })
+        assert r_bad_base.json()["ok"] is False
+        assert "http" in r_bad_base.json()["error"]
 
         monkeypatch.setattr(llm_mod, "fetch_models_json", bad)
         r2 = client.post("/api/validate-key", json={"api_key": "k" * 40})

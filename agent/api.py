@@ -86,7 +86,8 @@ from agent.graph import build_agent_graph, make_sqlite_checkpointer
 from bank_core.ledger import LedgerError, LedgerService
 from bank_core.money import cents_to_yuan
 from agent.llm import (RequestLLM, fetch_models_json, get_llm,
-                       pick_default_model, reset_request_llm, set_request_llm)
+                       normalize_base_url, pick_default_model,
+                       reset_request_llm, set_request_llm)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -119,8 +120,11 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     thread_id: str = Field(min_length=1, max_length=128)
-    # BYOK(可选):界面设置里填的 Key 随请求生效;不填走部署方环境变量
+    # BYOK(可选):界面「大模型管理」里已连接供应商的 Key/端点/协议随请求生效;
+    # 不填走部署方环境变量
     api_key: str | None = Field(default=None, max_length=200)
+    base_url: str | None = Field(default=None, max_length=300)
+    provider: str | None = Field(default=None, max_length=32)
     # 模型切换(可选):前端选择器选中的模型;不填走自动选型
     model: str | None = Field(default=None, max_length=64)
     # 登录会话(可选):注册/登录下发的 token;不带=观光模式(闲聊可用,
@@ -130,6 +134,8 @@ class ChatRequest(BaseModel):
 
 class ValidateKeyRequest(BaseModel):
     api_key: str = Field(min_length=10, max_length=200)
+    base_url: str | None = Field(default=None, max_length=300)
+    provider: str | None = Field(default=None, max_length=32)
 
 
 class RegisterIn(BaseModel):
@@ -293,7 +299,8 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         # 模型选择:显式 ZAI_MODEL 优先;否则按端点清单自动选(最新 flash 级,
         # 与前端模型探测同源,端点上新模型后重启即自动跟进)。
         # 生产用 RequestLLM 门面:请求可携带用户自填 Key(BYOK)与所选模型。
-        model_name = os.environ.get("ZAI_MODEL") or await pick_default_model()
+        model_name = os.environ.get("ZAI_MODEL") or await pick_default_model(
+            provider=os.environ.get("ZAI_PROVIDER"))
         model = llm if llm is not None else RequestLLM(
             fallback_model=model_name,
             timeout=LLM_TIMEOUT_S, max_retries=LLM_MAX_RETRIES)
@@ -815,13 +822,22 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
 
     @app.post("/api/validate-key")
     async def validate_key(req: ValidateKeyRequest) -> dict:
-        """校验用户自填的 API Key(拉一次模型清单即可,不耗推理 token)。"""
+        """校验用户接入的供应商(拉一次模型清单,不耗推理 token)。
+
+        支持 DeepSeek/OpenAI/自定义(OpenAI 兼容)与 Claude(Anthropic 原生);
+        base_url 为空时用部署方环境变量。
+        """
         from agent import llm as llm_mod  # 动态引用,便于测试 monkeypatch
-        base = (os.environ.get("ZAI_BASE_URL")
+        try:
+            base = normalize_base_url(req.base_url) or (
+                os.environ.get("ZAI_BASE_URL")
                 or "https://open.bigmodel.cn/api/paas/v4/")
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        provider = req.provider or "openai"
         try:
             payload = await asyncio.to_thread(
-                llm_mod.fetch_models_json, base, req.api_key)
+                llm_mod.fetch_models_json, base, req.api_key, provider)
             return {"ok": True,
                     "model_count": len(payload.get("data") or [])}
         except Exception as exc:  # noqa: BLE001 —— 校验失败返回原因,不抛 500
@@ -930,6 +946,10 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                           if m.role == "user" and m.content.strip()), None)
         if not last_user:
             raise HTTPException(status_code=400, detail="messages 里没有有效的 user 消息")
+        try:
+            base_url = normalize_base_url(req.base_url)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         await _touch_thread(req.thread_id, str(last_user), owner=uid or 0)
 
         cfg = {"configurable": {"thread_id": req.thread_id},
@@ -944,8 +964,10 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         async def event_source() -> AsyncIterator[str]:
             yield _frame({"type": "start", "messageId": uuid4().hex})
             gate: dict | None = None
-            # BYOK/模型切换:本请求携带的 Key/模型覆盖图内所有 LLM 调用
-            token = set_request_llm(api_key=req.api_key, model=req.model)
+            # BYOK/模型切换:本请求携带的 Key/端点/供应商覆盖图内所有 LLM 调用
+            token = set_request_llm(api_key=req.api_key, model=req.model,
+                                    base_url=base_url,
+                                    provider=req.provider)
             try:
                 # 评审修复:单轮整体 deadline(模型/工具挂起时前端 guaranteed 收到
                 # error 帧 + finish,不再无限等待;asyncio.timeout 取消底层流)

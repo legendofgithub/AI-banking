@@ -28,7 +28,7 @@ import { toast } from "@/components/chat/toast";
 import { useAutoResume } from "@/hooks/use-auto-resume";
 import { getStoredToken } from "@/hooks/use-bank-auth";
 import { useChatModel } from "@/hooks/use-chat-model";
-import { getStoredApiKey } from "@/lib/ai/byok";
+import { getActiveConnection } from "@/lib/ai/byok";
 import type { Vote } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
 import type { ChatMessage } from "@/lib/types";
@@ -171,11 +171,19 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
           role: message.role,
         });
 
+        const connection = getActiveConnection();
+
         return {
           body: {
             thread_id: request.id,
-            // BYOK:界面自填的 Key 随请求生效(不填后端走部署方环境变量)
-            ...(getStoredApiKey() ? { api_key: getStoredApiKey() } : {}),
+            // BYOK:本机当前供应商连接的 Key/端点/协议随请求生效
+            ...(connection
+              ? {
+                  api_key: connection.apiKey,
+                  base_url: connection.baseUrl,
+                  provider: connection.provider,
+                }
+              : {}),
             // 登录态:bank-token 随请求生效(未登录不带,后端按匿名演示处理)
             ...(getStoredToken() ? { token: getStoredToken() } : {}),
             messages: request.messages

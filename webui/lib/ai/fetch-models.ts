@@ -1,17 +1,17 @@
 import {
   type ChatModel,
   DEFAULT_CHAT_MODEL,
-  FALLBACK_CHAT_MODELS,
   type ModelCapabilities,
+  providerFallbackModels,
   toChatModel,
   ZAI_BASE_URL_DEFAULT,
 } from "./models";
 
-// 服务端专用:实时探测智谱端点上的可用模型。Next fetch 缓存 1 小时,
-// 即智谱上新模型后,最多 1 小时(或重启服务)就会出现在前端选择器里。
+// 服务端专用:实时探测当前端点上的可用模型。Next fetch 缓存 1 小时,
+// 部署方环境变量路径上新模型后最多 1 小时出现;用户自带连接一律 no-store。
 
 type ZaiModelsResponse = {
-  data?: { created?: number; id: string }[];
+  data?: { created?: number; created_at?: string; id: string }[];
 };
 
 function getZaiConfig() {
@@ -23,38 +23,48 @@ function getZaiConfig() {
 }
 
 export async function getZaiChatModels(
-  keyOverride?: string
+  keyOverride?: string,
+  baseOverride?: string,
+  providerOverride?: string
 ): Promise<ChatModel[]> {
-  const { baseURL } = getZaiConfig();
+  const { baseURL: envBaseURL } = getZaiConfig();
+  const baseURL = (baseOverride?.trim() || envBaseURL).replace(/\/?$/, "/");
   const apiKey = keyOverride || process.env.ZAI_API_KEY;
+  const provider = providerOverride?.trim() || undefined;
   if (!apiKey) {
-    return FALLBACK_CHAT_MODELS;
+    return providerFallbackModels(provider);
   }
+
+  const headers: Record<string, string> =
+    provider === "anthropic"
+      ? { "anthropic-version": "2023-06-01", "x-api-key": apiKey }
+      : { Authorization: `Bearer ${apiKey}` };
+  const hasOverride = Boolean(keyOverride || baseOverride || provider);
 
   try {
     const res = await fetch(`${baseURL}models`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      // 用户自填 Key 时绕过 Next 数据缓存(缓存键不含鉴权头,会把 A 的
-      // 清单错发给 B);部署方环境变量路径保留 1h 缓存。
-      ...(keyOverride
+      headers,
+      // 用户自带连接绕过 Next 数据缓存(缓存键不含鉴权头/端点,
+      // 会把 A 的清单错发给 B);部署方环境变量路径保留 1h 缓存。
+      ...(hasOverride
         ? { cache: "no-store" as const }
         : { next: { revalidate: 3600 } }),
     });
     if (!res.ok) {
-      return FALLBACK_CHAT_MODELS;
+      return providerFallbackModels(provider);
     }
 
     const json = (await res.json()) as ZaiModelsResponse;
     const list = (json.data ?? []).filter((m) => m.id);
     if (list.length === 0) {
-      return FALLBACK_CHAT_MODELS;
+      return providerFallbackModels(provider);
     }
 
     // 新模型排前面;没有 created 字段的保持接口原序
     list.sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
-    return list.map((m) => toChatModel(m.id));
+    return list.map((m) => toChatModel(m.id, provider));
   } catch {
-    return FALLBACK_CHAT_MODELS;
+    return providerFallbackModels(provider);
   }
 }
 
