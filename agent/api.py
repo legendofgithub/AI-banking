@@ -38,6 +38,7 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
     data-linkage-plan           跨场景联动计划确认卡片(建计划后的预算锁定闸门)
     data-linkage-action         联动到期动作确认卡片(逐项购买闸门)
     data-plan                   生日预算计划确认卡片(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
+    data-analysis-plan          Agent Core 只读分析计划卡片(目标/事实行/步骤/复盘/上次记忆,无按钮)
     data-wealth-confirmation    理财确认卡片(kind=subscribe|redeem;order=产品/金额/费率/锁定期/风险/账户)
     data-card-confirmation      卡片确认卡片(kind=apply|limits|status;card=card_id/尾号/类型/当前值/目标值)
     data-contact-choices        同名联系人选项(卡片式消歧,而非开放反问)
@@ -100,7 +101,9 @@ STREAM_HEADER_VALUE = "v1"  # 依据:ai-sdk.dev stream-protocol(自定义后端�
 # 不播报其他节点的消息(如 t_gate 复放的问题文本),避免与闸门卡片重复。
 ANNOUNCE_NODES = frozenset({"t_report", "sb_report", "ss_report", "c_report",
                             "l_report", "b_report", "w_report", "k_report",
-                            "s_report", "p_report", "chat"})
+                            "s_report", "p_report", "chat",
+                            # Agent Core 的收尾播报(分析卡由 a_exec/a_reflect 单独下发)
+                            "a_report"})
 
 TEXT_CHUNK_SIZE = 96  # 文本切片粒度(字节近似;假模型无 token 流,切片仅为产生增量帧)
 
@@ -1275,6 +1278,15 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                                 # 决策按钮以普通消息回话,不占 interrupt
                                 yield _frame({"type": "data-subscription-precheck",
                                               "data": update["precheck_view"]})
+                            elif node in ("a_exec", "a_reflect") \
+                                    and isinstance(update, dict) \
+                                    and update.get("analysis_view"):
+                                # Agent Core 只读分析卡:与订阅清单同款下发模式
+                                # (不占 interrupt)。a_exec 只在"要转交既有受闸门
+                                # 链路"时发卡,a_reflect 在只读闭环收尾时发卡,
+                                # 两条路互斥,不会重复渲染两张卡。
+                                yield _frame({"type": "data-analysis-plan",
+                                              "data": update["analysis_view"]})
             except TimeoutError:
                 yield _frame({"type": "error",
                               "errorText": f"本轮处理超时(>{TURN_DEADLINE_S:.0f}秒),"

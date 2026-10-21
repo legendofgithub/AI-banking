@@ -268,6 +268,18 @@ PART_FIELD_CONTRACT: list[dict] = [
      "frontend_only": {"confirm_hint", "note"}},
     # ask_slot 为内联类型 {missing?: string[]},无具名 interface,只做后端键守卫
     {"grep_only": {"missing"}},
+    # ---- Agent Core 只读分析卡(2026-10-21 新增 data-analysis-plan) ----
+    # 视图冻结在纯函数层 agent/analysis.py::build_analysis_card,
+    # 故三张 interface 都用 backend_sources 追加 analysis.py 供契约 6 扫描。
+    {"interface": "AnalysisPlanData", "required": {
+        "facts", "goal", "hint", "intent", "memory_used", "plan_id",
+        "plan_version", "reflection", "steps", "trace"},
+     "frontend_only": set(), "backend_sources": ("analysis.py",)},
+    {"interface": "AnalysisFactRow", "required": {"hint", "label", "value"},
+     "frontend_only": set(), "backend_sources": ("analysis.py",)},
+    {"interface": "AnalysisStep", "required": {
+        "gate", "id", "risk", "skill", "status", "title"},
+     "frontend_only": set(), "backend_sources": ("analysis.py",)},
 ]
 
 

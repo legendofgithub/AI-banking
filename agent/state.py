@@ -188,6 +188,12 @@ class AgentState(TypedDict, total=False):
     sub_view: dict | None              # 列表卡片视图(api 在 s_list 节点更新时发帧)
     precheck_view: dict | None         # 代扣预审卡片视图(api 在 s_precheck 节点发帧)
 
+    # ---- Agent Core(a_ 前缀节点:一个 Core + 六个技能,迭代计划 §3) ----
+    # plan 键已被联动计划回执占用,core_plan 才是 Agent Core 的显式 Plan 对象。
+    agent_plan: dict | None        # Core 生成的 Plan(JSON):目标/约束/步骤/闸门/成功条件/trace
+    analysis_view: dict | None     # 只读分析计划卡视图(api 在 a_exec 节点下发 data-analysis-plan)
+    analysis_skills: list[str]     # 本轮确定性选中的技能名(可回放:为什么选它)
+
     # ---- 播报与留痕 ----
     notice: dict | None                # 播报依据的事实 {"kind": ..., ...}
     bank_calls: Annotated[list[dict], operator.add]   # agent 侧银行调用轨迹
@@ -227,6 +233,9 @@ NOTICE_KINDS = (
     "plan_need_info",    # 缺槽反问超限,计划未生成
     # ---- 账单分析 ----
     "bill_report",       # 账单工具结果(月报/分类/Top/异常),交播报原样转述
+    # ---- Agent Core 只读分析(迭代计划 §7) ----
+    "analysis_report",   # Core 的只读分析结果:事实行 + 复盘摘要(零动钱)
+    "analysis_blocked",  # 计划被 Guard 拦下(违反约束/越权),不执行任何步骤
     # ---- 理财 ----
     "no_risk_profile",   # 查无风险测评,引导先测评
     "wealth_products",   # 产品推荐列表(带风险等级过滤)

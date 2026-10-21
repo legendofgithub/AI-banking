@@ -87,11 +87,15 @@ from langgraph.config import get_config
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from agent import core as core_mod
+from agent import memory as memory_mod
+from agent.analysis import build_analysis_card
 from agent.bank import BankTools, load_bank_tools
 from agent.plan import (DEFAULT_ACTIONS, build_plan, compute_disposable,
                         constraints_of, filter_cut_candidates,
                         filter_upcoming_outflows, find_event, make_plan_id,
                         parse_budget_edit, plan_card_view, wants_cut)
+from agent.skills import CORE_RUNNABLE, SKILLS, run_skill
 from agent.state import AgentState
 
 # 缺槽/纠偏反问的最大轮次(评审修复:interrupt-resume 循环不受 LangGraph 递归上限
@@ -267,6 +271,9 @@ _FALLBACK_TEXT = {
     "sub_not_found": "没有找到这个商户的自动扣费。想看全部订阅可以说「查我的订阅」。",
     # ---- 账单分析(只读) ----
     "bill_report": "账单分析已完成,数字均来自银行工具返回。",
+    # ---- Agent Core 只读分析:交给 Core 的账单/理财分析(迭代计划 §7) ----
+    "analysis_report": "分析已完成,事实均来自银行工具返回,本次未做任何资金变动。",
+    "analysis_blocked": "这条分析指令没能通过安全校验,已停止执行,资金未变动。",
     # ---- 理财 ----
     "no_risk_profile": "还没有风险测评记录,暂时无法推荐理财产品。对我说「做风险测评」,我先带你过五道题。",
     "wealth_products": "已按你的风险等级筛出可购产品,费率与业绩基准均来自产品库。",
@@ -751,6 +758,46 @@ def _wants_plan(text: str) -> bool:
     if any(w in t for w in _PLAN_TRIGGER_WORDS):
         return True
     return "计划" in t and any(w in t for w in ("生日", "预算", "准备"))
+
+
+# ---------------------------------------------------------------- Agent Core 触发口径
+# Agent Core 不让 LLM 自由挑工具(迭代计划 §2.2):只有命中"分析/复盘/诊断/规划"
+# 这类词、且 LLM 又把消息归到账单/理财意图时,才把这一轮交给 Core 编排。
+# 命中才走 Core;否则旧 b_*/w_* 路径一字不变(迭代计划 §13.3 回归红线)。
+_ANALYSIS_TRIGGER_WORDS = ("分析", "复盘", "诊断", "规划", "行动方案", "资产配置",
+                           "怎么省", "怎么花", "哪里花", "花多了", "花太多", "超支",
+                           "省出", "省下", "给点建议", "出个方案")
+_BILL_TRIGGER_WORDS = ("账单", "开支", "开销", "消费", "收支", "流水", "月报")
+_WEALTH_TRIGGER_WORDS = ("理财", "持仓", "基金", "定投", "收益", "资产", "配置")
+
+
+def _wants_analysis(text: str) -> bool:
+    """是否交给 Agent Core 做只读分析编排(确定性,不新增 LLM 调用)。"""
+    return any(w in str(text or "") for w in _ANALYSIS_TRIGGER_WORDS)
+
+
+def _select_analysis_skills(text: str, intent: str | None) -> list[str]:
+    """从技能目录里确定性挑技能(迭代计划 §4:Core 只看技能,不看底层工具)。
+
+    顺序:先按 LLM 判定的意图打底,再看同一句里是否点名了另一个分析域
+    ——这才让一个计划能组合两个技能(账单 + 理财)。
+    """
+    t = str(text or "")
+    picks: list[str] = []
+    if intent == "wealth":
+        picks.append("analyze_wealth")
+    elif intent == "bill_analysis":
+        picks.append("analyze_bill")
+    # 同一句点名了另一个技能域 → 追加(去重、固定顺序便是确定性)
+    if "analyze_bill" not in picks and any(w in t for w in _BILL_TRIGGER_WORDS):
+        picks.insert(0, "analyze_bill")
+    if "analyze_wealth" not in picks and any(w in t for w in _WEALTH_TRIGGER_WORDS):
+        picks.append("analyze_wealth")
+    if intent == "bill_analysis" and "analyze_bill" not in picks:
+        picks.insert(0, "analyze_bill")
+    if intent == "wealth" and "analyze_wealth" not in picks:
+        picks.append("analyze_wealth")
+    return picks
 
 
 def _plan_title_from_text(text: str) -> str | None:
@@ -1252,6 +1299,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                 "plan_card": None, "plan_stage": "", "plan_edit_budget": None,
                 "plan_edit_round": 0, "plan_cut": None, "plan_force_no_cut": False,
                 "bill_missing": [], "wealth_missing": [], "card_missing": [],
+                # Agent Core 每轮从零开始(Plan 不可跨轮复用,避免用旧计划执行写操作)
+                "agent_plan": None, "analysis_view": None, "analysis_skills": [],
                 "clarify_round": 0, "gate_round": 0, "pick_round": 0}
 
     # ---------------------------------------------------------------- 转账子图
@@ -2951,6 +3000,182 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                                 "missing": state.get("plan_missing") or []}}
         return await _announce(state)
 
+    # ---------------------------------------------------------------- Agent Core(a_ 前缀)
+    # 一个 Core + 六个技能(迭代计划 §2.1):Core 是唯一编排者,技能之间不互相调用。
+    #
+    #     Perceive → Plan → Guard → Act → Observe → Reflect → Remember → Respond
+    #
+    # 第一期边界(§2.2 受约束的自主规划):
+    # - 计划/技能选择/复盘/记忆全是确定性代码,零新增 LLM 调用(只有最后 a_report 播报一次);
+    # - 只有两个只读分析技能可被 Core 自主执行,资金技能仍由既有受闸门链路办理;
+    # - Guard 拦下的计划不会执行任何一步,资金零变动。
+
+    async def a_perceive(state: AgentState) -> dict:
+        """Perceive:读用户目标/约束/长期记忆 → 确定性选中技能(不调 LLM)。"""
+        text = _latest_human(state)
+        skills = _select_analysis_skills(text, state.get("intent"))
+        uid = state.get("auth_user_id")
+        # 长期记忆只做建议(memory.summarize_for_plan 是纯确定性拼接)
+        hints = memory_mod.summarize_for_plan(uid, tuple(skills))
+        plan = core_mod.new_plan(
+            goal=text, intent=str(state.get("intent") or ""),
+            constraints=constraints_of(text), memory_used=hints)
+        return {"analysis_skills": skills, "agent_plan": plan, "notice": None,
+                "analysis_view": None}
+
+    async def a_plan(state: AgentState) -> dict:
+        """Plan + Guard:按技能目录生成步骤,再过一遍静态校验。"""
+        text = _latest_human(state)
+        base = state.get("agent_plan") or {}
+        skills = list(state.get("analysis_skills") or [])
+        if not skills:  # 兜底:技能没选中时按意图补一个,保证计划非空
+            skills = ["analyze_wealth"] if state.get("intent") == "wealth" \
+                else ["analyze_bill"]
+        period = parse_period(text) or parse_period(date.today().strftime("%Y-%m")) or {}
+        plan = {**base, "steps": []}
+        prev: str | None = None
+        for i, name in enumerate(skills, start=1):
+            spec = SKILLS.get(name)
+            if spec is None:
+                continue
+            args: dict = {}
+            if name == "analyze_bill":
+                args = {"month": period.get("month"),
+                        "start": period.get("start"), "end": period.get("end"),
+                        "days": int(period.get("days") or 30)}
+            sid = f"s{i}"
+            plan = core_mod.add_step(
+                plan, step_id=sid, skill=name, args=args,
+                depends_on=[prev] if prev else [], risk=spec.risk, gate=spec.gate,
+                success=spec.success)
+            prev = sid
+        plan = core_mod.add_trace(plan, "plan", note="技能: " + ", ".join(skills))
+
+        errors = core_mod.validate_plan(plan, SKILLS)
+        if errors:
+            # Guard 拦下:一步都不执行(审计里要能看到为什么被拦)
+            plan = core_mod.add_trace(plan, "guard", status="blocked",
+                                      note="; ".join(errors))
+            return {"agent_plan": {**plan, "status": core_mod.PLAN_FAILED},
+                    "notice": {"kind": "analysis_blocked", "errors": errors}}
+        plan = core_mod.add_trace(plan, "guard", status="passed")
+        return {"agent_plan": plan, "notice": None}
+
+    async def a_exec(state: AgentState) -> dict:
+        """Act + Observe:按拓扑序跑可自主执行的技能,逐个对照成功条件。"""
+        plan = state.get("agent_plan") or {}
+        calls: list[dict] = []
+        observations: dict[str, dict] = {}
+        for sid in core_mod.schedule(plan):
+            step = core_mod.get_step(plan, sid) or {}
+            name = str(step.get("skill") or "")
+            if name not in CORE_RUNNABLE:
+                # 资金/受闸门技能:交给既有链路(Core 不替用户确认、不绕支付密码)
+                plan = core_mod.set_step(plan, sid, status=core_mod.STEP_DELEGATED,
+                                         observation={"delegated": True})
+                plan = core_mod.add_trace(
+                    plan, "act", step=sid, status=core_mod.STEP_DELEGATED,
+                    note="交给既有受闸门链路执行")
+                continue
+            result = await run_skill(tools, name, step.get("args") or {})
+            plan = core_mod.observe(plan, sid, result)
+            plan = core_mod.add_trace(plan, "act", step=sid,
+                                      status=(core_mod.STEP_DONE if result.ok
+                                              else core_mod.STEP_FAILED),
+                                      note=result.reason or "成功条件满足")
+            calls.append({"tool": f"skill:{name}",
+                          "args": dict(step.get("args") or {}),
+                          "ok": result.ok, "error": result.reason or None})
+            if result.ok:
+                observations[name] = result.data
+
+        intent = ("bill" if "analyze_bill" in observations
+                  else "wealth" if "analyze_wealth" in observations else "")
+        update: dict = {"agent_plan": plan, "bank_calls": calls}
+        if any(step.get("status") == core_mod.STEP_DELEGATED
+               for step in (plan.get("steps") or [])):
+            # 有步骤要交给既有链路:先把已跑完的分析展示给用户,再转交
+            card = build_analysis_card(plan, intent=intent,
+                                       bill=observations.get("analyze_bill"),
+                                       wealth=observations.get("analyze_wealth"))
+            update["analysis_view"] = card
+        return update
+
+    async def a_reflect(state: AgentState) -> dict:
+        """Reflect + Remember:对照成功条件复盘,写长期记忆与计划历史。"""
+        plan = state.get("agent_plan") or {}
+        reflection = core_mod.reflect(plan, SKILLS)
+        uid = state.get("auth_user_id")
+        observations = {}
+        for step in (plan.get("steps") or []):
+            if isinstance(step, dict) and step.get("status") == core_mod.STEP_DONE:
+                obs = step.get("observation")
+                if isinstance(obs, dict):
+                    observations[str(step.get("skill"))] = obs
+
+        # --- 写技能经验(只存"下次有用"的短摘要,不存流水、不存完整报告)
+        bill = observations.get("analyze_bill") or {}
+        if bill:
+            cats = ((bill.get("categories") or {}).get("items") or [])
+            # 金额一律换算成"分"再比(禁止按字符串字典序选最大分类)
+            top = max(cats, key=lambda c: _cents(c.get("amount_yuan")) or 0) if cats else {}
+            memory_mod.merge(uid, "bill", {
+                "top_category": str(top.get("category") or ""),
+                "period": str((bill.get("report") or {}).get("month") or ""),
+                "anomaly_count": len(bill.get("anomalies") or []),
+                "subscription_count": len(bill.get("subscriptions") or []),
+                "at": datetime.now().isoformat(timespec="seconds"),
+            })
+        wealth = observations.get("analyze_wealth") or {}
+        if wealth:
+            profile = wealth.get("profile") or {}
+            holdings = wealth.get("holdings") or []
+            top_holding = ""
+            if holdings:
+                top_holding = str(max(
+                    holdings,
+                    key=lambda h: _cents(h.get("est_value_yuan")) or 0
+                ).get("product") or "")
+            memory_mod.merge(uid, "wealth", {
+                "risk_level": str(profile.get("level") or ""),
+                "max_risk_level": wealth.get("max_risk_level"),
+                "holding_count": len(holdings),
+                "preferred_type": top_holding,
+                "needs_assessment": bool(wealth.get("needs_assessment")),
+                "at": datetime.now().isoformat(timespec="seconds"),
+            })
+
+        plan = core_mod.add_trace(plan, "reflect", status=reflection.status,
+                                  note=reflection.summary)
+        out = {**plan,
+               "status": (core_mod.PLAN_DONE if reflection.ok
+                          else core_mod.PLAN_FAILED),
+               "fallback": reflection.fixes}
+        summary = core_mod.plan_summary(out)
+        summary["status"] = reflection.status
+        memory_mod.push_plan_history(uid, {
+            "plan_id": out.get("plan_id"),
+            "goal": out.get("goal") or "",
+            "skills": ", ".join(summary.get("skills") or []),
+            "result": reflection.status,
+            "reason": reflection.summary,
+            "plan_version": out.get("plan_version"),
+        })
+
+        intent = ("bill" if "analyze_bill" in observations
+                  else "wealth" if "analyze_wealth" in observations else "")
+        card = build_analysis_card(out, intent=intent,
+                                   bill=observations.get("analyze_bill"),
+                                   wealth=observations.get("analyze_wealth"),
+                                   reflection=reflection)
+        return {"agent_plan": out, "analysis_view": card,
+                "notice": {"kind": "analysis_report", "analysis": intent,
+                           "summary": reflection.summary}}
+
+    async def a_report(state: AgentState) -> dict:
+        """Respond:播报 + Plan Trace(分析卡已在 a_exec/a_reflect 节点下发)。"""
+        return await _announce(state)
+
     # ---------------------------------------------------------------- 闲聊兜底
 
     async def auth_guard(state: AgentState) -> dict:
@@ -2971,6 +3196,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         facts = {"notice": state.get("notice"), "order": state.get("order"),
                  "bill": state.get("bill"), "plan": state.get("plan"),
                  "due": state.get("due"),
+                 # Agent Core 只读分析播报依据:事实行 + 复盘摘要(严格转述,禁止编造)
+                 "analysis": state.get("analysis_view"),
                  # 生日计划:卡片与订阅取消结果(计划支线的 l_report 也要播报)
                  "plan_card": state.get("plan_card"),
                  "plan_cut": state.get("plan_cut"),
@@ -3005,6 +3232,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             # 否则视为建计划。"提前2天提醒我"这类说法会被误送 l_due,匹配不到
             # active 计划时安全收尾(no_due_plan),不会误动钱。
             return "l_due" if _is_due_message(_latest_human(state)) else "l_extract"
+        # Agent Core:命中分析类措辞的账单/理财请求交给唯一的 Core 编排
+        # (迭代计划 §3)。未命中仍走旧 b_*/w_* 路径,行为一字不变。
+        if intent in ("bill_analysis", "wealth") \
+                and _wants_analysis(_latest_human(state)):
+            return "a_perceive"
         return intent
 
     def after_extract(state: AgentState) -> str:
@@ -3283,6 +3515,21 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             return "p_lock"
         return "s_report"
 
+    # ---- Agent Core 路由(迭代计划 §3 的循环) ----
+
+    def after_a_plan(state: AgentState) -> str:
+        """Guard 没通过 → 直接收尾播报,一步都不执行(资金零变动)。"""
+        notice = state.get("notice") or {}
+        return "a_report" if notice.get("kind") == "analysis_blocked" else "a_exec"
+
+    def after_a_exec(state: AgentState) -> str:
+        """计划里若有受闸门技能步骤(如生日预算)→ 交给既有 p_* 链路执行。"""
+        steps = (state.get("agent_plan") or {}).get("steps") or []
+        if any(isinstance(s, dict) and s.get("status") == core_mod.STEP_DELEGATED
+               for s in steps):
+            return "p_extract"
+        return "a_reflect"
+
     # ---------------------------------------------------------------- 组装
 
     g = StateGraph(AgentState)
@@ -3325,6 +3572,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                      ("p_gate", p_gate), ("p_cut", p_cut),
                      ("p_degrade", p_degrade),
                      ("p_lock", p_lock), ("p_report", p_report),
+                     # ---- Agent Core(迭代计划 §3:一个 Core + 六个技能) ----
+                     ("a_perceive", a_perceive), ("a_plan", a_plan),
+                     ("a_exec", a_exec), ("a_reflect", a_reflect),
+                     ("a_report", a_report),
                      ("auth_guard", auth_guard), ("chat", chat)]:
         g.add_node(name, fn)
 
@@ -3336,7 +3587,15 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         "l_extract": "l_extract", "l_due": "l_due",
         "bill_analysis": "b_extract", "wealth": "w_extract",
         "card": "k_extract", "subscription": "s_extract",
-        "plan": "p_extract", "chat": "chat"})
+        "plan": "p_extract", "chat": "chat",
+        # Agent Core:账单/理财的分析类请求走唯一的编排入口
+        "a_perceive": "a_perceive"})
+    # ---- Agent Core 闭环 ----
+    g.add_edge("a_perceive", "a_plan")
+    g.add_conditional_edges("a_plan", after_a_plan, ["a_exec", "a_report"])
+    g.add_conditional_edges("a_exec", after_a_exec, ["a_reflect", "p_extract"])
+    g.add_edge("a_reflect", "a_report")
+    g.add_edge("a_report", END)
     g.add_conditional_edges("t_extract", after_extract, ["t_clarify", "t_resolve"])
     g.add_conditional_edges("t_clarify", after_clarify, ["t_extract", "t_report"])
     g.add_conditional_edges("t_resolve", after_resolve,
