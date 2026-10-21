@@ -146,6 +146,39 @@ try {
   if (!cardText.includes(NEW_NAME) || !cardText.includes("1")) {
     throw new Error("T6: 确认卡未显示新收款人/金额");
   }
+
+  // 桌面端悬空转账提醒:无关闭按钮,但可按住标题拖动(不能盖住输入区)
+  const pendingCard = page.locator('[data-testid="pending-transfer-card"]');
+  await pendingCard.waitFor({ timeout: 20_000 });
+  if ((await pendingCard.locator('button[aria-label*="关闭"]').count()) > 0) {
+    throw new Error("T6: 悬空转账提醒不应有关闭按钮");
+  }
+  const beforeDrag = await pendingCard.boundingBox();
+  const dragHandle = page.locator('[data-testid="pending-transfer-drag-handle"]');
+  const handleBox = await dragHandle.boundingBox();
+  if (!beforeDrag || !handleBox) {
+    throw new Error("T6: 悬空提醒卡片/拖动柄定位失败");
+  }
+  await page.mouse.move(handleBox.x + 30, handleBox.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + 30, handleBox.y + 380, { steps: 15 });
+  await page.mouse.up();
+  await page.waitForTimeout(300);
+  const afterDrag = await pendingCard.boundingBox();
+  if (
+    !afterDrag ||
+    Math.abs(afterDrag.y - beforeDrag.y) < 100 ||
+    afterDrag.y + afterDrag.height <= 0 ||
+    afterDrag.x + afterDrag.width > 1281 ||
+    afterDrag.x < 0
+  ) {
+    throw new Error(
+      `T6: 悬空提醒卡片拖动无效/拖出屏幕 before=${JSON.stringify(beforeDrag)} after=${JSON.stringify(afterDrag)}`
+    );
+  }
+  await page.screenshot({ path: shot("t6a_悬空提醒可拖动") });
+  console.log("T6a 悬空转账提醒可拖动、无关闭按钮: 通过");
+
   await page.fill('input[aria-label="支付密码"]', PAY_PASSWORD);
   await page.getByRole("button", { exact: true, name: "确认" }).click();
   await page.waitForSelector("text=/成功|已转|已执行|完成|已扣|已向/", {
