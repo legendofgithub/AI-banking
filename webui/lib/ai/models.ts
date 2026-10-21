@@ -45,7 +45,16 @@ export function inferCapabilities(id: string): ModelCapabilities {
   return { reasoning: true, tools: true, vision };
 }
 
-export function describeModel(id: string): string {
+export function describeModel(id: string, provider?: string): string {
+  if (provider === "anthropic") {
+    return "Anthropic Claude model with tool use";
+  }
+  if (provider === "openai") {
+    return "OpenAI chat model with tool use";
+  }
+  if (provider === "deepseek" || /deepseek/.test(id)) {
+    return "DeepSeek chat model with tool use";
+  }
   if (inferCapabilities(id).vision) {
     return "Vision model with tool use";
   }
@@ -55,20 +64,47 @@ export function describeModel(id: string): string {
   if (/air/.test(id)) {
     return "Lightweight model with tool use";
   }
-  if (/deepseek-chat/.test(id)) {
-    return "Fast and cheap model with tool use";
-  }
-  return "Zhipu GLM chat model";
+  return "Chat model with tool use";
 }
 
-export function toChatModel(id: string): ChatModel {
+export function toChatModel(id: string, provider?: string): ChatModel {
+  const resolved =
+    provider ||
+    (id.startsWith("deepseek")
+      ? "deepseek"
+      : id.startsWith("claude")
+        ? "anthropic"
+        : id.startsWith("gpt")
+          ? "openai"
+          : "zhipuai");
   return {
     capabilities: inferCapabilities(id),
-    description: describeModel(id),
+    description: describeModel(id, resolved),
     id,
     name: prettyModelName(id),
-    provider: id.startsWith("deepseek") ? "deepseek" : "zhipuai",
+    provider: resolved,
   };
+}
+
+// 供应商连接后模型清单拉取失败的兜底:至少显示该厂商的常用模型,
+// 不至于串到别家的清单。真实清单仍以 /api/models 返回为准。
+export function providerFallbackModels(provider?: string): ChatModel[] {
+  if (provider === "deepseek") {
+    return [toChatModel("deepseek-chat", "deepseek")];
+  }
+  if (provider === "openai") {
+    return [
+      toChatModel("gpt-4o-mini", "openai"),
+      toChatModel("gpt-4o", "openai"),
+    ];
+  }
+  if (provider === "anthropic") {
+    return [
+      toChatModel("claude-sonnet-4-5", "anthropic"),
+      toChatModel("claude-haiku-4-5", "anthropic"),
+    ];
+  }
+  return FALLBACK_CHAT_MODELS;
 }
 
 export type ModelAvailability = "healthy" | "impacted" | "unknown";
