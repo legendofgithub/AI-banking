@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from agent import auth
-from bank_core.auth_core import is_valid_id_card, mask_id_card
+from bank_core.auth_core import is_id_card_shape, is_valid_id_card, mask_id_card
 from bank_core.db import init_db
 
 
@@ -78,6 +78,16 @@ def test_is_valid_id_card():
         assert is_valid_id_card(bad) is False
 
 
+def test_is_id_card_shape():
+    """演示阶段:只验 18 位形状,不验校验码。"""
+    assert is_id_card_shape("110101199003077775") is True   # 校验位错也接受
+    assert is_id_card_shape("11010119900307774x") is True   # 小写 x 也接受
+    assert is_id_card_shape("11010119900307777") is False   # 17 位
+    assert is_id_card_shape("1101011990030777774") is False # 19 位
+    assert is_id_card_shape("1101011990030777a4") is False  # 非法字符
+    assert is_id_card_shape("") is False
+
+
 def test_mask_id_card():
     assert mask_id_card("110101199003077774") == "110***********7774"
     assert mask_id_card("") == "—"
@@ -124,17 +134,29 @@ def test_register_email_optional(bank):
                       login_password="Passw0rd!", pay_password="123456")
 
 
-@pytest.mark.parametrize("bad_id,reason_part", [
-    ("110101199003077775", "身份证"),   # 校验位错
-    ("11010119900307777", "身份证"),    # 位数错
-    ("", "身份证"),
+@pytest.mark.parametrize("bad_id", [
+    "11010119900307777",    # 17 位
+    "1101011990030777774",  # 19 位
+    "1101011990030777a4",   # 非法字符
+    "",
 ])
-def test_register_rejects_bad_id_card(bank, bad_id, reason_part):
-    with pytest.raises(auth.AuthError, match=reason_part):
+def test_register_rejects_bad_id_card(bank, bad_id):
+    with pytest.raises(auth.AuthError, match="身份证"):
         auth.register(bank, real_name="王五", id_card=bad_id,
                       phone="13900002222",
                       login_password="Passw0rd!", pay_password="123456")
     assert bank.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+
+
+def test_register_accepts_demo_shape_only_id_card(bank):
+    """测试阶段:18 位形状对即可注册,不校验 GB 11643 校验码。"""
+    fake_id = "110101199003077775"  # 校验位错,但 18 位形状合法
+    info = auth.register(bank, real_name="王五", id_card=fake_id,
+                         phone="13900002222",
+                         login_password="Passw0rd!", pay_password="123456")
+    row = bank.execute("SELECT id_card FROM users WHERE id=?",
+                       (info["user_id"],)).fetchone()
+    assert row["id_card"] == fake_id
 
 
 def test_register_rejects_duplicate_id_card(bank):
