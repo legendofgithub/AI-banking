@@ -3,7 +3,7 @@
 > 2026 深圳国际金融科技大赛 · AI Banking Agent 赛道 ｜ 研发计划见 [docs/AI-Banking-Agent-产品研发计划.md](docs/AI-Banking-Agent-产品研发计划.md)
 
 `bank_core` 是整套系统的**银行能力层**：一间随时可重置的沙箱银行，含账本、卡片、
-理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 42 个工具，
+理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 44 个工具，
 供 LangGraph 编排层（或任何 MCP 客户端）调用。
 
 ## 快速开始
@@ -58,14 +58,26 @@ python -m venv .venv
 
 数据库默认落在 `data/bank.db`，可用环境变量 `BANK_CORE_DB` 改路径。
 
+## 对话前端（webui，:3000）
+
+- 自然语言覆盖六大场景：转账/AA、账单、理财、卡片、订阅、生日联动；回复流式输出，
+  金额/卡片/闸门由 `data-*` 部件渲染。
+- 账号体系：实名注册、登录密码 + 支付密码、会话 7 天；动钱统一走建单→确认→支付密码。
+- 手机端：375px 适配、会话总览弹窗（搜索/命名新建）、扫码免密登录。
+- 跨设备同步：同一账号的手机和电脑自动跟随当前会话，消息、待答问题和转账确认卡
+  约 1.5 秒内双向同步。
+- 大模型管理：设置里可接入 DeepSeek/OpenAI/Claude/自定义端点（Key + Base URL），
+  连接状态存本机浏览器，重新登录无需重填。
+- 会话目录：按用户隔离、全文搜索（标题/消息正文）、滚动分页；新建会话强制先命名（≤10 字）。
+
 ## 架构定位
 
 ```
-LangGraph 编排层（agent/，已在跑：70 节点 / 10 路由意图 / 9 类人工闸门）
+LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门）
         │ MCP (stdio / http)
         ▼
 ┌──────────────────────────────────────────────┐
-│ mcp_server.py   42 个工具，标注 READ/LOW/MED/HIGH │
+│ mcp_server.py   44 个工具，标注 READ/LOW/MED/HIGH │
 ├──────────────────────────────────────────────┤
 │ ledger.py 账本·转账两步走·AA·卡片                │
 │ analysis.py 分类统计·月报·异常检测·订阅挖掘       │
@@ -107,20 +119,20 @@ LangGraph 编排层（agent/，已在跑：70 节点 / 10 路由意图 / 9 类�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 172 个用例全绿(2026-10-20)
+.venv/Scripts/python.exe -m pytest tests -q      # 205 个用例全绿(2026-10-21)
 
-tests/test_bank_core.py     23 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
+tests/test_bank_core.py     26 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
                             AA 对账、挂失不可逆、理财风险闸门(含无测评限购 R1)、
                             申购幂等键、种子确定性、余额=入-出不变量、订阅/异常戏眼、
                             月报勾稽、事件联动
 tests/test_agent_graph.py   28 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅)
-tests/test_api_stream.py    16 个 —— SSE 协议帧、确认卡片、会话目录、悬空单落地页
-tests/test_auth.py          28 个 —— 实名注册、密码策略、会话与支付密码核验
-tests/test_admin.py         10 个 —— 管理台资金/变更记录、调账、按用户隔离
+tests/test_api_stream.py    24 个 —— SSE 协议帧、确认卡片、会话目录/搜索/同步、悬空单落地页
+tests/test_auth.py          31 个 —— 实名注册、密码策略、会话与支付密码核验
+tests/test_admin.py         14 个 —— 管理台资金/变更记录、调账、按用户隔离
 tests/test_review_fixes.py   8 个 —— 严格确认语义、犹豫答复绝不执行、幂等重放
 tests/test_linkage.py        9 个 —— 跨场景联动建/到期/取消与时间旅行
 tests/test_e2e_transfer.py   5 个 —— 端到端 A~E(立即/同名/超限/定时/AA)
-tests/test_llm_autoselect.py 5 个 —— 模型自动选型与缓存
+tests/test_llm_autoselect.py 8 个 —— 模型自动选型、连接参数与 Claude 适配
 tests/test_contract.py      21 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
                             线协议词表、播报白名单、**部件载荷字段级冻结**——前端
                             interface 与后端键集漂移直接红灯),多人并行的"合同测试"
@@ -129,4 +141,6 @@ tests/test_precheck.py       6 个 —— 代扣预审(事前知情):滚动数�
 tests/test_env_template.py  13 个 —— "clone 后只填一个 Key"契约守卫:.gitignore
                             通配拦截所有 .env 变体(git check-ignore 实测)、
                             模板键齐全且默认值可用、setup_env.py 随机密钥/防覆盖
+tests/test_demo_launcher.py  7 个 —— 一键启动/停止、端口 PID、跳过构建
+tests/test_report_followup.py 5 个 —— 播报后的业务追问与收尾
 ```

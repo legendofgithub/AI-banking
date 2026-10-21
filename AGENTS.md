@@ -13,7 +13,7 @@
 1. **改完就 commit**:每完成一个功能/修复,生成一个 Git commit(本仓库 2026-10-01 才建立,
    别再回到"零快照裸奔"状态)。commit 前确认 `git status` 里没有 `.env.local`、`*.sqlite`。
 2. **改完必须过测试**:改动要配套新增/更新测试,并跑全量
-   `.venv/Scripts/python.exe -m pytest tests -q`(当前 172 个,全绿才能交付)。
+   `.venv/Scripts/python.exe -m pytest tests -q`(当前 205 个,全绿才能交付)。
    跨层改动(闸门/卡片/播报)先跑 `pytest tests/test_contract.py -q` 确认没破坏接口契约。
 3. **Python 一律用 venv**:`.venv/Scripts/python.exe`。裸 pip 指向不存在的 Python 3.14(损坏);
    系统 Python312 没装项目依赖(服务用它能起来是历史环境假象,重启必失败)。
@@ -44,9 +44,9 @@
 ## 目录地图
 
 ```
-bank_core/    银行能力层:42 个 MCP 工具(账本/分析/理财/事件/联动)+ 管理台/网银 API
+bank_core/    银行能力层:44 个 MCP 工具(账本/分析/理财/事件/联动)+ 管理台/网银 API
 agent/        LangGraph 编排层:8800 API、auth 账号体系、模型选择
-webui/        聊天前端(vercel/chatbot 模板魔改:账号/支付密码闸/银行卡片)
+webui/        聊天前端(vercel/chatbot 模板魔改:账号/支付密码闸/银行卡片/跨设备同步)
 admin_console/ 管理台前端(单页 HTML,8789)
 demo/         演示网银前端(8788)
 tests/        pytest 全量回归
