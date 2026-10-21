@@ -23,6 +23,10 @@ POLICY = {
     "whitelist_only": False,               # True 时仅允许向 contacts 转账
 }
 
+# 演示绑卡：绑定即分配的虚拟余额（5 万元）。仅用于沙箱充钱演示，
+# 不代表真实银行卡余额；绑定与充钱都不接银行接口。
+BOUND_CARD_DEMO_BALANCE_CENTS = 5_000_000
+
 
 def _rowd(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row is not None else None
@@ -535,6 +539,7 @@ class LedgerService:
             d = dict(r)
             d["daily_limit_yuan"] = cents_to_yuan(d["daily_limit_cents"])
             d["per_tx_limit_yuan"] = cents_to_yuan(d["per_tx_limit_cents"])
+            d["balance_yuan"] = cents_to_yuan(d.get("balance_cents") or 0)
             out.append(d)
         audit(self.conn, "list_cards", {"user_id": self.user_id}, {"count": len(out)})
         return out
@@ -561,6 +566,8 @@ class LedgerService:
     def set_card_limits(self, card_id: int, daily_limit_cents: int | None = None,
                         per_tx_limit_cents: int | None = None) -> dict:
         card = self._get_card(card_id)
+        if card["source"] == "bound":
+            raise LedgerError("外部绑定卡不支持限额调整（演示只读）")
         if card["status"] != "active":
             raise LedgerError("卡片非活跃状态，先解锁再调额度")
         if daily_limit_cents:
@@ -593,6 +600,8 @@ class LedgerService:
         if status not in ("locked", "active", "lost"):
             raise LedgerError("状态只支持 locked / active / lost")
         card = self._get_card(card_id)
+        if card["source"] == "bound":
+            raise LedgerError("外部绑定卡不支持锁定/挂失（演示只读）")
         if card["status"] == "lost":
             raise LedgerError("挂失卡不可再变更状态，请联系客服补卡")
         self.conn.execute("UPDATE cards SET status=? WHERE id=?", (status, card_id))
@@ -612,3 +621,195 @@ class LedgerService:
         if not row:
             raise LedgerError("卡片不存在")
         return row
+
+    # ------------------------------------------------------- 绑定银行卡(演示)
+    def list_bound_cards(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM cards WHERE user_id=? AND source='bound' "
+            "ORDER BY id DESC", (self.user_id,)).fetchall()
+        return [{
+            "card_id": r["id"],
+            "bank_name": r["bank_name"],
+            "card_no_masked": r["card_no_masked"],
+            "holder_name": r["holder_name"],
+            "balance_yuan": cents_to_yuan(r["balance_cents"]),
+            "status": r["status"],
+            "created_at": r["created_at"],
+            "source": "bound",
+        } for r in rows]
+
+    def bind_bound_card(self, bank_name: str, card_no: str,
+                        holder_name: str) -> dict:
+        """演示绑卡:只校验 16-19 位数字并掩码存储,不校验真伪、不查真实余额。
+
+        绑定后分配固定虚拟余额(BOUND_CARD_DEMO_BALANCE_CENTS),供"充钱"
+        选择该卡作为资金来源。完整卡号不入库。
+        """
+        bank = (bank_name or "").strip()
+        holder = (holder_name or "").strip()
+        if len(bank) < 2 or len(bank) > 30:
+            raise LedgerError("银行名称需为 2-30 个字符")
+        if len(holder) < 2 or len(holder) > 30:
+            raise LedgerError("开户人姓名需为 2-30 个字符")
+        raw = (card_no or "").replace(" ", "").replace("-", "")
+        if not (16 <= len(raw) <= 19 and raw.isdigit()):
+            raise LedgerError("银行卡号需为 16-19 位数字（演示阶段不校验真伪）")
+        masked = f"**** **** **** {raw[-4:]}"
+        dup = self.conn.execute(
+            "SELECT 1 FROM cards WHERE user_id=? AND source='bound' "
+            "AND bank_name=? AND card_no_masked=?",
+            (self.user_id, bank, masked)).fetchone()
+        if dup:
+            raise LedgerError("该银行卡已绑定，请勿重复录入")
+        cur = self.conn.execute(
+            """INSERT INTO cards
+               (user_id, account_id, card_no_masked, card_type, status,
+                daily_limit_cents, per_tx_limit_cents, created_at,
+                source, bank_name, holder_name, balance_cents)
+               VALUES (?, NULL, ?, 'debit', 'active', 0, 0, ?,
+                       'bound', ?, ?, ?)""",
+            (self.user_id, masked, now_iso(), bank, holder,
+             BOUND_CARD_DEMO_BALANCE_CENTS))
+        self.conn.commit()
+        result = {
+            "card_id": cur.lastrowid,
+            "bank_name": bank,
+            "card_no_masked": masked,
+            "holder_name": holder,
+            "balance_yuan": cents_to_yuan(BOUND_CARD_DEMO_BALANCE_CENTS),
+            "status": "active",
+            "source": "bound",
+        }
+        audit(self.conn, "bind_bound_card",
+              {"bank_name": bank, "card_no_masked": masked,
+               "holder_name": holder, "user_id": self.user_id},
+              result, risk="MED")
+        with user_scope():
+            record_change(self.conn, self.user_id, category="card", action="bind",
+                          target=masked,
+                          detail={"card_id": result["card_id"],
+                                  "bank_name": bank,
+                                  "balance_yuan": result["balance_yuan"],
+                                  "demo": True})
+        return result
+
+    def unbind_bound_card(self, card_id: int) -> dict:
+        card = self._get_card(card_id)
+        if card["source"] != "bound":
+            raise LedgerError("只能解绑外部绑定卡")
+        self.conn.execute("DELETE FROM cards WHERE id=?", (card_id,))
+        self.conn.commit()
+        result = {"card_id": card_id, "card_no_masked": card["card_no_masked"],
+                  "bank_name": card["bank_name"], "unbound": True}
+        audit(self.conn, "unbind_bound_card",
+              {"card_id": card_id, "user_id": self.user_id}, result, risk="MED")
+        with user_scope():
+            record_change(self.conn, self.user_id, category="card", action="unbind",
+                          target=card["card_no_masked"],
+                          detail={"card_id": card_id, "bank_name": card["bank_name"]})
+        return result
+
+    def deposit_from_card(self, account_id: int, card_id: int,
+                          amount_cents: int, *, note: str = "",
+                          idempotency_key: str = "") -> dict:
+        """[MED] 从已绑定银行卡(虚拟余额)转入本人账户;幂等,不接真实银行。"""
+        if amount_cents <= 0:
+            raise LedgerError("入金金额必须大于 0")
+        key = (idempotency_key or uuid.uuid4().hex).strip()
+        ref = f"carddeposit:{self.user_id}:{key}"
+        conn = self.conn
+
+        def existing_result() -> dict | None:
+            row = conn.execute(
+                "SELECT * FROM transactions WHERE external_ref=?", (ref,)
+            ).fetchone()
+            if not row:
+                return None
+            card = conn.execute(
+                "SELECT balance_cents FROM cards WHERE id=?", (card_id,)
+            ).fetchone()
+            return {
+                "account_id": row["account_id"],
+                "amount_yuan": cents_to_yuan(row["amount_cents"]),
+                "balance_after_yuan": cents_to_yuan(row["balance_after_cents"]),
+                "transaction_id": row["id"],
+                "card_id": card_id,
+                "card_balance_after_yuan": cents_to_yuan(
+                    card["balance_cents"] if card else 0),
+                "source": "card",
+                "duplicate": True,
+            }
+
+        found = existing_result()
+        if found:
+            return found
+
+        ts = now_iso()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            acct = conn.execute(
+                "SELECT * FROM accounts WHERE id=? AND user_id=?",
+                (account_id, self.user_id)).fetchone()
+            if not acct:
+                raise LedgerError("账户不存在")
+            card = conn.execute(
+                "SELECT * FROM cards WHERE id=? AND user_id=? "
+                "AND source='bound' AND status='active'",
+                (card_id, self.user_id)).fetchone()
+            if not card:
+                raise LedgerError("绑定银行卡不存在或已解绑")
+            if card["balance_cents"] < amount_cents:
+                raise LedgerError(
+                    f"银行卡虚拟余额不足:当前 {cents_to_yuan(card['balance_cents'])} 元")
+            found = existing_result()
+            if found:
+                conn.rollback()
+                return found
+            card_after = card["balance_cents"] - amount_cents
+            new_balance = acct["balance_cents"] + amount_cents
+            conn.execute("UPDATE cards SET balance_cents=? WHERE id=?",
+                         (card_after, card_id))
+            conn.execute("UPDATE accounts SET balance_cents=? WHERE id=?",
+                         (new_balance, account_id))
+            cur = conn.execute(
+                """INSERT INTO transactions
+                   (account_id, ts, direction, amount_cents, balance_after_cents,
+                    tx_type, counterparty, category, channel, memo, external_ref)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (account_id, ts, "in", amount_cents, new_balance,
+                 "transfer_in", f"{card['bank_name']} {card['card_no_masked']}",
+                 "入金", "app", note or f"从{card['bank_name']}银行卡转入",
+                 ref))
+            conn.commit()
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            found = existing_result()
+            if found:
+                return found
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+        result = {
+            "account_id": account_id,
+            "amount_yuan": cents_to_yuan(amount_cents),
+            "balance_after_yuan": cents_to_yuan(new_balance),
+            "transaction_id": cur.lastrowid,
+            "card_id": card_id,
+            "card_balance_after_yuan": cents_to_yuan(card_after),
+            "source": "card",
+            "duplicate": False,
+        }
+        audit(conn, "card_deposit",
+              {"account_id": account_id, "card_id": card_id,
+               "amount_cents": amount_cents, "note": note,
+               "user_id": self.user_id},
+              {**result, "card_before_cents": card["balance_cents"]}, risk="MED")
+        with user_scope():
+            record_money(conn, self.user_id, tool="card_deposit",
+                         delta_cents=amount_cents,
+                         before_cents=acct["balance_cents"],
+                         after_cents=new_balance, account_id=account_id,
+                         ref=ref, note=note or f"从{card['bank_name']}银行卡转入")
+        return result

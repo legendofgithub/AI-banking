@@ -10,6 +10,7 @@
 import {
   BanknoteIcon,
   BotIcon,
+  CreditCardIcon,
   GlobeIcon,
   LogOutIcon,
   MonitorIcon,
@@ -131,6 +132,10 @@ export function SidebarSettings() {
     window.dispatchEvent(new Event("open-deposit"));
   }, []);
 
+  const handleOpenBoundCards = useCallback(() => {
+    window.dispatchEvent(new Event("open-bound-cards"));
+  }, []);
+
   const nickname = user?.nickname?.trim() || "";
   const themeValue = mounted ? (theme ?? "system") : "";
   const zoomValue =
@@ -183,7 +188,14 @@ export function SidebarSettings() {
                   onSelect={handleOpenDeposit}
                 >
                   <BanknoteIcon />
-                  模拟入金
+                  充钱
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-testid="settings-bound-cards"
+                  onSelect={handleOpenBoundCards}
+                >
+                  <CreditCardIcon />
+                  绑定银行卡
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="text-red-500 focus:text-red-500"

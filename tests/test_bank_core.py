@@ -121,6 +121,70 @@ def test_deposit_creates_balance_and_is_idempotent(tmp_path):
         led.deposit(999, 100, idempotency_key="dep-missing")
 
 
+def test_bound_card_bind_deposit_and_unbind(tmp_path):
+    """演示绑卡:掩码存储/50k 虚拟余额;从卡充钱扣虚拟余额,幂等,解绑后不可用。"""
+    from bank_core import recorder
+
+    conn = init_db(tmp_path / "bc.db")
+    acct = _mk_account(conn, 100000)  # 1000.00 元
+    led = LedgerService(conn, 1)
+
+    card = led.bind_bound_card("招商银行", "6225 8800 1234 5678", "陈明")
+    assert card["card_no_masked"] == "**** **** **** 5678"
+    assert card["balance_yuan"] == "50000.00"
+    assert [c["card_id"] for c in led.list_bound_cards()] == [card["card_id"]]
+
+    with pytest.raises(LedgerError, match="已绑定"):
+        led.bind_bound_card("招商银行", "6225 8800 1234 5678", "陈明")
+    with pytest.raises(LedgerError, match="16-19"):
+        led.bind_bound_card("招商银行", "1234", "陈明")
+
+    res = led.deposit_from_card(acct, card["card_id"], 10000,
+                                note="从卡转入", idempotency_key="card-dep-1")
+    assert res["duplicate"] is False and res["source"] == "card"
+    assert res["balance_after_yuan"] == "1100.00"
+    assert res["card_balance_after_yuan"] == "49900.00"
+    assert conn.execute("SELECT balance_cents FROM accounts WHERE id=?",
+                        (acct,)).fetchone()["balance_cents"] == 110000
+    assert conn.execute("SELECT balance_cents FROM cards WHERE id=?",
+                        (card["card_id"],)).fetchone()["balance_cents"] == 4990000
+    tx = conn.execute("SELECT * FROM transactions WHERE external_ref=?",
+                      ("carddeposit:1:card-dep-1",)).fetchone()
+    assert tx["direction"] == "in" and tx["tx_type"] == "transfer_in"
+    assert "招商银行" in tx["counterparty"]
+
+    rc = sqlite3.connect(recorder.money_db_path(conn))
+    rc.row_factory = sqlite3.Row
+    try:
+        rec = rc.execute(
+            "SELECT * FROM money_records WHERE tool='card_deposit'").fetchone()
+        assert rec["delta_cents"] == 10000
+        assert rec["operator"] == "user"
+    finally:
+        rc.close()
+
+    again = led.deposit_from_card(acct, card["card_id"], 10000,
+                                  idempotency_key="card-dep-1")
+    assert again["duplicate"] is True
+    assert again["balance_after_yuan"] == "1100.00"
+    assert conn.execute("SELECT balance_cents FROM cards WHERE id=?",
+                        (card["card_id"],)).fetchone()["balance_cents"] == 4990000
+
+    with pytest.raises(LedgerError, match="余额不足"):
+        led.deposit_from_card(acct, card["card_id"], 50_000_000,
+                              idempotency_key="too-much")
+    with pytest.raises(LedgerError, match="外部绑定卡"):
+        led.set_card_status(card["card_id"], "locked")
+    with pytest.raises(LedgerError, match="外部绑定卡"):
+        led.set_card_limits(card["card_id"], 100_000)
+
+    led.unbind_bound_card(card["card_id"])
+    assert led.list_bound_cards() == []
+    with pytest.raises(LedgerError, match="不存在或已解绑"):
+        led.deposit_from_card(acct, card["card_id"], 100,
+                              idempotency_key="after-unbind")
+
+
 def test_transfer_insufficient_funds(tmp_path):
     conn = init_db(tmp_path / "t.db")
     acct = _mk_account(conn, 1000)  # 10 元

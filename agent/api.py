@@ -83,6 +83,7 @@ from pydantic import BaseModel, Field
 from agent import auth as auth_mod
 from agent.bank import BankTools, load_bank_tools
 from agent.graph import build_agent_graph, make_sqlite_checkpointer
+from bank_core.db import migrate_cards_bound
 from bank_core.ledger import LedgerError, LedgerService
 from bank_core.money import cents_to_yuan, yuan_to_cents
 from agent.llm import (RequestLLM, fetch_models_json, get_llm,
@@ -157,12 +158,19 @@ class TokenIn(BaseModel):
 
 
 class DepositIn(BaseModel):
-    """模拟入金入参：account_id 为空时用本人第一个账户。"""
+    """模拟入金入参：account_id 为空时用本人第一个账户；card_id 为空走模拟外部账户。"""
 
     account_id: int | None = None
     amount_yuan: str = Field(min_length=1, max_length=20)
     note: str = Field(default="", max_length=200)
     idempotency_key: str = Field(default="", max_length=80)
+    card_id: int | None = None
+
+
+class BoundCardIn(BaseModel):
+    bank_name: str = Field(min_length=2, max_length=30)
+    card_no: str = Field(min_length=16, max_length=23)
+    holder_name: str = Field(min_length=2, max_length=30)
 
 
 class ContactIn(BaseModel):
@@ -304,6 +312,7 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         auth_conn.row_factory = _s.Row  # login 等按列名取值
         auth_mod.init_auth(auth_conn)
         auth_mod.ensure_demo_auth(auth_conn)
+        migrate_cards_bound(auth_conn)  # 演示绑卡列(老库补列)
         # 评审修复:生产模型必须带超时/重试上限(测试注入的假模型原样使用)
         # 模型选择:显式 ZAI_MODEL 优先;否则按端点清单自动选(最新 flash 级,
         # 与前端模型探测同源,端点上新模型后重启即自动跟进)。
@@ -469,6 +478,48 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         svc = LedgerService(app.state.auth_conn, user_id=me["user_id"])
         return {"accounts": svc.list_accounts()}
 
+    @app.get("/api/bound-cards")
+    async def bound_cards(x_bank_token: str | None = Header(default=None)) -> dict:
+        """当前用户已绑定的演示银行卡(掩码 + 虚拟余额)。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后查看银行卡"})
+        svc = LedgerService(app.state.auth_conn, user_id=me["user_id"])
+        return {"cards": svc.list_bound_cards()}
+
+    @app.post("/api/bound-cards")
+    async def bind_bound_card(req: BoundCardIn,
+                              x_bank_token: str | None = Header(default=None)):
+        """演示绑卡:只记录银行/掩码/开户人并分配虚拟余额,不校验真实卡号。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后再绑定银行卡"})
+        try:
+            card = LedgerService(
+                app.state.auth_conn, user_id=me["user_id"]).bind_bound_card(
+                    req.bank_name, req.card_no, req.holder_name)
+        except LedgerError as exc:
+            return JSONResponse(status_code=400,
+                                content={"error": str(exc)})
+        return card
+
+    @app.delete("/api/bound-cards/{card_id}")
+    async def unbind_bound_card(card_id: int,
+                                x_bank_token: str | None = Header(default=None)):
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后再解绑银行卡"})
+        try:
+            return LedgerService(
+                app.state.auth_conn, user_id=me["user_id"]).unbind_bound_card(
+                    card_id)
+        except LedgerError as exc:
+            return JSONResponse(status_code=400,
+                                content={"error": str(exc)})
+
     @app.post("/api/deposit")
     async def deposit(req: DepositIn,
                       x_bank_token: str | None = Header(default=None)):
@@ -503,8 +554,13 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             account_id = row["id"]
         key = req.idempotency_key.strip() or uuid4().hex
         try:
-            result = LedgerService(
-                app.state.auth_conn, user_id=uid).deposit(
+            svc = LedgerService(app.state.auth_conn, user_id=uid)
+            if req.card_id is not None:
+                result = svc.deposit_from_card(
+                    account_id, req.card_id, amount_cents,
+                    note=req.note.strip(), idempotency_key=key)
+            else:
+                result = svc.deposit(
                     account_id, amount_cents,
                     note=req.note.strip(), idempotency_key=key)
         except LedgerError as exc:

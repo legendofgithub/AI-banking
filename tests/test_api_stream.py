@@ -124,6 +124,59 @@ def test_accounts_and_deposit_endpoint(tmp_path):
                            json=over).status_code == 400
 
 
+def test_bound_card_endpoints(tmp_path):
+    """演示绑卡 → 从虚拟卡余额充钱 → 解绑;不接真实银行卡。"""
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    headers = {"x-bank-token": tok}
+    with client:
+        created = client.post("/api/bound-cards", headers=headers, json={
+            "bank_name": "招商银行",
+            "card_no": "6225 8800 1234 5678",
+            "holder_name": "陈明",
+        })
+        assert created.status_code == 200
+        card = created.json()
+        assert card["card_no_masked"] == "**** **** **** 5678"
+        assert card["balance_yuan"] == "50000.00"
+
+        listed = client.get("/api/bound-cards", headers=headers)
+        assert listed.status_code == 200
+        assert listed.json()["cards"][0]["card_id"] == card["card_id"]
+
+        account = client.get("/api/accounts", headers=headers
+                             ).json()["accounts"][0]
+        before = account["balance_cents"]
+        r = client.post("/api/deposit", headers=headers, json={
+            "account_id": account["id"],
+            "amount_yuan": "100",
+            "card_id": card["card_id"],
+            "note": "从卡转入",
+            "idempotency_key": "api-card-dep-1",
+        })
+        assert r.status_code == 200
+        result = r.json()
+        assert result["source"] == "card"
+        assert result["balance_after_yuan"] == cents_to_yuan(before + 10000)
+        assert result["card_balance_after_yuan"] == "49900.00"
+
+        again = client.post("/api/deposit", headers=headers, json={
+            "account_id": account["id"],
+            "amount_yuan": "100",
+            "card_id": card["card_id"],
+            "idempotency_key": "api-card-dep-1",
+        })
+        assert again.json()["duplicate"] is True
+        after = client.get("/api/accounts", headers=headers
+                           ).json()["accounts"][0]
+        assert after["balance_cents"] == before + 10000
+
+        assert client.delete(
+            f"/api/bound-cards/{card['card_id']}",
+            headers=headers).status_code == 200
+        assert client.get("/api/bound-cards", headers=headers
+                          ).json()["cards"] == []
+
+
 # ----------------------------------------------------------------- SSE 基本协议
 
 def test_chat_stream_sse_protocol(tmp_path):

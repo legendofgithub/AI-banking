@@ -41,7 +41,7 @@ from pydantic import BaseModel
 from . import recorder
 from .auth_core import mask_identifier, mask_id_card
 from .analysis import AnalysisService
-from .db import audit, connect, migrate_users_kyc, now_iso
+from .db import audit, connect, migrate_cards_bound, migrate_users_kyc, now_iso
 from .events import EventService
 from .ledger import LedgerError, LedgerService
 from .linkage import LinkageError, LinkageService
@@ -96,6 +96,7 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
     conn = connect(db_path)
     # users.id_card/email 老库补列(管理台 connect 直连,不经 init_db)
     migrate_users_kyc(conn)
+    migrate_cards_bound(conn)  # 演示绑卡列
 
     def _uid(user_id: int | None) -> int:
         if user_id and not conn.execute(
