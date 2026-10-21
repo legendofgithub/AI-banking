@@ -264,6 +264,19 @@ def test_admin_card_lock(client):
     assert recs[0]["operator"] == "admin"
 
 
+def test_admin_sees_bound_card_virtual_balance(rec_env, client):
+    """演示绑卡后,管理台卡片列表能看到银行/掩码/虚拟余额。"""
+    card = LedgerService(rec_env, 1).bind_bound_card(
+        "招商银行", "6225 8800 1234 5678", "陈明")
+    cards = client.get("/api/cards").json()["cards"]
+    row = next(c for c in cards if c["id"] == card["card_id"])
+    assert row["source"] == "bound"
+    assert row["bank_name"] == "招商银行"
+    assert row["holder_name"] == "陈明"
+    assert row["card_no_masked"] == "**** **** **** 5678"
+    assert row["balance_yuan"] == "50000.00"
+
+
 def test_admin_cancel_pending_order(rec_env, client):
     """建一张待确认单（模拟前端幂等未命中的孤儿单）→ 管理端撤销 + 留痕。"""
     ledger = LedgerService(rec_env, 1)

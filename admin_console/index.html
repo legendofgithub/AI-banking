@@ -393,7 +393,7 @@ input.mono{font-family:var(--mono)}
     <h3>银行卡管理</h3>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>卡号</th><th>类型</th><th>状态</th><th class="num">日限额(元)</th><th class="num">单笔限额(元)</th><th>操作</th></tr></thead>
+        <thead><tr><th>来源</th><th>卡号</th><th>类型</th><th>银行</th><th>开户人</th><th>状态</th><th class="num">虚拟余额(元)</th><th class="num">日限额(元)</th><th class="num">单笔限额(元)</th><th>操作</th></tr></thead>
         <tbody id="cardsBody"></tbody>
       </table>
     </div>
@@ -916,23 +916,30 @@ async function loadContacts(){
 
 /* ---------- 5. 卡片 ---------- */
 async function loadCards(){
-  $('#cardsBody').innerHTML = loadingRow(6);
+  $('#cardsBody').innerHTML = loadingRow(10);
   const d = await api(withUser('/api/cards'));
   $('#cardsBody').innerHTML = (d.cards || []).map(c => {
+    const bound = c.source === 'bound';
     const ops = [];
-    if (c.status === 'active') ops.push(`<button class="btn mini js-card-lock" data-id="${esc(c.id)}">锁定</button>`);
-    if (c.status === 'locked') ops.push(`<button class="btn mini primary js-card-unlock" data-id="${esc(c.id)}">解锁</button>`);
-    if (c.status === 'active' || c.status === 'locked') ops.push(`<button class="btn mini warn js-card-lost" data-id="${esc(c.id)}" data-no="${esc(c.card_no_masked)}">挂失</button>`);
-    ops.push(`<button class="btn mini js-card-limits" data-id="${esc(c.id)}" data-dl="${esc(String(c.daily_limit_yuan ?? ''))}" data-pl="${esc(String(c.per_tx_limit_yuan ?? ''))}">限额调整</button>`);
+    if (!bound){
+      if (c.status === 'active') ops.push(`<button class="btn mini js-card-lock" data-id="${esc(c.id)}">锁定</button>`);
+      if (c.status === 'locked') ops.push(`<button class="btn mini primary js-card-unlock" data-id="${esc(c.id)}">解锁</button>`);
+      if (c.status === 'active' || c.status === 'locked') ops.push(`<button class="btn mini warn js-card-lost" data-id="${esc(c.id)}" data-no="${esc(c.card_no_masked)}">挂失</button>`);
+      ops.push(`<button class="btn mini js-card-limits" data-id="${esc(c.id)}" data-dl="${esc(String(c.daily_limit_yuan ?? ''))}" data-pl="${esc(String(c.per_tx_limit_yuan ?? ''))}">限额调整</button>`);
+    }
     return `<tr>
+      <td>${bound ? '<span class="badge b-user">绑定卡</span>' : '<span class="badge">本行卡</span>'}</td>
       <td class="mono">${esc(c.card_no_masked)}</td>
       <td>${esc(c.card_type)}</td>
+      <td>${bound ? esc(c.bank_name || '—') : '<span class="muted">—</span>'}</td>
+      <td>${bound ? esc(c.holder_name || '—') : '<span class="muted">—</span>'}</td>
       <td>${cardStatusBadge(c.status)}</td>
-      <td class="num">${money(c.daily_limit_yuan)}</td>
-      <td class="num">${money(c.per_tx_limit_yuan)}</td>
-      <td class="ops">${ops.join('') || '<span class="muted">—</span>'}</td>
+      <td class="num">${bound ? money(c.balance_yuan) : '<span class="muted">—</span>'}</td>
+      <td class="num">${bound ? '<span class="muted">—</span>' : money(c.daily_limit_yuan)}</td>
+      <td class="num">${bound ? '<span class="muted">—</span>' : money(c.per_tx_limit_yuan)}</td>
+      <td class="ops">${bound ? '<span class="muted">用户前台解绑</span>' : (ops.join('') || '<span class="muted">—</span>')}</td>
     </tr>`;
-  }).join('') || emptyRow(6);
+  }).join('') || emptyRow(10);
 }
 
 /* ---------- 6. 理财 ---------- */

@@ -75,7 +75,13 @@ CREATE TABLE IF NOT EXISTS cards (
                       CHECK (status IN ('active', 'locked', 'lost', 'frozen')),
     daily_limit_cents INTEGER NOT NULL DEFAULT 5000000,
     per_tx_limit_cents INTEGER NOT NULL DEFAULT 2000000,
-    created_at        TEXT NOT NULL
+    created_at        TEXT NOT NULL,
+    -- 2026-10-21 演示绑卡:source=internal 本行卡 / bound 外部绑定卡;
+    -- bound 卡只存掩码与虚拟余额,不存完整卡号,也不查真实银行余额。
+    source            TEXT NOT NULL DEFAULT 'internal',
+    bank_name         TEXT NOT NULL DEFAULT '',
+    holder_name       TEXT NOT NULL DEFAULT '',
+    balance_cents     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -289,6 +295,7 @@ def init_db(db_path: str | os.PathLike | None = None) -> sqlite3.Connection:
     conn = connect(db_path)
     conn.executescript(SCHEMA)
     migrate_users_kyc(conn)
+    migrate_cards_bound(conn)
     # 订阅预审列(2026-10-20):CREATE TABLE IF NOT EXISTS 不改已存在的表,
     # 这里统一补列(服务层 _ensure_precheck_col 兜底不走 init_db 的路径)
     subs_cols = {r[1] for r in conn.execute("PRAGMA table_info(subscriptions)")}
@@ -324,6 +331,24 @@ def migrate_users_kyc(conn: sqlite3.Connection) -> None:
             "ON users(id_card) WHERE id_card != ''")
     except sqlite3.IntegrityError as exc:  # pragma: no cover - 脏数据兜底
         print(f"[migrate] 跳过 id_card 唯一索引(存在重复证件号,请清理): {exc}")
+    conn.commit()
+
+
+def migrate_cards_bound(conn: sqlite3.Connection) -> None:
+    """老库补绑卡列:source/bank_name/holder_name/balance_cents。
+
+    供 init_db 之外的直连路径复用(agent auth_conn、管理台 connect);幂等。
+    本行卡的 source 默认 internal,历史行不受影响。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(cards)")}
+    if not cols:
+        return
+    for col, ddl in (("source", "TEXT NOT NULL DEFAULT 'internal'"),
+                     ("bank_name", "TEXT NOT NULL DEFAULT ''"),
+                     ("holder_name", "TEXT NOT NULL DEFAULT ''"),
+                     ("balance_cents", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE cards ADD COLUMN {col} {ddl}")
     conn.commit()
 
 

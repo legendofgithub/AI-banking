@@ -1,12 +1,14 @@
 "use client";
 
 /*
- * 模拟入金弹窗（2026-10-21）：
- * 新注册用户余额为 0，演示阶段允许从"模拟外部账户"转入本人账户，
- * 立即在账本里产生余额。刻意不接真实银行卡——入账不是动用户现有资金，
- * 所以不需要支付密码；但仍要求登录、单笔限额、幂等键防重复入账。
+ * 充钱/入金弹窗（2026-10-21）：
+ * 新注册用户余额为 0，演示阶段允许把资金转入本人账户。资金来源两种：
+ *   1) 模拟外部账户（凭空产生演示余额，不接真实银行卡）；
+ *   2) 个人信息里绑定过的银行卡（从卡的虚拟余额扣减，卡内余额是演示值）。
+ * 刻意不接真实银行接口——入账不是动用户现有资金，不需要支付密码；
+ * 但仍要求登录、单笔限额、幂等键防重复入账。
  *
- * 入口有两个：左下角设置 → 模拟入金；空会话建议「账户入金(演示)」。
+ * 入口：左下角设置 → 充钱；空会话建议「账户入金(演示)」。
  * 两者都通过 window 事件 open-deposit 打开本弹窗（弹窗挂在 chat layout，
  * 桌面/手机侧栏收起时也能打开）。
  */
@@ -44,16 +46,30 @@ type Account = {
   type: string;
 };
 
+type BoundCard = {
+  balance_yuan: string;
+  bank_name: string;
+  card_id: number;
+  card_no_masked: string;
+};
+
 type AccountsResponse = {
   accounts?: Account[];
   error?: string;
+};
+
+type BoundCardsResponse = {
+  cards?: BoundCard[];
 };
 
 type DepositResult = {
   account_id: number;
   amount_yuan: string;
   balance_after_yuan: string;
+  card_balance_after_yuan?: string;
+  card_id?: number;
   duplicate: boolean;
+  source?: string;
   transaction_id: number;
   error?: string;
 };
@@ -71,7 +87,9 @@ function newIdempotencyKey(): string {
 export function DepositDialog() {
   const [open, setOpen] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [boundCards, setBoundCards] = useState<BoundCard[]>([]);
   const [accountId, setAccountId] = useState("");
+  const [source, setSource] = useState("external");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
@@ -102,29 +120,47 @@ export function DepositDialog() {
     if (!getStoredToken()) {
       setNeedLogin(true);
       setAccounts([]);
+      setBoundCards([]);
       setAccountId("");
+      setSource("external");
       return;
     }
     setNeedLogin(false);
+    setSource("external");
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${bankAgentBase()}/api/accounts`, {
-          headers: bankAuthHeaders(),
-        });
-        const json = (await res
+        const [accRes, cardRes] = await Promise.all([
+          fetch(`${bankAgentBase()}/api/accounts`, {
+            headers: bankAuthHeaders(),
+          }),
+          fetch(`${bankAgentBase()}/api/bound-cards`, {
+            headers: bankAuthHeaders(),
+          }).catch(() => null),
+        ]);
+        const json = (await accRes
           .json()
           .catch(() => null)) as AccountsResponse | null;
         if (cancelled) {
           return;
         }
-        if (!res.ok) {
+        if (!accRes.ok) {
           setError(json?.error ?? "账户加载失败");
           return;
         }
         const list = json?.accounts ?? [];
         setAccounts(list);
         setAccountId(list[0] ? String(list[0].id) : "");
+        if (cardRes?.ok) {
+          const cardJson = (await cardRes
+            .json()
+            .catch(() => null)) as BoundCardsResponse | null;
+          if (!cancelled) {
+            setBoundCards(cardJson?.cards ?? []);
+          }
+        } else {
+          setBoundCards([]);
+        }
       } catch {
         if (!cancelled) {
           setError("无法连接服务器,请稍后重试");
@@ -144,6 +180,25 @@ export function DepositDialog() {
     },
     [resetIdempotencyKey]
   );
+
+  const handleSourceChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      setSource(event.target.value);
+      setSuccess("");
+      resetIdempotencyKey();
+    },
+    [resetIdempotencyKey]
+  );
+
+  const selectedCard = boundCards.find(
+    (card) => source === `card:${card.card_id}`
+  );
+  const selectedCardId = selectedCard?.card_id;
+
+  const handleGoBind = useCallback(() => {
+    setOpen(false);
+    window.dispatchEvent(new Event("open-bound-cards"));
+  }, []);
 
   const handleAmountChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
@@ -180,6 +235,7 @@ export function DepositDialog() {
         body: JSON.stringify({
           account_id: Number(accountId),
           amount_yuan: value,
+          ...(selectedCardId ? { card_id: selectedCardId } : {}),
           idempotency_key: idempotencyKeyRef.current,
           note: note.trim(),
         }),
@@ -201,20 +257,32 @@ export function DepositDialog() {
             : account
         )
       );
+      const cardId = json.card_id;
+      const cardAfter = json.card_balance_after_yuan;
+      if (cardId && cardAfter) {
+        setBoundCards((current) =>
+          current.map((card) =>
+            card.card_id === cardId
+              ? { ...card, balance_yuan: cardAfter }
+              : card
+          )
+        );
+      }
+      const cardNote = cardAfter ? `,银行卡余额 ${cardAfter} 元` : "";
       setSuccess(
-        `入金成功,当前余额 ${json.balance_after_yuan} 元${
+        `入金成功,当前余额 ${json.balance_after_yuan} 元${cardNote}${
           json.duplicate ? "(重复请求已忽略)" : ""
         }`
       );
       setAmount("");
       resetIdempotencyKey();
-      toast.success("模拟入金成功");
+      toast.success(json.source === "card" ? "银行卡转入成功" : "充钱成功");
     } catch {
       setError("无法连接服务器,请稍后重试");
     } finally {
       setLoading(false);
     }
-  }, [accountId, amount, note, resetIdempotencyKey]);
+  }, [accountId, amount, note, resetIdempotencyKey, selectedCardId]);
 
   return (
     <Dialog onOpenChange={setOpen} open={open}>
@@ -222,17 +290,18 @@ export function DepositDialog() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <BanknoteIcon className="size-4 text-amber-600 dark:text-amber-400" />
-            模拟入金
+            充钱/入金
           </DialogTitle>
           <DialogDescription>
-            演示环境:从模拟外部账户转入本人账户,不涉及真实银行卡;入账后立即产生余额。
+            演示环境:可从模拟外部账户或个人信息中绑定的银行卡转入本人账户。
+            银行卡余额是演示虚拟值,不接真实银行接口。
           </DialogDescription>
         </DialogHeader>
 
         {needLogin ? (
           <div className="flex flex-col items-center gap-3 py-4 text-center">
             <p className="text-[13px] text-muted-foreground">
-              请先登录后再入金。
+              请先登录后再充钱。
             </p>
             <Link href="/login">
               <Button type="button">去登录</Button>
@@ -240,6 +309,46 @@ export function DepositDialog() {
           </div>
         ) : (
           <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="deposit-source">资金来源</Label>
+              <select
+                className="h-9 w-full rounded-lg border border-input bg-input/30 px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                data-testid="deposit-source"
+                id="deposit-source"
+                onChange={handleSourceChange}
+                value={source}
+              >
+                <option value="external">模拟外部账户（演示）</option>
+                {boundCards.map((card) => (
+                  <option key={card.card_id} value={`card:${card.card_id}`}>
+                    {card.bank_name} 尾号{card.card_no_masked.slice(-4)} ·
+                    虚拟余额 {card.balance_yuan} 元
+                  </option>
+                ))}
+              </select>
+              {selectedCard ? (
+                <p className="text-[11px] text-muted-foreground">
+                  该卡本次可用虚拟余额{" "}
+                  <span className="font-mono text-foreground/80">
+                    {selectedCard.balance_yuan}
+                  </span>{" "}
+                  元
+                </p>
+              ) : null}
+              {boundCards.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  还没有绑定银行卡?
+                  <button
+                    className="ml-1 text-amber-600 underline-offset-2 hover:underline dark:text-amber-400"
+                    onClick={handleGoBind}
+                    type="button"
+                  >
+                    去绑定
+                  </button>
+                </p>
+              ) : null}
+            </div>
+
             <div className="flex flex-col gap-2">
               <Label htmlFor="deposit-account">入账账户</Label>
               <select
@@ -262,7 +371,7 @@ export function DepositDialog() {
             </div>
 
             <div className="flex flex-col gap-2">
-              <Label htmlFor="deposit-amount">入金金额（元）</Label>
+              <Label htmlFor="deposit-amount">充钱金额（元）</Label>
               <Input
                 data-testid="deposit-amount"
                 id="deposit-amount"
@@ -311,7 +420,9 @@ export function DepositDialog() {
               {loading ? "入金中…" : "确认入金"}
             </Button>
             <p className="text-[11px] leading-relaxed text-muted-foreground">
-              单笔上限 100,000 元;入金不是动你现有资金,不需要支付密码。
+              单笔上限 100,000
+              元;模拟外部账户是演示资金,银行卡来源从虚拟余额扣减,
+              都不接真实银行、不需要支付密码。
             </p>
           </div>
         )}
