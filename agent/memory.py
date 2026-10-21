@@ -1,0 +1,282 @@
+"""Agent 长期记忆：跨会话的用户偏好、上次计划结果与失败原因。
+
+为什么单独一个库
+----------------
+现有 ``data/bank.db`` 是银行事实库（账户/流水/订阅/持仓），
+``data/agent_threads.sqlite`` 是会话库（消息/pending 卡片），两者都不适合放
+"下次规划要用的经验"。本模块按迭代计划 §6 落在独立 SQLite
+（默认 ``data/agent_memory.sqlite``，可用环境变量 ``AGENT_MEMORY_DB`` 覆盖），
+**不改 bank.db 表结构、不新增 MCP 工具、不改工具计数**。
+
+记住的不是聊天记录，是三类"下次有用"的短摘要：
+- ``profile``      用户画像：预算偏好、风险等级、偏好的产品类型、不能动的固定支出；
+- ``bill``/``wealth``/``birthday``  技能经验：上次关注什么、给了什么方案、
+  结果是成功还是失败、**被用户拒绝的方案**（不要再默认推荐）；
+- ``plan_history`` 最近 N 条计划：plan_id/目标/用了哪些技能/结果/失败原因/计划 diff。
+
+三条硬约束（迭代计划 §6.3、§14）
+--------------------------------
+1. **失败软处理**：读写异常一律吞掉返回空值，绝不阻断主流程；
+2. **未登录不写**：``user_id`` 为空/非正整数时读写都不落库；
+3. **只能做建议**：记忆不替代实时余额/限额/持仓校验，执行前仍读实时事实。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# 记忆模块枚举：写库前做白名单校验，防止把任意字符串当成 module 污染库
+MEMORY_MODULES: frozenset[str] = frozenset({
+    "profile",        # 用户画像
+    "bill",           # 账单分析经验
+    "wealth",         # 理财分析经验
+    "birthday",       # 生日预算计划经验
+    "plan_history",   # 最近计划历史（短摘要队列）
+})
+
+# plan_history 只留最近几条计划，避免库无限增长
+PLAN_HISTORY_LIMIT = 5
+
+_CREATE_SQL = """
+CREATE TABLE IF NOT EXISTS agent_memory (
+    user_id      INTEGER NOT NULL,
+    module       TEXT NOT NULL,
+    content_json TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (user_id, module)
+)
+"""
+
+
+def db_path() -> Path:
+    """记忆库路径（环境变量 AGENT_MEMORY_DB 可覆盖，默认 data/agent_memory.sqlite）。"""
+    raw = os.environ.get("AGENT_MEMORY_DB", "").strip()
+    if raw:
+        return Path(raw)
+    return _PROJECT_ROOT / "data" / "agent_memory.sqlite"
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _valid_user_id(user_id: Any) -> int | None:
+    """规范化 user_id：未登录/非法一律 None（调用方据此跳过读写）。
+
+    只认整数或纯数字字符串：**浮点数一律拒绝**（``int(3.5)`` 会静默截断成 3,
+    把 11 号用户的经验写到 3 号头上就是跨用户记忆污染）。
+    """
+    if isinstance(user_id, bool) or user_id is None:
+        return None
+    if isinstance(user_id, float):
+        return None
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    return uid if uid > 0 else None
+
+
+def _connect(create: bool = True) -> sqlite3.Connection | None:
+    """打开记忆库；任何异常都返回 None（调用方按"记忆不可用"处理）。"""
+    path = db_path()
+    try:
+        if create:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(path), timeout=5)
+        if create:
+            conn.execute(_CREATE_SQL)
+            conn.commit()
+        return conn
+    except Exception:  # noqa: BLE001 —— 记忆不可用不能连带炸掉主流程
+        return None
+
+
+# ------------------------------------------------------------------ 读
+
+def recall(user_id: Any, module: str) -> dict | None:
+    """读某个用户某模块的记忆；无记录/未登录/库异常一律 None。"""
+    uid = _valid_user_id(user_id)
+    if uid is None or module not in MEMORY_MODULES:
+        return None
+    conn = _connect(create=False)
+    if conn is None:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT content_json FROM agent_memory WHERE user_id=? AND module=?",
+            (uid, module)).fetchone()
+        if row is None:
+            return None
+        data = json.loads(row[0])
+        return dict(data) if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def recall_all(user_id: Any) -> dict[str, dict]:
+    """一次读出该用户的全部模块记忆（缺失的模块不出现在结果里）。"""
+    uid = _valid_user_id(user_id)
+    if uid is None:
+        return {}
+    conn = _connect(create=False)
+    if conn is None:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT module, content_json FROM agent_memory WHERE user_id=?",
+            (uid,)).fetchall()
+    except Exception:  # noqa: BLE001
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    out: dict[str, dict] = {}
+    for module, raw in rows:
+        try:
+            data = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(data, dict):
+            out[str(module)] = data
+    return out
+
+
+def remember(user_id: Any, module: str, content: dict) -> bool:
+    """UPSERT 一条记忆（每个模块只保留最新一条）。返回是否写成功。"""
+    uid = _valid_user_id(user_id)
+    if uid is None or module not in MEMORY_MODULES or not isinstance(content, dict):
+        return False
+    try:
+        payload = json.dumps(content, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        return False
+    conn = _connect(create=True)
+    if conn is None:
+        return False
+    try:
+        conn.execute(
+            "INSERT INTO agent_memory (user_id, module, content_json, updated_at) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(user_id, module) DO UPDATE SET "
+            "content_json=excluded.content_json, updated_at=excluded.updated_at",
+            (uid, module, payload, _now_iso()))
+        conn.commit()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def merge(user_id: Any, module: str, patch: dict) -> dict:
+    """在既有记忆上打补丁（浅合并一层），返回合并后的内容（写失败也返回合并值）。"""
+    base = recall(user_id, module) or {}
+    merged = {**base, **{k: v for k, v in patch.items()}}
+    remember(user_id, module, merged)
+    return merged
+
+
+def push_plan_history(user_id: Any, entry: dict) -> list[dict]:
+    """追加一条计划历史（保留最近 PLAN_HISTORY_LIMIT 条，最新在前）。
+
+    entry 建议字段：plan_id/goal/skills/result/reason/plan_version/updated_at。
+    """
+    uid = _valid_user_id(user_id)
+    if uid is None or not isinstance(entry, dict):
+        return []
+    item = dict(entry)
+    item.setdefault("at", _now_iso())
+    prev = recall(uid, "plan_history") or {}
+    items = [i for i in (prev.get("items") or []) if isinstance(i, dict)]
+    items = [i for i in items if str(i.get("plan_id") or "") != str(item.get("plan_id") or "")]
+    items.insert(0, item)
+    items = items[:PLAN_HISTORY_LIMIT]
+    remember(uid, "plan_history", {"items": items})
+    return items
+
+
+def forget(user_id: Any, module: str | None = None) -> bool:
+    """删除某用户某个模块的记忆；module 为空则清空该用户全部记忆（管理用）。"""
+    uid = _valid_user_id(user_id)
+    if uid is None:
+        return False
+    conn = _connect(create=False)
+    if conn is None:
+        return False
+    try:
+        if module:
+            conn.execute("DELETE FROM agent_memory WHERE user_id=? AND module=?",
+                         (uid, module))
+        else:
+            conn.execute("DELETE FROM agent_memory WHERE user_id=?", (uid,))
+        conn.commit()
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def summarize_for_plan(user_id: Any, modules: tuple[str, ...]) -> list[str]:
+    """把若干模块的记忆压成一两句"人话"，供计划卡的 memory_used 展示。
+
+    纯确定性字符串拼接，不调 LLM；没有任何记忆时返回空列表。
+    """
+    out: list[str] = []
+    memory = recall_all(user_id)
+    if "bill" in modules and "bill" in memory:
+        cat = str((memory["bill"].get("top_category") or "") or "")
+        if cat:
+            out.append(f"上次账单关注「{cat}」")
+    if "wealth" in modules and "wealth" in memory:
+        pref = str((memory["wealth"].get("preferred_type") or "") or "")
+        level = str((memory["wealth"].get("risk_level") or "") or "")
+        if pref:
+            out.append(f"上次偏好「{pref}」理财")
+        if level:
+            out.append(f"上次风险等级 {level}")
+    if "birthday" in modules and "birthday" in memory:
+        b = memory["birthday"]
+        budget = str(b.get("last_budget_yuan") or "")
+        if budget:
+            out.append(f"上次生日预算 ¥{budget}")
+        if str(b.get("rejected_cut") or "") == "true" or b.get("rejected_cut") is True:
+            out.append("上次保留订阅未取消")
+        elif str(b.get("accepted_cut_merchant") or ""):
+            out.append(f"上次接受取消「{b['accepted_cut_merchant']}」")
+    return out
+
+
+__all__ = [
+    "MEMORY_MODULES",
+    "PLAN_HISTORY_LIMIT",
+    "db_path",
+    "forget",
+    "merge",
+    "push_plan_history",
+    "recall",
+    "recall_all",
+    "remember",
+    "summarize_for_plan",
+]
