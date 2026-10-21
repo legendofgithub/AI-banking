@@ -38,6 +38,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
+from agent import memory
 from agent.bank import load_bank_tools
 from agent.graph import build_agent_graph, make_sqlite_checkpointer
 
@@ -2034,5 +2035,251 @@ def test_due_reminder_with_plan_trigger_word_stays_due(tmp_path):
             assert g1["action"]["plan_title"] == "省钱生日联动"
             assert g1["action"]["what"] == "鲜花"
             assert _balance(db) == DEFAULT_BALANCE
+
+    run(scenario())
+
+
+# =================================================================== Agent Core
+# 迭代计划 §13.2 新增:Core 闭环 / 技能组合 / 局部重规划 / 长期记忆。
+# 红线:分析路径零动钱;旧账单/理财查询路径一字不变。
+
+def _seed_tx_month(db: Path, year: int, month: int) -> None:
+    """给指定月份补 6 笔餐饮支出 + 1 笔工资(Core 的 analyze_bill 要有事实可读)。"""
+    conn = sqlite3.connect(db)
+    try:
+        for i in range(6):
+            conn.execute(
+                "INSERT INTO transactions (account_id,ts,direction,amount_cents,"
+                "balance_after_cents,tx_type,counterparty,category,memo) "
+                "VALUES (1,?,'out',?,900000,'pos',?,?,?)",
+                (f"{year:04d}-{month:02d}-0{i + 1}T12:00:00",
+                 120_000 + i * 10_000, "山姆", "餐饮", ""))
+        conn.execute(
+            "INSERT INTO transactions (account_id,ts,direction,amount_cents,"
+            "balance_after_cents,tx_type,counterparty,category,memo) "
+            "VALUES (1,?,'in',1850000,1000000,'salary','公司','工资','')",
+            (f"{year:04d}-{month:02d}-05T09:00:00",))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _prev_month_ym() -> tuple[int, int]:
+    first = date.today().replace(day=1)
+    prev = first - timedelta(days=1)
+    return prev.year, prev.month
+
+
+def test_core_bill_analysis_read_only_and_remembered(tmp_path):
+    """Core 账单分析闭环:计划→只读工具→观察→复盘→写记忆;全程零动钱。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    y, m = _prev_month_ym()
+    _seed_tx_month(db, y, m)
+
+    async def scenario():
+        before = _balance(db)
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "bill_analysis"}',
+            "上个月餐饮花得最多,建议关注。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "core-bill"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我分析上个月的账单")]}, cfg)
+            plan = r.get("agent_plan") or {}
+            assert [s["skill"] for s in plan["steps"]] == ["analyze_bill"]
+            assert all(s["status"] == "done" for s in plan["steps"])
+            assert plan["status"] == "done"
+            # 零动钱:分析技能只读
+            assert _balance(db) == before
+            assert _count(db, "transfer_orders") == 0
+            # Plan Trace 可回放
+            assert [t["phase"] for t in plan["trace"]] == ["plan", "guard",
+                                                           "act", "reflect"]
+            # 卡片:事实行 + 复盘
+            view = r.get("analysis_view") or {}
+            assert view["intent"] == "bill"
+            assert view["reflection"]["status"] == "success"
+            labels = [row["label"] for row in view["facts"]]
+            assert "最大支出分类" in labels and "Top 商户" in labels
+            # 记忆:只存短摘要
+            bill_mem = memory.recall(1, "bill") or {}
+            assert bill_mem.get("top_category") == "餐饮"
+            assert memory.recall(1, "plan_history")
+            # 全程只有 router + 播报两次 LLM:计划/技能选择/复盘/记忆都是确定性代码
+
+    run(scenario())
+
+
+def test_old_bill_query_path_is_never_rerouted_to_core(tmp_path):
+    """旧账单查询不命中分析触发词 → 仍走 b_* 路径,Core 状态为空。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "bill_analysis"}',
+            json.dumps({"ask": "monthly_report", "period": "上个月",
+                        "category": None}, ensure_ascii=False),
+            "已读出上个月月报。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "core-old"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("看下上个月的账单月报")]}, cfg)
+            assert (r.get("notice") or {}).get("kind") == "bill_report"
+            assert r.get("agent_plan") is None
+            assert r.get("analysis_view") is None
+
+    run(scenario())
+
+
+def test_core_plan_combines_two_skills(tmp_path):
+    """验收第 3 条:一个计划能组合两个技能(账单 + 理财),且理财按风险过滤。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    y, m = _prev_month_ym()
+    _seed_tx_month(db, y, m)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "bill_analysis"}',
+            "账单与持仓都看了。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "core-two"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我分析一下账单和理财持仓")]}, cfg)
+            plan = r.get("agent_plan") or {}
+            assert [s["skill"] for s in plan["steps"]] == [
+                "analyze_bill", "analyze_wealth"]
+            assert all(s["status"] == "done" for s in plan["steps"])
+            # 两个技能的经验都写进记忆
+            assert memory.recall(1, "bill")
+            assert memory.recall(1, "wealth")
+
+    run(scenario())
+
+
+def test_core_replans_only_the_failed_step(tmp_path):
+    """验收第 4 条:一次可恢复失败 → 只改受影响步骤、已完成步骤不重跑、有 diff。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    # 只在上上个月有数据:用户点名的月份必然"没有可播报事实"→ 触发局部重规划
+    y, m = _prev_month_ym()
+    prev2 = (date(y, m, 1) - timedelta(days=1)).replace(day=1)
+    _seed_tx_month(db, prev2.year, prev2.month)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "bill_analysis"}',
+            "已回退到有数据的那个月。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "core-replan"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我分析2020-01的账单和理财持仓")]},
+                cfg)
+            plan = r.get("agent_plan") or {}
+            assert int(plan["plan_version"]) >= 2      # 至少重规划过一次
+            diff = plan.get("diff_from_version") or {}
+            assert diff.get("changed") == {"s1": ["args"]}
+            # 已完成步骤不重跑:理财步骤的 act 轨迹只出现一次
+            acts = [t for t in plan["trace"]
+                    if t.get("phase") == "act" and t.get("step") == "s2"]
+            assert len(acts) == 1
+            # diff 在卡片上可见
+            view = r.get("analysis_view") or {}
+            assert (view["diff"] or {}).get("changed") == {"s1": ["args"]}
+
+    run(scenario())
+
+
+def test_birthday_success_is_remembered(tmp_path):
+    """生日预算锁定成功 → 写 birthday 记忆(结果 + 预算),供下次规划读。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3000"),
+            "生日预算已锁定。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "bp-mem"}}
+            await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我规划林悦的生日,预算3000")]}, cfg)
+            await graph.ainvoke(Command(resume="确认"), cfg)
+            await graph.ainvoke(Command(resume="888888"), cfg)
+            mem = memory.recall(1, "birthday") or {}
+            assert mem.get("last_result") == "locked"
+            assert mem.get("last_budget_yuan") == "3000.00"
+            assert memory.recall(1, "plan_history")
+
+    run(scenario())
+
+
+def test_birthday_refusal_at_gate_is_remembered(tmp_path):
+    """用户在取消订阅的支付密码闸门前退却 → 记下"下次不再默认推荐砍它"。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3600"),
+            "好的,订阅保留。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "bp-refuse"}}
+            await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage(
+                     "帮我规划林悦的生日,预算3600,钱不够就砍订阅")]}, cfg)
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            assert _interrupt_payload(r2)["type"] == "confirm_sub_cancel"
+            r3 = await graph.ainvoke(Command(resume="取消"), cfg)   # 闸门拒绝
+            assert _interrupt_payload(r3)["type"] == "confirm_plan"  # 降级后重确认
+            mem = memory.recall(1, "birthday") or {}
+            assert mem.get("rejected_cut") is True
+            assert mem.get("rejected_cut_merchant") == "腾讯视频VIP"
+
+    run(scenario())
+
+
+def test_second_birthday_plan_reads_memory_and_drops_cut(tmp_path):
+    """验收第 5 条:第二次同类目标读到上次记忆,默认方案发生变化(不再推荐砍单)。"""
+    db = _mk_linkage_db(tmp_path)
+    _seed_month_flow(db)
+    _seed_plan_subs(db)
+    # 预置记忆:上次用户保留了订阅
+    memory.remember(1, "birthday", {"rejected_cut": True,
+                                    "rejected_cut_merchant": "腾讯视频VIP"})
+
+    async def scenario():
+        async with _PlanSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            _plan_slots_json("3600"),
+            "按你上次的偏好,不再取消订阅。",
+        ]) as session:
+            graph = session.graph
+            cfg = {"configurable": {"thread_id": "bp-2nd"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage(
+                     "帮我规划林悦的生日,预算3600,钱不够就砍订阅")]}, cfg)
+            card = _interrupt_payload(r1)["plan"]
+            # 默认方案变了:没有选中的砍单,也就不出现取消订阅的支付密码闸门
+            assert card["selected_cut"] is None
+            assert "confirm_sub_cancel" not in _plan_steps_gates(card)
+            assert "订阅保留" in (card.get("note") or "")
+            # 预算按可支配下调(不是砍订阅补差额)
+            assert card["recommended_budget_yuan"] == "3500.00"
+            _assert_plan_zero_writes(db)
 
     run(scenario())

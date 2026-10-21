@@ -225,7 +225,23 @@ def build_analysis_card(plan: dict, *, intent: str = "",
                                    else "尚未复盘")},
         "memory_used": list(plan.get("memory_used") or []),
         "trace": trace_view(plan),
+        # 重规划 diff(新增/删除/修改了哪些步骤):验收要求"改了什么必须可见"
+        "diff": plan.get("diff_from_version"),
     }
+
+
+def diff_text(diff: dict | None) -> str:
+    """plan diff → 一句人话(确定性拼接,不给 LLM 转述的机会)。"""
+    if not isinstance(diff, dict):
+        return ""
+    parts: list[str] = []
+    if diff.get("added"):
+        parts.append("新增步骤 " + "、".join(diff["added"]))
+    if diff.get("removed"):
+        parts.append("删除步骤 " + "、".join(diff["removed"]))
+    if diff.get("changed"):
+        parts.append("修改步骤 " + "、".join(sorted(diff["changed"])))
+    return "；".join(parts)
 
 
 def failed_note(plan: dict) -> str:
@@ -240,6 +256,7 @@ __all__ = [
     "SKILL_TITLES",
     "bill_facts",
     "build_analysis_card",
+    "diff_text",
     "failed_note",
     "wealth_facts",
 ]
