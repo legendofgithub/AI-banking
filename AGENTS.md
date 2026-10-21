@@ -34,6 +34,10 @@
 - 重启后端**必须用 venv python**(见铁律 3)。
 - 一键起停用 `启动演示.bat` / `停止演示.bat`。**启动脚本是全量重启**(先按 PID 停端口再起),
   不是"已在跑就跳过"——Python 与 `next start` 都不热加载,跳过会让你对着旧代码演示。
+- 启动器只保留一个前台进度窗口:四个服务由 `scripts/demo_launcher.py` 以无窗口后台进程拉起,
+  输出写 `logs/<服务>.log` 与 `logs/<服务>.err.log`(已被 .gitignore 拦截)。关掉启动窗口
+  不会杀后台服务,停止仍用 `停止演示.bat`(按端口 PID 停)。`启动演示.bat --skip-build`
+  可跳过前端构建快速重启。
 - 清理进程**先 netstat 查 PID 再按 PID 杀**,绝不 `taskkill /IM node.exe` 全杀(会误杀用户常驻的 webui)。
 - 内存紧张(16GB,常只剩 2-4GB):webui 用 `next build` + `next start`,**不要用 `next dev --turbo`**(必 OOM)。
 
