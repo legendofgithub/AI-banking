@@ -24,11 +24,6 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
         openPayeePicker();
         return;
       }
-      // 模拟入金走弹窗(不是聊天意图):新用户余额为 0 时可直接体验
-      if (suggestion === "账户入金(演示)") {
-        window.dispatchEvent(new Event("open-deposit"));
-        return;
-      }
       window.history.pushState(
         {},
         "",

@@ -13,6 +13,8 @@ test.describe("Simulated deposit", () => {
   }) => {
     await loginDemo(page);
 
+    // 首页建议区不再放充钱按钮(功能已收进左下角设置)
+    await expect(page.getByText("账户入金(演示)")).toHaveCount(0);
     await page.getByTestId("settings-button").click();
     await page.getByTestId("settings-deposit").click();
     await expect(page.getByTestId("deposit-dialog")).toBeVisible();
@@ -24,11 +26,5 @@ test.describe("Simulated deposit", () => {
       { timeout: 15_000 }
     );
     await expect(page.getByTestId("deposit-success")).toContainText("当前余额");
-  });
-
-  test("empty-chat suggestion opens the same dialog", async ({ page }) => {
-    await loginDemo(page);
-    await page.getByText("账户入金(演示)").click();
-    await expect(page.getByTestId("deposit-dialog")).toBeVisible();
   });
 });
