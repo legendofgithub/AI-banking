@@ -251,12 +251,33 @@ class LedgerService:
 
     # ------------------------------------------------------------------ 转账
 
+    def transfer_limits(self) -> dict:
+        """有效转账限额:用户级覆盖(>0)优先,否则跟随系统默认 POLICY。"""
+        row = self.conn.execute(
+            "SELECT daily_transfer_limit_cents d, single_transfer_limit_cents s "
+            "FROM users WHERE id=?", (self.user_id,)).fetchone()
+        daily_override = int(row["d"]) if row else 0
+        single_override = int(row["s"]) if row else 0
+        return {
+            "daily_limit_cents": (daily_override if daily_override > 0
+                                  else POLICY["daily_out_limit_cents"]),
+            "single_limit_cents": (single_override if single_override > 0
+                                   else POLICY["single_tx_limit_cents"]),
+            "daily_overridden": daily_override > 0,
+            "single_overridden": single_override > 0,
+            "default_daily_limit_cents": POLICY["daily_out_limit_cents"],
+            "default_single_limit_cents": POLICY["single_tx_limit_cents"],
+        }
+
     def policy_check(self, amount_cents: int, to_contact_id: int | None,
                      from_account_id: int | None = None) -> dict:
-        """执行前风控校验：限额、当日累计、白名单。只判断不执行。"""
+        """执行前风控校验：账户级限额、当日累计、白名单。只判断不执行。"""
+        limits = self.transfer_limits()
+        single_limit = limits["single_limit_cents"]
+        daily_limit = limits["daily_limit_cents"]
         reasons: list[str] = []
-        if amount_cents > POLICY["single_tx_limit_cents"]:
-            reasons.append(f"单笔限额 {cents_to_yuan(POLICY['single_tx_limit_cents'])} 元")
+        if amount_cents > single_limit:
+            reasons.append(f"单笔限额 {cents_to_yuan(single_limit)} 元")
         if from_account_id:
             today = now_iso()[:10]
             row = self.conn.execute(
@@ -265,15 +286,17 @@ class LedgerService:
                      AND ts LIKE ? AND account_id=?""",
                 (f"{today}%", from_account_id),
             ).fetchone()
-            if row["s"] + amount_cents > POLICY["daily_out_limit_cents"]:
+            if row["s"] + amount_cents > daily_limit:
                 reasons.append(
                     f"当日已转出 {cents_to_yuan(row['s'])} 元，加本笔将超过日限额 "
-                    f"{cents_to_yuan(POLICY['daily_out_limit_cents'])} 元"
+                    f"{cents_to_yuan(daily_limit)} 元"
                 )
         if POLICY["whitelist_only"] and to_contact_id is None:
             reasons.append("当前策略仅允许向常用收款人转账")
         ok = not reasons
         result = {"approved": ok, "reasons": reasons,
+                  "limits": {"daily_limit_yuan": cents_to_yuan(daily_limit),
+                             "single_limit_yuan": cents_to_yuan(single_limit)},
                   "checked_at": now_iso()}
         audit(self.conn, "policy_check",
               {"amount_cents": amount_cents, "to_contact_id": to_contact_id,

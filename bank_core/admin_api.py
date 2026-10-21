@@ -76,6 +76,27 @@ class AdjustIn(BaseModel):
     reason: str
 
 
+class TransferLimitsIn(BaseModel):
+    """账户级转账限额覆盖；空串/0 = 恢复系统默认。"""
+
+    daily_limit_yuan: str = ""
+    single_limit_yuan: str = ""
+
+
+def _parse_limit(value: str, label: str) -> int:
+    v = (value or "").strip()
+    if v in ("", "0", "0.00"):
+        return 0
+    try:
+        cents = yuan_to_cents(v)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{label}: {exc}")
+    if cents > 100_000_000:  # 1,000,000 元上限，防手滑输入天文数字
+        raise HTTPException(status_code=400,
+                            detail=f"{label}不能超过 1,000,000 元")
+    return cents
+
+
 # 注册时间筛选窗口：within 参数 → 天数
 _WITHIN_DAYS = {"week": 7, "month": 30, "quarter": 90, "year": 365}
 
@@ -144,6 +165,20 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
                        a.type AS account_type, u.name AS nickname
                 FROM accounts a JOIN users u ON u.id = a.user_id
                 WHERE a.id IN ({marks})""", tuple(ids))}
+
+    def _limits_of(uid: int) -> dict:
+        """有效限额 + 默认值/是否覆盖，供总览业务参数卡与保存响应共用。"""
+        lim = _Svcs(uid).ledger.transfer_limits()
+        return {
+            "daily_limit_yuan": cents_to_yuan(lim["daily_limit_cents"]),
+            "single_limit_yuan": cents_to_yuan(lim["single_limit_cents"]),
+            "daily_overridden": lim["daily_overridden"],
+            "single_overridden": lim["single_overridden"],
+            "default_daily_limit_yuan": cents_to_yuan(
+                lim["default_daily_limit_cents"]),
+            "default_single_limit_yuan": cents_to_yuan(
+                lim["default_single_limit_cents"]),
+        }
 
     app = FastAPI(title="AI Banking 管理后台", version="0.2.0")
 
@@ -272,7 +307,39 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             "stats": {"today_money_count": t0["n"],
                       "today_money_delta_yuan": cents_to_yuan(t0["d"]),
                       "change_count_24h": c0["n"], "active_plans": active_plans},
+            "limits": _limits_of(uid),
         }
+
+    @app.post("/api/transfer-limits")
+    def set_transfer_limits(body: TransferLimitsIn,
+                            user_id: int | None = None) -> dict:
+        """账户级转账限额（每日/单笔）：空串或 0 恢复系统默认，保存后立即生效。"""
+        uid = _uid(user_id)
+        daily = _parse_limit(body.daily_limit_yuan, "每日转账限额")
+        single = _parse_limit(body.single_limit_yuan, "单笔转账限额")
+        old = conn.execute(
+            "SELECT daily_transfer_limit_cents d, single_transfer_limit_cents s "
+            "FROM users WHERE id=?", (uid,)).fetchone()
+        conn.execute(
+            "UPDATE users SET daily_transfer_limit_cents=?, "
+            "single_transfer_limit_cents=? WHERE id=?",
+            (daily, single, uid))
+        conn.commit()
+        result = {"user_id": uid, "limits": _limits_of(uid)}
+        audit(conn, "admin_set_transfer_limits",
+              {"user_id": uid, "daily_cents": daily,
+               "single_cents": single},
+              {"old_daily_cents": old["d"] if old else 0,
+               "old_single_cents": old["s"] if old else 0, **result},
+              risk="MED")
+        with admin_scope():
+            record_change(
+                conn, uid, category="admin", action="transfer_limits",
+                target=_nickname_of(uid),
+                detail={"daily_limit_yuan": cents_to_yuan(daily) if daily else "默认",
+                        "single_limit_yuan":
+                            cents_to_yuan(single) if single else "默认"})
+        return result
 
     @app.get("/api/money-records")
     def money_records(limit: int = 100, user_id: int | None = None) -> dict:

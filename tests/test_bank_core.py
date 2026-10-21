@@ -185,6 +185,51 @@ def test_bound_card_bind_deposit_and_unbind(tmp_path):
                               idempotency_key="after-unbind")
 
 
+def test_transfer_limits_per_user_override(tmp_path):
+    """账户级转账限额:用户覆盖优先,0 恢复系统默认;policy_check 立即生效。"""
+    conn = init_db(tmp_path / "lim.db")
+    acct = _mk_account(conn, 10_000_000)
+    led = LedgerService(conn, 1)
+
+    lim = led.transfer_limits()
+    assert lim["daily_limit_cents"] == 1_000_000
+    assert lim["single_limit_cents"] == 5_000_000
+    assert lim["daily_overridden"] is False
+    assert led.policy_check(600_000, None, acct)["approved"] is True
+
+    conn.execute(
+        "UPDATE users SET daily_transfer_limit_cents=?, "
+        "single_transfer_limit_cents=? WHERE id=1", (500_000, 400_000))
+    conn.commit()
+    lim = led.transfer_limits()
+    assert lim["daily_limit_cents"] == 500_000
+    assert lim["single_limit_cents"] == 400_000
+    assert lim["daily_overridden"] is True and lim["single_overridden"] is True
+
+    r = led.policy_check(450_000, None, acct)
+    assert r["approved"] is False
+    assert any("单笔" in x for x in r["reasons"])
+    assert led.policy_check(300_000, None, acct)["approved"] is True
+
+    conn.execute(
+        "UPDATE users SET daily_transfer_limit_cents=?, "
+        "single_transfer_limit_cents=? WHERE id=1", (500_000, 1_000_000))
+    conn.commit()
+    r = led.policy_check(600_000, None, acct)
+    assert r["approved"] is False
+    assert any("日限额" in x for x in r["reasons"])
+    assert r["limits"]["daily_limit_yuan"] == "5000.00"
+
+    conn.execute(
+        "UPDATE users SET daily_transfer_limit_cents=?, "
+        "single_transfer_limit_cents=? WHERE id=1", (0, 0))
+    conn.commit()
+    lim = led.transfer_limits()
+    assert lim["daily_limit_cents"] == 1_000_000
+    assert lim["single_limit_cents"] == 5_000_000
+    assert lim["daily_overridden"] is False
+
+
 def test_transfer_insufficient_funds(tmp_path):
     conn = init_db(tmp_path / "t.db")
     acct = _mk_account(conn, 1000)  # 10 元

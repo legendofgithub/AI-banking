@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS users (
     email      TEXT NOT NULL DEFAULT '',  -- 邮箱（注册选填）
     transfer_locked INTEGER NOT NULL DEFAULT 0,  -- 转账功能锁(连续4次支付密码错误;仅管理员可解除)
     pay_fail_count  INTEGER NOT NULL DEFAULT 0,  -- 待确认转账页连续支付密码错误次数(成功清零)
+    -- 账户级转账限额覆盖(0=跟随系统默认 POLICY);单位为分
+    daily_transfer_limit_cents  INTEGER NOT NULL DEFAULT 0,
+    single_transfer_limit_cents INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 -- 一证一户硬约束(部分索引:老用户空串不受限)。"先查后插"的注册检查
@@ -319,7 +322,11 @@ def migrate_users_kyc(conn: sqlite3.Connection) -> None:
     for col, ddl in (("id_card", "TEXT NOT NULL DEFAULT ''"),
                      ("email", "TEXT NOT NULL DEFAULT ''"),
                      ("transfer_locked", "INTEGER NOT NULL DEFAULT 0"),
-                     ("pay_fail_count", "INTEGER NOT NULL DEFAULT 0")):
+                     ("pay_fail_count", "INTEGER NOT NULL DEFAULT 0"),
+                     ("daily_transfer_limit_cents",
+                      "INTEGER NOT NULL DEFAULT 0"),
+                     ("single_transfer_limit_cents",
+                      "INTEGER NOT NULL DEFAULT 0")):
         if col not in cols:
             conn.execute(
                 f"ALTER TABLE users ADD COLUMN {col} {ddl}")

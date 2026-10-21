@@ -290,6 +290,16 @@ input.mono{font-family:var(--mono)}
     <div class="stat"><div class="k">活跃联动计划数</div><div class="v" id="ovPlans">—</div></div>
   </div>
   <div class="card">
+    <h3>业务参数<span class="head-note">账户级转账限额，保存后立即生效</span></h3>
+    <form id="limitForm" class="form-row" autocomplete="off">
+      <div class="field"><label for="ovDailyLimit">每日转账限额(元)</label><input id="ovDailyLimit" class="mono" placeholder="留空/0 跟随系统默认"></div>
+      <div class="field"><label for="ovSingleLimit">单笔转账限额(元)</label><input id="ovSingleLimit" class="mono" placeholder="留空/0 跟随系统默认"></div>
+      <button type="submit" class="btn primary">保存限额</button>
+      <button type="button" class="btn" id="btnResetLimits">恢复系统默认</button>
+    </form>
+    <p class="form-note">只影响该用户后续转账的风控判断，不追溯已执行订单。<span id="ovLimitDefaults"></span></p>
+  </div>
+  <div class="card">
     <h3>账户余额</h3>
     <div class="acct-grid" id="ovAccounts"></div>
   </div>
@@ -841,6 +851,14 @@ async function loadOverview(){
   $('#ovChange24').textContent = `${st.change_count_24h ?? 0} 条`;
   $('#ovPlans').textContent = `${st.active_plans ?? 0} 个`;
 
+  // 业务参数：账户级转账限额（0/空 = 系统默认）
+  const lim = d.limits || {};
+  $('#ovDailyLimit').value = lim.daily_limit_yuan ?? '';
+  $('#ovSingleLimit').value = lim.single_limit_yuan ?? '';
+  $('#ovLimitDefaults').textContent = lim.default_daily_limit_yuan
+    ? ` 系统默认：每日 ${money(lim.default_daily_limit_yuan)} 元 / 单笔 ${money(lim.default_single_limit_yuan)} 元。`
+    : '';
+
   // 账户余额卡：每账户一张
   $('#ovAccounts').innerHTML = (d.accounts || []).map(a => `
     <div class="acct">
@@ -1260,6 +1278,36 @@ $('#btnBackList').addEventListener('click', backToList);
 $('#moneyLimit').addEventListener('change', () => TAB_LOADERS.money());
 $('#changeCategory').addEventListener('change', () => TAB_LOADERS.change());
 $('#orderStatus').addEventListener('change', () => TAB_LOADERS.orders());
+
+// 业务参数：账户级转账限额
+$('#limitForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const daily = $('#ovDailyLimit').value.trim();
+  const single = $('#ovSingleLimit').value.trim();
+  const numRe = /^\d+(\.\d{1,2})?$/;
+  if (daily !== '' && !numRe.test(daily)) { toast('每日限额格式不正确，需为非负数字', 'err'); return; }
+  if (single !== '' && !numRe.test(single)) { toast('单笔限额格式不正确，需为非负数字', 'err'); return; }
+  if (!confirm(`确认保存该用户的转账限额？\n每日：${daily || '系统默认'}\n单笔：${single || '系统默认'}`)) return;
+  try {
+    const r = await api(withUser('/api/transfer-limits'), {
+      method: 'POST',
+      body: JSON.stringify({ daily_limit_yuan: daily, single_limit_yuan: single }),
+    });
+    toast(`限额已保存：每日 ${money(r.limits.daily_limit_yuan)} 元 / 单笔 ${money(r.limits.single_limit_yuan)} 元`);
+    TAB_LOADERS.overview();
+  } catch (err) { toast(err.message, 'err'); }
+});
+$('#btnResetLimits').addEventListener('click', async () => {
+  if (!confirm('恢复该用户的系统默认转账限额？')) return;
+  try {
+    await api(withUser('/api/transfer-limits'), {
+      method: 'POST',
+      body: JSON.stringify({ daily_limit_yuan: '0', single_limit_yuan: '0' }),
+    });
+    toast('已恢复系统默认限额');
+    TAB_LOADERS.overview();
+  } catch (err) { toast(err.message, 'err'); }
+});
 
 // 功能修改：明细 JSON 展开/收起（事件委托，重渲染后依然有效）
 $('#changeBody').addEventListener('click', e => {
