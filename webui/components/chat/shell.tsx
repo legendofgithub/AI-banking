@@ -34,7 +34,6 @@ export function ChatShell() {
     isLoading,
     votes,
     currentModelId,
-    setCurrentModelId,
     openPayeePicker,
   } = useActiveChat();
 
@@ -135,9 +134,7 @@ export function ChatShell() {
                   isLoading={isLoading}
                   messages={messages}
                   onCancelEdit={handleCancelEdit}
-                  onModelChange={setCurrentModelId}
                   onRequestTransfer={openPayeePicker}
-                  selectedModelId={currentModelId}
                   sendMessage={
                     editingMessage ? handleSendEditedMessage : sendMessage
                   }

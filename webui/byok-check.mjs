@@ -1,4 +1,4 @@
-// BYOK 全流程实测:钥匙按钮 → 填 Key → 测试 → 保存 → 默认模型落位 → 对话请求带 Key/模型。
+// BYOK 全流程实测:左下角「设置 → 大模型」→ 填 Key → 测试 → 保存 → 底部模型信息 → 对话请求带 Key/模型。
 // 用法:cd webui && node byok-check.mjs
 import { chromium } from "@playwright/test";
 import { mkdirSync } from "node:fs";
@@ -24,11 +24,15 @@ page.on("console", (m) => {
 
 try {
   await page.goto("http://localhost:3000/", { waitUntil: "domcontentloaded" });
-  await page.waitForSelector("[data-testid='api-key-settings']", { timeout: 20000 });
+  await page.waitForSelector("[data-testid='settings-button']", { timeout: 20000 });
   console.log("T1 设置入口出现: 通过");
 
-  await page.click("[data-testid='api-key-settings']");
-  await page.fill("input[type='password']", KEY);
+  await page.click("[data-testid='settings-button']");
+  await page.click("[data-testid='settings-model']");
+  await page.waitForSelector("[data-testid='model-settings-dialog']", { timeout: 10000 });
+  console.log("T1a 大模型设置弹窗: 通过");
+
+  await page.fill("[data-testid='byok-key-input']", KEY);
   await page.getByRole("button", { name: "测试连接" }).click();
   await page.waitForFunction(() => document.body.textContent.includes("有效"), { timeout: 30000 });
   console.log("T2 测试连接: 通过");
@@ -39,7 +43,7 @@ try {
   await page.keyboard.press("Escape");
   await page.waitForTimeout(3000);
   await page.screenshot({ path: shot("BYOK_保存后") });
-  console.log("T3 默认模型:", (await page.getByTestId("model-selector").textContent()).trim());
+  console.log("T3 当前模型:", (await page.getByTestId("connected-model-info").textContent()).trim());
 
   await page.click("[data-testid='multimodal-input']");
   await page.fill("[data-testid='multimodal-input']", "你好");

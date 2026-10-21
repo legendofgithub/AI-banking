@@ -3,14 +3,13 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
-import { ArrowUpIcon, BrainIcon, EyeIcon, WrenchIcon } from "lucide-react";
+import { ArrowUpIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   type ChangeEvent,
   type Dispatch,
   memo,
-  type ReactNode,
   type SetStateAction,
   useCallback,
   useEffect,
@@ -18,25 +17,9 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import useSWR from "swr";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
-import {
-  ModelSelector,
-  ModelSelectorContent,
-  ModelSelectorGroup,
-  ModelSelectorInput,
-  ModelSelectorItem,
-  ModelSelectorList,
-  ModelSelectorLogo,
-  ModelSelectorName,
-  ModelSelectorTrigger,
-} from "@/components/ai-elements/model-selector";
-import {
-  type ChatModel,
-  DEFAULT_CHAT_MODEL,
-  FALLBACK_CHAT_MODELS,
-  type ModelCapabilities,
-} from "@/lib/ai/models";
+import { ModelSelectorLogo } from "@/components/ai-elements/model-selector";
+import { useChatModel } from "@/hooks/use-chat-model";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -47,8 +30,6 @@ import {
   PromptInputTools,
 } from "../ai-elements/prompt-input";
 import { Button } from "../ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { ApiKeySettings, getStoredApiKey } from "./api-key-settings";
 import { PaperclipIcon, StopIcon } from "./icons";
 import { PreviewAttachment } from "./preview-attachment";
 import {
@@ -57,20 +38,6 @@ import {
   slashCommands,
 } from "./slash-commands";
 import { SuggestedActions } from "./suggested-actions";
-
-function setCookie(name: string, value: string) {
-  const maxAge = 60 * 60 * 24 * 365;
-  // biome-ignore lint/suspicious/noDocumentCookie: needed for client-side cookie setting
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAge}`;
-}
-
-// BYOK:用户自填的 Key 随 /api/models 请求头发给自家服务端(不入 URL)
-function fetchModels(url: string) {
-  const key = getStoredApiKey();
-  return fetch(url, {
-    headers: key ? { "x-zai-key": key } : undefined,
-  }).then((r) => r.json());
-}
 
 function PureMultimodalInput({
   chatId,
@@ -84,8 +51,6 @@ function PureMultimodalInput({
   setMessages,
   sendMessage,
   className,
-  selectedModelId,
-  onModelChange,
   editingMessage,
   onCancelEdit,
   onRequestTransfer,
@@ -104,8 +69,6 @@ function PureMultimodalInput({
     | UseChatHelpers<ChatMessage>["sendMessage"]
     | (() => Promise<void>);
   className?: string;
-  selectedModelId: string;
-  onModelChange?: (modelId: string) => void;
   editingMessage?: ChatMessage | null;
   onCancelEdit?: () => void;
   onRequestTransfer?: () => void;
@@ -113,6 +76,7 @@ function PureMultimodalInput({
 }) {
   const router = useRouter();
   const { setTheme, resolvedTheme } = useTheme();
+  const { openModelSettings } = useChatModel();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
   const hasAutoFocused = useRef(false);
@@ -179,13 +143,9 @@ function PureMultimodalInput({
         case "rename":
           toast("Rename is available from the sidebar chat menu.");
           break;
-        case "model": {
-          const modelBtn = document.querySelector<HTMLButtonElement>(
-            "[data-testid='model-selector']"
-          );
-          modelBtn?.click();
+        case "model":
+          openModelSettings();
           break;
-        }
         case "theme":
           setTheme(resolvedTheme === "dark" ? "light" : "dark");
           break;
@@ -225,7 +185,15 @@ function PureMultimodalInput({
           break;
       }
     },
-    [chatId, resolvedTheme, router, setInput, setMessages, setTheme]
+    [
+      chatId,
+      openModelSettings,
+      resolvedTheme,
+      router,
+      setInput,
+      setMessages,
+      setTheme,
+    ]
   );
 
   const submitForm = useCallback(() => {
@@ -497,10 +465,7 @@ function PureMultimodalInput({
         messages.length === 0 &&
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
-          <SuggestedActions
-            chatId={chatId}
-            sendMessage={sendMessage}
-          />
+          <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
         )}
 
       <input
@@ -567,16 +532,8 @@ function PureMultimodalInput({
         />
         <PromptInputFooter className="px-3 pb-3">
           <PromptInputTools>
-            <AttachmentsButton
-              fileInputRef={fileInputRef}
-              selectedModelId={selectedModelId}
-              status={status}
-            />
-            <ModelSelectorCompact
-              onModelChange={onModelChange}
-              selectedModelId={selectedModelId}
-            />
-            <ApiKeySettings />
+            <AttachmentsButton fileInputRef={fileInputRef} status={status} />
+            <ConnectedModelInfo />
           </PromptInputTools>
 
           {status === "submitted" ? (
@@ -613,9 +570,6 @@ export const MultimodalInput = memo(
       return false;
     }
     if (!equal(prevProps.attachments, nextProps.attachments)) {
-      return false;
-    }
-    if (prevProps.selectedModelId !== nextProps.selectedModelId) {
       return false;
     }
     if (prevProps.editingMessage !== nextProps.editingMessage) {
@@ -658,21 +612,12 @@ const AttachmentPreviewItem = memo(PureAttachmentPreviewItem);
 function PureAttachmentsButton({
   fileInputRef,
   status,
-  selectedModelId,
 }: {
   fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
   status: UseChatHelpers<ChatMessage>["status"];
-  selectedModelId: string;
 }) {
-  const { data: modelsResponse } = useSWR(
-    `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/models`,
-    fetchModels,
-    { dedupingInterval: 60_000, revalidateOnFocus: false }
-  );
-
-  const caps: Record<string, ModelCapabilities> | undefined =
-    modelsResponse?.capabilities ?? modelsResponse;
-  const hasVision = caps?.[selectedModelId]?.vision ?? false;
+  const { capabilities, currentModelId } = useChatModel();
+  const hasVision = capabilities?.[currentModelId]?.vision ?? false;
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
       event.preventDefault();
@@ -701,138 +646,27 @@ function PureAttachmentsButton({
 
 const AttachmentsButton = memo(PureAttachmentsButton);
 
-function ModelSelectorOption({
-  capabilities,
-  model,
-  onModelChange,
-  selectedModelId,
-  setOpen,
-}: {
-  capabilities: Record<string, ModelCapabilities> | undefined;
-  model: ChatModel;
-  onModelChange?: (modelId: string) => void;
-  selectedModelId: string;
-  setOpen: Dispatch<SetStateAction<boolean>>;
-}) {
-  const logoProvider = model.provider;
-  const maybeWithTooltip = (icon: ReactNode, label: string) => (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex">{icon}</span>
-      </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={8}>
-        {label}
-      </TooltipContent>
-    </Tooltip>
-  );
-
-  const handleSelect = useCallback(() => {
-    onModelChange?.(model.id);
-    setCookie("chat-model", model.id);
-    setOpen(false);
-    setTimeout(() => {
-      document
-        .querySelector<HTMLTextAreaElement>("[data-testid='multimodal-input']")
-        ?.focus();
-    }, 50);
-  }, [model.id, onModelChange, setOpen]);
+/* 底部只读信息:当前已连接模型。配置入口统一在左下角「设置 → 大模型」,
+   这里不再放下拉选择器,也不再放 API Key 钥匙图标。 */
+function ConnectedModelInfo() {
+  const { selectedModel } = useChatModel();
 
   return (
-    <ModelSelectorItem
-      className={cn(
-        "flex w-full transition-colors",
-        model.id === selectedModelId &&
-          "border-b border-dashed border-foreground/50",
-        "data-[selected=true]:bg-muted data-[selected=true]:text-foreground"
-      )}
-      onSelect={handleSelect}
-      value={model.id}
+    <div
+      className="flex h-7 max-w-[180px] items-center gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground"
+      data-testid="connected-model-info"
+      title="当前已连接模型;在左下角「设置 → 大模型」中管理"
     >
-      <ModelSelectorLogo provider={logoProvider} />
-      <ModelSelectorName>{model.name}</ModelSelectorName>
-      <div className="ml-auto flex items-center gap-2 text-foreground/70">
-        {capabilities?.[model.id]?.tools
-          ? maybeWithTooltip(
-              <WrenchIcon className="size-3.5" />,
-              "Supports tool use"
-            )
-          : null}
-        {capabilities?.[model.id]?.vision
-          ? maybeWithTooltip(
-              <EyeIcon className="size-3.5" />,
-              "Supports vision"
-            )
-          : null}
-        {capabilities?.[model.id]?.reasoning
-          ? maybeWithTooltip(
-              <BrainIcon className="size-3.5" />,
-              "Supports reasoning"
-            )
-          : null}
-      </div>
-    </ModelSelectorItem>
+      <ModelSelectorLogo provider={selectedModel.provider} />
+      <span className="truncate">{selectedModel.name}</span>
+      <span
+        aria-hidden="true"
+        className="ml-0.5 size-1.5 shrink-0 rounded-full bg-emerald-500"
+      />
+      <span className="sr-only">已连接</span>
+    </div>
   );
 }
-
-function PureModelSelectorCompact({
-  selectedModelId,
-  onModelChange,
-}: {
-  selectedModelId: string;
-  onModelChange?: (modelId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const { data: modelsData } = useSWR(
-    `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/models`,
-    fetchModels,
-    { dedupingInterval: 60_000, revalidateOnFocus: false }
-  );
-
-  const capabilities: Record<string, ModelCapabilities> | undefined =
-    modelsData?.capabilities ?? modelsData;
-  const dynamicModels: ChatModel[] | undefined = modelsData?.models;
-  const activeModels = dynamicModels ?? FALLBACK_CHAT_MODELS;
-
-  const selectedModel =
-    activeModels.find((m: ChatModel) => m.id === selectedModelId) ??
-    activeModels.find((m: ChatModel) => m.id === DEFAULT_CHAT_MODEL) ??
-    activeModels[0];
-  const provider = selectedModel.provider;
-
-  return (
-    <ModelSelector onOpenChange={setOpen} open={open}>
-      <ModelSelectorTrigger asChild>
-        <Button
-          className="h-7 max-w-[200px] justify-between gap-1.5 rounded-lg px-2 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
-          data-testid="model-selector"
-          variant="ghost"
-        >
-          {provider ? <ModelSelectorLogo provider={provider} /> : null}
-          <ModelSelectorName>{selectedModel.name}</ModelSelectorName>
-        </Button>
-      </ModelSelectorTrigger>
-      <ModelSelectorContent commandDefaultValue={selectedModel.id}>
-        <ModelSelectorInput placeholder="Search models..." />
-        <ModelSelectorList>
-          <ModelSelectorGroup heading="Available">
-            {activeModels.map((model: ChatModel) => (
-              <ModelSelectorOption
-                capabilities={capabilities}
-                key={model.id}
-                model={model}
-                onModelChange={onModelChange}
-                selectedModelId={selectedModel.id}
-                setOpen={setOpen}
-              />
-            ))}
-          </ModelSelectorGroup>
-        </ModelSelectorList>
-      </ModelSelectorContent>
-    </ModelSelector>
-  );
-}
-
-const ModelSelectorCompact = memo(PureModelSelectorCompact);
 
 function PureStopButton({
   stop,
