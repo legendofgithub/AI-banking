@@ -46,13 +46,22 @@
 ```
 bank_core/    银行能力层:44 个 MCP 工具(账本/分析/理财/事件/联动)+ 管理台/网银 API
 agent/        LangGraph 编排层:8800 API、auth 账号体系、模型选择
+              ├ graph.py   路由 + 六套业务子图 + 生日 p_* 计划 + Agent Core(a_* 节点)
+              ├ core.py    Agent Core 契约:Plan/Guard/拓扑序/Observe-Reflect/重规划 diff
+              ├ skills.py  六技能目录 + 工具适配器(资金技能拒绝 Core 自跑)
+              ├ analysis.py 只读分析事实行与 data-analysis-plan 卡片(纯函数)
+              └ memory.py  长期记忆(独立 SQLite:偏好/技能经验/计划历史,失败软处理)
 webui/        聊天前端(vercel/chatbot 模板魔改:账号/支付密码闸/银行卡片/跨设备同步)
 admin_console/ 管理台前端(单页 HTML,8789)
 demo/         演示网银前端(8788)
-tests/        pytest 全量回归
-scripts/      冒烟/评测脚本
+tests/        pytest 全量回归(conftest.py 把记忆库隔离到 tmp_path)
+scripts/      冒烟/评测脚本(core_demo.py = Agent Core 无界面四幕演示)
 data/         运行库 bank.db 等(不入库,可重播种)
 ```
+
+> **一个 Core,六个技能**:分析类请求(账单/理财)命中"分析/复盘/规划…"措辞时交给
+> `a_*` 节点编排;资金类请求仍走既有子图 + 支付密码闸门。迭代计划见
+> `docs/自主规划能力升级计划.md`,本次落地说明见 `docs/协作与接口契约.md`。
 
 ## 账号体系口径(2026-10-01 起)
 
@@ -111,6 +120,10 @@ cd webui && node e2e-model-settings-check.mjs
 # 手机端 e2e(375px 视口:登录→转账→支付密码卡→扣款,断言无横向溢出、
 # 收款人弹窗不溢出且搜索可用、悬浮提醒不遮输入区;改动银行卡片/输入区布局后必跑)
 cd webui && node e2e-mobile-check.mjs
+
+# Agent Core 无界面演示(四幕:账单分析 / 账单+理财 / 分析+生日转交 / 记忆改变默认值;
+# 打印 PlanCard + Plan Trace + Memory;加 --auto-confirm 自动过闸门,--user 换演示账户)
+.venv/Scripts/python.exe scripts/core_demo.py
 
 # 真实 LLM 评估(25 剧本;先 export ZAI_BASE_URL/ZAI_API_KEY/ZAI_MODEL,
 # 否则 get_llm 直接抛"未配置 API Key")
