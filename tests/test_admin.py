@@ -132,6 +132,109 @@ def test_adjust_minus_3000_roundtrip(client):
     assert ov["accounts"][0]["balance_yuan"] == "7000.00"
 
 
+def test_adjust_records_empty(client):
+    """还没有任何调账时返回空结构，监控页不因此 500。"""
+    d = client.get("/api/adjust-records").json()
+    assert d["records"] == []
+    assert d["total"] == 0
+    assert d["has_more"] is False
+    assert d["summary"] == {
+        "count": 0, "added_yuan": "0.00",
+        "deducted_yuan": "0.00", "net_yuan": "0.00"}
+
+
+def test_adjust_records_query_cross_user_and_filters(client, rec_env):
+    """调账记录查询：跨用户、账户→用户映射、方向/用户/关键词/日期/分页/汇总，
+    且只包含管理端调账（普通转账流水不混入）。"""
+    rec_env.execute(
+        "INSERT INTO users (id,name,phone,created_at) "
+        "VALUES (2,'林悦','13900000002','2026-01-02T00:00:00')")
+    rec_env.execute(
+        "INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
+        "VALUES (2,2,'checking','林悦的工资卡',500000,'2026-01-01T00:00:00')")
+    rec_env.commit()
+
+    assert client.post("/api/adjust", json={
+        "account_id": 1, "amount_yuan": "500",
+        "reason": "补发奖励"}).status_code == 200
+    assert client.post("/api/adjust", params={"user_id": 2}, json={
+        "account_id": 2, "amount_yuan": "-300",
+        "reason": "冲正多扣"}).status_code == 200
+    # 普通转账流水（agent）不能混进调账查询
+    recorder.record_money(rec_env, 1, tool="confirm_transfer_order",
+                          delta_cents=-1000, before_cents=1_050_000,
+                          after_cents=1_049_000, account_id=1,
+                          ref="order:test", note="普通转账")
+
+    d = client.get("/api/adjust-records").json()
+    assert d["total"] == 2
+    assert d["summary"] == {
+        "count": 2, "added_yuan": "500.00",
+        "deducted_yuan": "300.00", "net_yuan": "200.00"}
+    assert [r["user_id"] for r in d["records"]] == [2, 1]
+    latest = d["records"][0]
+    assert latest["nickname"] == "林悦"
+    assert latest["account_name"] == "林悦的工资卡"
+    assert latest["delta_yuan"] == "-300.00"
+    assert latest["before_yuan"] == "5000.00"
+    assert latest["after_yuan"] == "4700.00"
+    assert latest["reason"] == "冲正多扣"
+    assert latest["operator"] == "admin"
+    # 查询只读：余额不变
+    assert client.get("/api/overview").json()["accounts"][0][
+        "balance_yuan"] == "10500.00"
+
+    # 用户过滤靠账户映射，不靠昵称
+    u2 = client.get("/api/adjust-records", params={"user_id": 2}).json()
+    assert u2["total"] == 1 and u2["records"][0]["user_id"] == 2
+    # 方向
+    inc = client.get("/api/adjust-records",
+                     params={"direction": "increase"}).json()
+    assert inc["total"] == 1 and inc["records"][0]["delta_yuan"] == "500.00"
+    dec = client.get("/api/adjust-records",
+                     params={"direction": "decrease"}).json()
+    assert dec["total"] == 1 and dec["records"][0]["delta_yuan"] == "-300.00"
+    # 关键词：姓名 / 原因 / 账户ID
+    assert client.get("/api/adjust-records",
+                      params={"q": "林悦"}).json()["total"] == 1
+    assert client.get("/api/adjust-records",
+                      params={"q": "冲正"}).json()["total"] == 1
+    assert client.get("/api/adjust-records",
+                      params={"q": "2"}).json()["total"] == 1
+
+    # 日期区间
+    from datetime import datetime
+    today = datetime.now().strftime("%Y-%m-%d")
+    assert client.get("/api/adjust-records",
+                      params={"date_from": today,
+                              "date_to": today}).json()["total"] == 2
+    assert client.get("/api/adjust-records",
+                      params={"date_from": "2000-01-01",
+                              "date_to": "2000-01-02"}).json()["total"] == 0
+
+    # 分页：total 是全量口径，不是当前页
+    page1 = client.get("/api/adjust-records",
+                       params={"limit": 1, "offset": 0}).json()
+    assert page1["total"] == 2 and len(page1["records"]) == 1
+    assert page1["has_more"] is True
+    page2 = client.get("/api/adjust-records",
+                       params={"limit": 1, "offset": 1}).json()
+    assert page2["total"] == 2 and len(page2["records"]) == 1
+    assert page2["has_more"] is False
+    page3 = client.get("/api/adjust-records",
+                       params={"limit": 1, "offset": 2}).json()
+    assert page3["records"] == [] and page3["has_more"] is False
+
+    # 参数校验
+    assert client.get("/api/adjust-records",
+                      params={"direction": "sideways"}).status_code == 400
+    assert client.get("/api/adjust-records",
+                      params={"date_from": "2026/10/21"}).status_code == 400
+    assert client.get("/api/adjust-records",
+                      params={"date_from": today,
+                              "date_to": "2000-01-01"}).status_code == 400
+
+
 def test_admin_contact_add_and_delete_forbidden(client):
     """权限边界:管理员可代客录入联系人,但删除入口已移除——
     个人数据不容后台销毁(接口不存在,数据原样保留)。"""

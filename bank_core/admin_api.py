@@ -31,6 +31,7 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -79,6 +80,17 @@ class AdjustIn(BaseModel):
 _WITHIN_DAYS = {"week": 7, "month": 30, "quarter": 90, "year": 365}
 
 
+def _day_bound(value: str, *, end: bool) -> str:
+    """把 YYYY-MM-DD 转成记录库可比的 ISO 时间边界（date_to 取次日零点左闭右开）。"""
+    try:
+        day = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
+    if end:
+        day += timedelta(days=1)
+    return day.isoformat(timespec="seconds")
+
+
 def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
     """构造管理后台应用。db_path=None 走 BANK_CORE_DB/默认库（生产）。"""
     conn = connect(db_path)
@@ -119,6 +131,18 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             return []
         finally:
             rc.close()
+
+    def _account_map(rows: list[sqlite3.Row]) -> dict[int, sqlite3.Row]:
+        """调账记录只存 account_id；回业务库映射到当前用户（改名/重名都能落到正确的人）。"""
+        ids = sorted({int(r["account_id"]) for r in rows})
+        if not ids:
+            return {}
+        marks = ",".join("?" for _ in ids)
+        return {int(r["id"]): r for r in conn.execute(
+            f"""SELECT a.id, a.user_id, a.name AS account_name,
+                       a.type AS account_type, u.name AS nickname
+                FROM accounts a JOIN users u ON u.id = a.user_id
+                WHERE a.id IN ({marks})""", tuple(ids))}
 
     app = FastAPI(title="AI Banking 管理后台", version="0.2.0")
 
@@ -459,6 +483,8 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             return _err(LedgerError(
                 f"调整后余额为负（{cents_to_yuan(new_balance)} 元），拒绝"))
         ts = now_iso()
+        # 同一秒内连续调账时，external_ref 必须有唯一后缀，否则撞 transactions 唯一约束
+        ref = f"admin:{ts}:{uuid4().hex[:12]}"
         try:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("UPDATE accounts SET balance_cents=? WHERE id=?",
@@ -470,7 +496,7 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
                 (body.account_id, ts, "in" if delta >= 0 else "out", abs(delta),
                  new_balance, "interest" if delta >= 0 else "fee",
-                 "管理员调账", "管理调账", body.reason.strip(), f"admin:{ts}"))
+                 "管理员调账", "管理调账", body.reason.strip(), ref))
             conn.commit()
         except Exception:
             conn.rollback()
@@ -483,13 +509,126 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             record_money(conn, uid, tool="admin_adjust", delta_cents=delta,
                          before_cents=acct["balance_cents"],
                          after_cents=new_balance,
-                         account_id=body.account_id, ref=f"admin:{ts}",
+                         account_id=body.account_id, ref=ref,
                          note=body.reason.strip())
             record_change(conn, uid, category="admin", action="adjust_balance",
                           target=f"账户{body.account_id}",
                           detail={"delta_yuan": cents_to_yuan(delta),
                                   "reason": body.reason.strip()})
         return {"new_balance_yuan": cents_to_yuan(new_balance)}
+
+    @app.get("/api/adjust-records")
+    def adjust_records(limit: int = 50, offset: int = 0, q: str = "",
+                       direction: str = "all", user_id: int | None = None,
+                       date_from: str = "", date_to: str = "") -> dict:
+        """跨用户查询管理端调账记录（只读，按时间倒序）。
+
+        数据源 money_records 中 tool='admin_adjust' 且 operator='admin' 的记录：
+        原因在 note、余额快照在 before/after、账户在 account_id。账户回业务库
+        映射当前用户，避免只靠昵称（改名/重名）认错人。
+        筛选：关键词（昵称/原因/账户ID）、加款/扣款、用户、日期区间；分页返回汇总。
+        """
+        if direction not in ("all", "increase", "decrease"):
+            raise HTTPException(
+                status_code=400, detail="direction 只支持 all/increase/decrease")
+        if date_from and date_to and date_from > date_to:
+            raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+        start_bound = _day_bound(date_from, end=False) if date_from else ""
+        end_bound = _day_bound(date_to, end=True) if date_to else ""
+
+        lim = max(1, min(limit, 200))
+        off = max(0, offset)
+        empty = {
+            "records": [], "total": 0, "limit": lim, "offset": off,
+            "has_more": False,
+            "summary": {"count": 0, "added_yuan": "0.00",
+                        "deducted_yuan": "0.00", "net_yuan": "0.00"},
+        }
+
+        where = ["tool='admin_adjust'", "operator='admin'"]
+        params: list = []
+        if user_id is not None:
+            uid = _uid(user_id)
+            account_ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM accounts WHERE user_id=?", (uid,))]
+            if not account_ids:
+                return empty
+            where.append(
+                f"account_id IN ({','.join('?' for _ in account_ids)})")
+            params.extend(account_ids)
+        needle = (q or "").strip()
+        if needle:
+            like = f"%{needle}%"
+            where.append(
+                "(nickname LIKE ? OR note LIKE ? "
+                "OR CAST(account_id AS TEXT) LIKE ?)")
+            params.extend([like, like, like])
+        if direction == "increase":
+            where.append("delta_cents > 0")
+        elif direction == "decrease":
+            where.append("delta_cents < 0")
+        if start_bound:
+            where.append("ts >= ?")
+            params.append(start_bound)
+        if end_bound:
+            where.append("ts < ?")
+            params.append(end_bound)
+
+        where_sql = " AND ".join(where)
+        path = recorder.money_db_path(conn)
+        agg = _rec_rows(
+            path,
+            f"""SELECT COUNT(*) n,
+                       COALESCE(SUM(CASE WHEN delta_cents > 0
+                                         THEN delta_cents ELSE 0 END), 0) added,
+                       COALESCE(SUM(CASE WHEN delta_cents < 0
+                                         THEN -delta_cents ELSE 0 END), 0) deducted
+                FROM money_records WHERE {where_sql}""",
+            tuple(params))
+        if not agg:
+            return empty
+        total = int(agg[0]["n"])
+        added = int(agg[0]["added"])
+        deducted = int(agg[0]["deducted"])
+
+        rows = _rec_rows(
+            path,
+            f"""SELECT * FROM money_records WHERE {where_sql}
+                ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?""",
+            tuple([*params, lim, off]))
+        accounts = _account_map(rows)
+        records = []
+        for row in rows:
+            acct = accounts.get(int(row["account_id"]))
+            records.append({
+                "id": row["id"],
+                "ts": row["ts"],
+                "user_id": acct["user_id"] if acct else None,
+                "nickname": acct["nickname"] if acct else row["nickname"],
+                "record_nickname": row["nickname"],
+                "account_id": row["account_id"],
+                "account_name": acct["account_name"] if acct else "",
+                "account_type": acct["account_type"] if acct else "",
+                "delta_yuan": cents_to_yuan(row["delta_cents"]),
+                "before_yuan": cents_to_yuan(row["before_cents"]),
+                "after_yuan": cents_to_yuan(row["after_cents"]),
+                "reason": row["note"],
+                "ref": row["ref"],
+                "operator": row["operator"],
+            })
+        return {
+            "records": records,
+            "total": total,
+            "limit": lim,
+            "offset": off,
+            "has_more": off + len(records) < total,
+            "summary": {
+                "count": total,
+                "added_yuan": cents_to_yuan(added),
+                "deducted_yuan": cents_to_yuan(deducted),
+                "net_yuan": cents_to_yuan(added - deducted),
+            },
+        }
 
     # ------------------------------------------------------------ 静态管理页
     admin_dir = Path(__file__).resolve().parent.parent / "admin_console"
