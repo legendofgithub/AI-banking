@@ -39,6 +39,7 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
     data-linkage-action         联动到期动作确认卡片(逐项购买闸门)
     data-plan                   生日预算计划确认卡片(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
     data-analysis-plan          Agent Core 只读分析计划卡片(目标/事实行/步骤/复盘/上次记忆,无按钮)
+    data-thinking               Agent Core 思维链(识别意图→调取记忆→制定计划→安全守卫→执行→复盘,可折叠面板)
     data-wealth-confirmation    理财确认卡片(kind=subscribe|redeem;order=产品/金额/费率/锁定期/风险/账户)
     data-card-confirmation      卡片确认卡片(kind=apply|limits|status;card=card_id/尾号/类型/当前值/目标值)
     data-contact-choices        同名联系人选项(卡片式消歧,而非开放反问)
@@ -1287,6 +1288,14 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                                 # 两条路互斥,不会重复渲染两张卡。
                                 yield _frame({"type": "data-analysis-plan",
                                               "data": update["analysis_view"]})
+                            elif node in ("a_exec", "a_reflect", "a_report") \
+                                    and isinstance(update, dict) \
+                                    and update.get("thinking_view"):
+                                # 思维链:把 Agent Core 的"识别意图→计划→守卫→执行→
+                                # 复盘"暴露给用户。a_report 仅在分析被 Guard 拦下时
+                                # 补发(a_exec/a_reflect 已发过则不重复)。
+                                yield _frame({"type": "data-thinking",
+                                              "data": update["thinking_view"]})
             except TimeoutError:
                 yield _frame({"type": "error",
                               "errorText": f"本轮处理超时(>{TURN_DEADLINE_S:.0f}秒),"

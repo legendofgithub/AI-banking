@@ -2094,9 +2094,9 @@ def test_core_bill_analysis_read_only_and_remembered(tmp_path):
             # 零动钱:分析技能只读
             assert _balance(db) == before
             assert _count(db, "transfer_orders") == 0
-            # Plan Trace 可回放
-            assert [t["phase"] for t in plan["trace"]] == ["plan", "guard",
-                                                           "act", "reflect"]
+            # Plan Trace 可回放(perceive=识别意图,由 a_perceive 写入)
+            assert [t["phase"] for t in plan["trace"]] == ["perceive", "plan",
+                                                           "guard", "act", "reflect"]
             # 卡片:事实行 + 复盘
             view = r.get("analysis_view") or {}
             assert view["intent"] == "bill"
@@ -2107,6 +2107,18 @@ def test_core_bill_analysis_read_only_and_remembered(tmp_path):
             bill_mem = memory.recall(1, "bill") or {}
             assert bill_mem.get("top_category") == "餐饮"
             assert memory.recall(1, "plan_history")
+            # 思维链:data-thinking 由 a_reflect 发射,暴露在最终状态里
+            think = r.get("thinking_view") or {}
+            thoughts = think.get("thoughts") or []
+            phases = [t.get("phase") for t in thoughts]
+            assert "识别意图" in phases and "制定计划" in phases \
+                and "安全守卫" in phases and "复盘" in phases
+            # 守卫通过态必须可见(让用户知道"为什么安全")
+            assert any(t.get("status") == "passed" for t in thoughts)
+            # 识别意图那一步,必须把 LLM 分类说成人话(不是 raw intent 字符串)
+            intent_thought = next((t for t in thoughts
+                                   if t.get("phase") == "识别意图"), {})
+            assert "分析账单收支" in (intent_thought.get("text") or "")
             # 全程只有 router + 播报两次 LLM:计划/技能选择/复盘/记忆都是确定性代码
 
     run(scenario())

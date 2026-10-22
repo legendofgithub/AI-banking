@@ -89,7 +89,7 @@ from langgraph.types import interrupt
 
 from agent import core as core_mod
 from agent import memory as memory_mod
-from agent.analysis import build_analysis_card
+from agent.analysis import build_analysis_card, build_thinking
 from agent.bank import BankTools, load_bank_tools
 from agent.plan import (DEFAULT_ACTIONS, build_plan, compute_disposable,
                         constraints_of, filter_cut_candidates,
@@ -3145,6 +3145,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         plan = core_mod.new_plan(
             goal=text, intent=str(state.get("intent") or ""),
             constraints=constraints_of(text), memory_used=hints)
+        # 把 router 的 LLM 意图分类写进 trace，思维链面板据此告诉用户"我理解成什么"
+        plan = core_mod.add_trace(plan, "perceive", note=str(state.get("intent") or ""))
         return {"analysis_skills": skills, "agent_plan": plan, "notice": None,
                 "analysis_view": None}
 
@@ -3228,6 +3230,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                                        bill=observations.get("analyze_bill"),
                                        wealth=observations.get("analyze_wealth"))
             update["analysis_view"] = card
+            # 思维链:把"识别意图→计划→守卫→已执行步骤→转交"暴露给用户看
+            update["thinking_view"] = build_thinking(
+                plan, memory_used=plan.get("memory_used"))
         return update
 
     async def a_replan(state: AgentState) -> dict:
@@ -3312,13 +3317,28 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                                    bill=observations.get("analyze_bill"),
                                    wealth=observations.get("analyze_wealth"),
                                    reflection=reflection)
+        # 思维链:完整闭环(识别意图→记忆→计划→守卫→执行→复盘)一次暴露
+        thinking = build_thinking(out, memory_used=out.get("memory_used"))
         return {"agent_plan": out, "analysis_view": card,
+                "thinking_view": thinking,
                 "notice": {"kind": "analysis_report", "analysis": intent,
                            "summary": reflection.summary}}
 
     async def a_report(state: AgentState) -> dict:
-        """Respond:播报 + Plan Trace(分析卡已在 a_exec/a_reflect 节点下发)。"""
-        return await _announce(state)
+        """Respond:播报 + Plan Trace(分析卡已在 a_exec/a_reflect 节点下发)。
+
+        仅当分析被 Guard 拦下(analysis_blocked,此时 a_exec/a_reflect 未发卡)
+        时,这里补发一份思维链,让用户看到"为什么没办成"。
+        """
+        base = await _announce(state)
+        notice = state.get("notice") or {}
+        if notice.get("kind") == "analysis_blocked":
+            plan = state.get("agent_plan") or {}
+            if plan:
+                base = {**base,
+                        "thinking_view": build_thinking(
+                            plan, memory_used=plan.get("memory_used"))}
+        return base
 
     # ---------------------------------------------------------------- 闲聊兜底
 

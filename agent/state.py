@@ -192,6 +192,7 @@ class AgentState(TypedDict, total=False):
     # plan 键已被联动计划回执占用,core_plan 才是 Agent Core 的显式 Plan 对象。
     agent_plan: dict | None        # Core 生成的 Plan(JSON):目标/约束/步骤/闸门/成功条件/trace
     analysis_view: dict | None     # 只读分析计划卡视图(api 在 a_exec 节点下发 data-analysis-plan)
+    thinking_view: dict | None     # 思维链视图(api 在 a_*/a_report 节点下发 data-thinking)
     analysis_skills: list[str]     # 本轮确定性选中的技能名(可回放:为什么选它)
 
     # ---- 播报与留痕 ----
