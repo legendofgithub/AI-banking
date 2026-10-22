@@ -280,6 +280,13 @@ PART_FIELD_CONTRACT: list[dict] = [
     {"interface": "AnalysisStep", "required": {
         "gate", "id", "risk", "skill", "status", "title"},
      "frontend_only": set(), "backend_sources": ("analysis.py",)},
+    # ---- Agent Core 思维链(2026-10-22 新增 data-thinking) ----
+    # 视图冻结在纯函数层 agent/analysis.py::build_thinking,返回 {"thoughts": [...]},
+    # 每个 thought 含 phase/status/text。status 在 _SKIP_KEY_GREP 里(太通用),不 grep。
+    {"interface": "ThinkingData", "required": {"thoughts"},
+     "frontend_only": set(), "backend_sources": ("analysis.py",)},
+    {"interface": "ThinkingThought", "required": {"phase", "status", "text"},
+     "frontend_only": set(), "backend_sources": ("analysis.py",)},
 ]
 
 

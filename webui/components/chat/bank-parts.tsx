@@ -21,6 +21,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *   data-linkage-action         联动到期动作确认卡(逐项购买闸门,金色系)
  *   data-plan                   生日预算计划确认卡(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
  *   data-analysis-plan          Agent Core 只读分析计划卡(目标/事实行/步骤/复盘/上次记忆,无按钮)
+ *   data-thinking               Agent Core 思维链(识别意图→调取记忆→计划→守卫→执行→复盘,可折叠面板)
  *   data-wealth-confirmation    理财确认卡(kind=subscribe|redeem;order=产品/金额/
  *                               费率/锁定期/风险/付款账户 或 持仓/估值/费用/到手)
  *   data-card-confirmation      卡片确认卡(kind=apply|limits|status;card=card_id/
@@ -176,6 +177,22 @@ interface AnalysisPlanData {
   reflection?: { status?: string; summary?: string };
   steps?: AnalysisStep[];
   trace?: Array<{ at?: string; note?: string; phase?: string }>;
+}
+
+/*
+ * Agent Core 思维链(agent/analysis.py → data-thinking)。
+ * 把"识别意图 → 调取记忆 → 制定计划 → 安全守卫 → 执行 → 复盘"暴露给用户,
+ * 让用户看到 Agent 是怎么想的。每个 thought 带 phase(阶段名)与 status(状态标记),
+ * 前端据此着色。面板默认折叠,点击展开。
+ */
+interface ThinkingThought {
+  phase?: string;
+  status?: string;
+  text?: string;
+}
+
+interface ThinkingData {
+  thoughts?: ThinkingThought[];
 }
 
 /*
@@ -1468,6 +1485,71 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
   );
 }
 
+/*
+ * 思维链面板:把 Agent 的推理步骤(识别意图/调取记忆/计划/守卫/执行/复盘)按时间顺序
+ * 列出来,带阶段名与状态着色。默认折叠,点标题展开——既是"看它怎么想",也避免刷屏。
+ */
+const THINKING_STATUS_STYLE: Record<string, { dot: string; chip: string }> = {
+  info: { dot: "bg-slate-400", chip: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300" },
+  passed: { dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  done: { dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  success: { dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
+  blocked: { dot: "bg-rose-500", chip: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300" },
+  failed: { dot: "bg-rose-500", chip: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300" },
+  delegated: { dot: "bg-amber-500", chip: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" },
+};
+
+function ThinkingPanel({ data }: { data: ThinkingData }) {
+  const thoughts = data.thoughts ?? [];
+  const [open, setOpen] = useState(false);
+  if (thoughts.length === 0) {
+    return null;
+  }
+  return (
+    <div className="w-[min(100%,420px)] rounded-2xl border border-slate-200/70 bg-gradient-to-br from-slate-50 to-slate-100/60 p-3 shadow-[var(--shadow-card)] dark:border-slate-700/50 dark:from-slate-900/40 dark:to-slate-800/30">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 text-left text-[13px] font-semibold text-slate-700 dark:text-slate-200"
+      >
+        <span className="flex items-center gap-2">
+          <span aria-hidden>🧠</span>
+          思维链
+          <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground dark:bg-slate-800/60">
+            {thoughts.length} 步
+          </span>
+        </span>
+        <span className="text-[11px] text-muted-foreground">
+          {open ? "收起" : "展开"}
+        </span>
+      </button>
+      {open ? (
+        <ol className="mt-2 flex flex-col gap-1.5 border-l border-slate-200 pl-3 dark:border-slate-700">
+          {thoughts.map((t, i) => {
+            const style = THINKING_STATUS_STYLE[t.status ?? "info"] ?? THINKING_STATUS_STYLE.info;
+            return (
+              <li key={i} className="relative">
+                <span
+                  className={`absolute -left-[18px] top-1.5 h-2 w-2 rounded-full ${style.dot}`}
+                  aria-hidden
+                />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${style.chip}`}>
+                    {t.phase ?? "步骤"}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-[12px] leading-[1.6] text-slate-600 [overflow-wrap:anywhere] dark:text-slate-300">
+                  {t.text}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
 export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   if (type === "data-transfer-confirmation") {
     return <TransferCard data={(data ?? {}) as TransferCardData} />;
@@ -1522,6 +1604,9 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   }
   if (type === "data-analysis-plan") {
     return <AnalysisPlanCard data={(data ?? {}) as AnalysisPlanData} />;
+  }
+  if (type === "data-thinking") {
+    return <ThinkingPanel data={(data ?? {}) as ThinkingData} />;
   }
   if (type === "data-ask-slot") {
     return <AskSlot data={(data ?? {}) as { missing?: string[] }} />;

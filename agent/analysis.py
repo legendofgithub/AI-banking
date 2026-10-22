@@ -37,6 +37,16 @@ SKILL_TITLES: dict[str, str] = {
     "execute_subscription": "订阅操作（既受闸门子图执行）",
 }
 
+# router 的 LLM 意图分类 → 思维链里给用户的口语化标签
+INTENT_LABELS: dict[str, str] = {
+    "bill_analysis": "分析账单收支",
+    "wealth": "查看理财持仓与配置建议",
+    "linkage": "做一笔生日 / 事件预算规划",
+    "transfer": "转账 / 调拨资金",
+    "card": "卡片相关操作",
+    "subscription": "订阅管理",
+}
+
 _EMPTY_RESULT_KEYS = frozenset({"报告", "分类", "商户", "异常", "订阅"})
 
 
@@ -230,6 +240,115 @@ def build_analysis_card(plan: dict, *, intent: str = "",
     }
 
 
+def build_thinking(plan: dict, *, memory_used: list | None = None) -> list[dict]:
+    """把 Core 的 trace + 意图 + 记忆拼成"人话思维链"（纯函数，确定性）。
+
+    前端 ``data-thinking`` 据此渲染可折叠的 🧠 思维链面板，让用户看到
+    Agent 是怎么想的：识别意图 → 调取记忆 → 制定计划 → 安全守卫 → 执行 → 复盘。
+    不引入任何新的 LLM 调用，全部来自既有的确定性 trace。
+    """
+    plan = plan if isinstance(plan, dict) else {}
+    mem = list(memory_used if memory_used is not None
+               else (plan.get("memory_used") or []))
+    steps = [s for s in (plan.get("steps") or []) if isinstance(s, dict)]
+    title_of = lambda sk: SKILL_TITLES.get(str(sk or ""), str(sk or "技能"))
+
+    thoughts: list[dict] = []
+
+    # 1) 识别意图（a_perceive 写入的 perceive trace；没有则跳过）
+    perceive = next((t for t in (plan.get("trace") or [])
+                     if str(t.get("phase") or "") == "perceive"), None)
+    raw = str((perceive or {}).get("note") or "")
+    if raw:
+        thoughts.append({
+            "phase": "识别意图",
+            "text": f"你这句话，我理解为：{INTENT_LABELS.get(raw, raw)}",
+            "status": "info",
+        })
+
+    # 2) 长期记忆（给本次的建议）
+    if mem:
+        thoughts.append({
+            "phase": "调取记忆",
+            "text": "翻了下你的长期记忆，本次参考：" +
+                    "；".join(str(m) for m in mem),
+            "status": "info",
+        })
+
+    # 3) 制定计划（从 steps 拼，比 trace 的"技能: …"更口语）
+    if steps:
+        chain = " → ".join(title_of(s.get("skill")) for s in steps)
+        thoughts.append({
+            "phase": "制定计划",
+            "text": f"我打算这样办：{chain}。这些技能都是只读的，不会动你的钱。",
+            "status": "info",
+        })
+
+    # 4) 其余 trace 阶段逐条转人话
+    for t in (plan.get("trace") or []):
+        phase = str(t.get("phase") or "")
+        if phase == "perceive":
+            continue
+        note = str(t.get("note") or "")
+        st = str(t.get("status") or "")
+        if phase == "guard":
+            if st == "blocked":
+                thoughts.append({
+                    "phase": "安全守卫",
+                    "text": f"静态守卫拦下了这一步：{note}",
+                    "status": "blocked",
+                })
+            else:
+                thoughts.append({
+                    "phase": "安全守卫",
+                    "text": "静态守卫检查通过：没有越权工具，也没有需要你输支付密码的"
+                            "高风险步骤。",
+                    "status": "passed",
+                })
+        elif phase == "act":
+            sid = str(t.get("step") or "")
+            step = next((s for s in steps if str(s.get("id")) == sid), None)
+            head = title_of(step.get("skill") if step else sid)
+            if st == "delegated":
+                thoughts.append({
+                    "phase": head,
+                    "text": f"{note}（资金操作交给既有的、带支付密码闸门的链路，"
+                            f"我不会替你确认）",
+                    "status": "delegated",
+                })
+            elif st == "done":
+                thoughts.append({
+                    "phase": head,
+                    "text": note or "成功条件满足，结果已取到。",
+                    "status": "done",
+                })
+            elif st == "failed":
+                thoughts.append({
+                    "phase": head,
+                    "text": f"这一步没满足成功条件：{note}",
+                    "status": "failed",
+                })
+            else:
+                thoughts.append({
+                    "phase": head,
+                    "text": note or "已处理。",
+                    "status": "info",
+                })
+        elif phase == "replan":
+            thoughts.append({
+                "phase": "重新规划",
+                "text": note or "局部重规划：只改受影响的步骤，已完成的不再重跑。",
+                "status": "info",
+            })
+        elif phase == "reflect":
+            thoughts.append({
+                "phase": "复盘",
+                "text": note or "对照成功条件复盘完毕。",
+                "status": st or "info",
+            })
+    return {"thoughts": thoughts}
+
+
 def diff_text(diff: dict | None) -> str:
     """plan diff → 一句人话(确定性拼接,不给 LLM 转述的机会)。"""
     if not isinstance(diff, dict):
@@ -253,9 +372,11 @@ def failed_note(plan: dict) -> str:
 
 __all__ = [
     "ANALYSIS_HINT",
+    "INTENT_LABELS",
     "SKILL_TITLES",
     "bill_facts",
     "build_analysis_card",
+    "build_thinking",
     "diff_text",
     "failed_note",
     "wealth_facts",
