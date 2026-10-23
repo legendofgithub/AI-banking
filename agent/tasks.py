@@ -22,6 +22,7 @@ SQLite(默认 data/agent_tasks.sqlite,环境变量 AGENT_TASKS_DB 覆盖),
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -29,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_log = logging.getLogger("agent.tasks")
 
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS agent_tasks (
@@ -45,6 +48,14 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     created_at       TEXT NOT NULL
 )
 """
+
+# "每用户同时只允许一个 active 任务"由数据库约束兜底:check-then-insert 在并发
+# 请求下有窗口能造出两个 active(破坏演示确定性口径),partial unique index
+# 把这个口子彻底封死。
+_CREATE_ACTIVE_INDEX_SQL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_tasks_one_active "
+    "ON agent_tasks(user_id) WHERE status='active'"
+)
 
 
 def db_path() -> Path:
@@ -70,17 +81,34 @@ def _valid_user_id(user_id: Any) -> int | None:
 
 
 def _connect(create: bool = True) -> sqlite3.Connection | None:
+    """打开任务库;WAL/写失败日志与 memory.py 同款(纯读不建空库文件)。"""
     try:
         path = db_path()
         if create:
             path.parent.mkdir(parents=True, exist_ok=True)
+        elif not path.exists():
+            return None
         conn = sqlite3.connect(str(path), timeout=5)
         conn.row_factory = sqlite3.Row
         if create:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_CREATE_SQL)
+            try:
+                conn.execute(_CREATE_ACTIVE_INDEX_SQL)
+            except sqlite3.IntegrityError:
+                # 老库可能已有重复 active(建索引前的竞态年代留下的):
+                # 每用户保留最新一条,其余置 cancelled 后重建索引。
+                conn.execute(
+                    """UPDATE agent_tasks SET status='cancelled'
+                       WHERE status='active' AND rowid NOT IN (
+                           SELECT MAX(rowid) FROM agent_tasks
+                           WHERE status='active' GROUP BY user_id)""")
+                conn.execute(_CREATE_ACTIVE_INDEX_SQL)
             conn.commit()
         return conn
     except Exception:  # noqa: BLE001 —— 任务库不可用不能拖垮主流程
+        _log.warning("任务库连接失败 path=%s create=%s", path, create, exc_info=True)
         return None
 
 
@@ -144,7 +172,12 @@ def create_task(user_id: Any, *, goal: str, target_yuan: str, deadline: str,
              task["created_at"]))
         conn.commit()
         return task
+    except sqlite3.IntegrityError:
+        # 并发建档撞上"每用户一个 active"唯一索引:按"已有 active 任务"处理,
+        # 与函数开头的 get_active_task 检查殊途同归(那个检查在并发下有窗口)。
+        return None
     except Exception:  # noqa: BLE001
+        _log.warning("任务建档失败 uid=%s goal=%s", uid, task["goal"], exc_info=True)
         return None
     finally:
         try:
@@ -230,6 +263,7 @@ def update_progress(user_id: Any, task_id: Any, *, saved_yuan: str,
         conn.commit()
         return task
     except Exception:  # noqa: BLE001
+        _log.warning("任务进度更新失败 uid=%s task_id=%s", uid, task_id, exc_info=True)
         return None
     finally:
         try:
@@ -254,6 +288,8 @@ def finish_task(user_id: Any, task_id: Any,
         conn.commit()
         return get_task(task_id)
     except Exception:  # noqa: BLE001
+        _log.warning("任务终结失败 uid=%s task_id=%s status=%s",
+                     uid, task_id, status, exc_info=True)
         return None
     finally:
         try:

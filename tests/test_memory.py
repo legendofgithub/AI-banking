@@ -192,6 +192,58 @@ def test_forget_module_and_user():
     assert memory.recall_all(11) == {}
 
 
+# --------------------------------------------------------------- 健壮性批次(2026-10-23)
+
+def test_merge_none_value_deletes_key():
+    """merge 删键语义(参考 Anthropic memory tool 的 str_replace/delete):
+    patch 里值为 None 的键表示删除——清理上次留下的过期字段。"""
+    memory.remember(11, "birthday",
+                    {"rejected_cut": True, "rejected_cut_merchant": "爱奇艺"})
+    merged = memory.merge(11, "birthday",
+                          {"rejected_cut": False, "rejected_cut_merchant": None})
+    assert "rejected_cut_merchant" not in merged
+    stored = memory.recall(11, "birthday")
+    assert stored["rejected_cut"] is False
+    assert "rejected_cut_merchant" not in stored
+
+
+def test_merge_invalid_uid_returns_patch_only():
+    assert memory.merge(None, "bill", {"a": 1}) == {"a": 1}
+    assert memory.merge(3.5, "bill", {"a": 1}) == {"a": 1}
+
+
+def test_read_does_not_create_db_file(tmp_path: Path, monkeypatch):
+    """纯读(库不存在)不建空库文件——读路径不能有写副作用。"""
+    target = tmp_path / "nope.sqlite"
+    monkeypatch.setenv("AGENT_MEMORY_DB", str(target))
+    assert memory.recall(11, "bill") is None
+    assert memory.recall_all(11) == {}
+    assert not target.exists()
+
+
+def test_db_runs_in_wal_mode():
+    """WAL:并发写下不再 5 秒锁死后被软处理吞掉(记忆静默丢失)。"""
+    memory.remember(11, "bill", {"a": 1})
+    memory.merge(11, "bill", {"b": 2})
+    memory.push_plan_history(11, {"plan_id": "p1"})
+    conn = memory._connect(create=False)
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        conn.close()
+    assert str(mode).lower() == "wal"
+
+
+def test_push_plan_history_on_broken_db_returns_new_item(
+        tmp_path: Path, monkeypatch):
+    blocker = tmp_path / "not-a-file"
+    blocker.mkdir()
+    monkeypatch.setenv("AGENT_MEMORY_DB", str(blocker))
+    items = memory.push_plan_history(11, {"plan_id": "p1"})
+    assert len(items) == 1
+    assert items[0]["plan_id"] == "p1"
+
+
 def test_stored_payload_is_json_column():
     """库列是 TEXT JSON：可读性优先（便于排障），由 json 库保证往返无损。"""
     memory.remember(11, "birthday", {"last_budget_yuan": "800.00"})
