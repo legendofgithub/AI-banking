@@ -10,6 +10,7 @@
 import {
   BanknoteIcon,
   BotIcon,
+  BrainIcon,
   CreditCardIcon,
   GlobeIcon,
   LogOutIcon,
@@ -136,6 +137,11 @@ export function SidebarSettings() {
     window.dispatchEvent(new Event("open-bound-cards"));
   }, []);
 
+  const handleOpenMemory = useCallback(() => {
+    // Agent 记住了你什么:检阅弹窗(挂在 chat layout,与充钱/绑卡同款链路)
+    window.dispatchEvent(new Event("open-memory"));
+  }, []);
+
   const nickname = user?.nickname?.trim() || "";
   const themeValue = mounted ? (theme ?? "system") : "";
   const zoomValue =
@@ -196,6 +202,13 @@ export function SidebarSettings() {
                 >
                   <CreditCardIcon />
                   绑定银行卡
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-testid="settings-memory"
+                  onSelect={handleOpenMemory}
+                >
+                  <BrainIcon />
+                  Agent 记忆
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   className="text-red-500 focus:text-red-500"
