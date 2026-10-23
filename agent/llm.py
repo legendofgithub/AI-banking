@@ -44,6 +44,49 @@ def provider_family(provider: str | None) -> str:
             else "openai")
 
 
+# 推理模型识别:命中这些 hint 的模型默认开启原生深度思考(reasoning_content)
+REASONING_MODEL_HINTS = ("reasoner", "r1", "thinking",
+                         "deepseek-reasoner", "deepseek-r1")
+
+
+def _default_thinking(model: str | None, provider: str | None) -> bool:
+    """是否默认对给定模型开启原生推理。
+
+    - 环境变量 REASONING_MODEL 若等于该模型名 → 强制开启;
+    - 否则按模型名 hint 自动判定(如 deepseek-r1 / glm-thinking)。
+    """
+    env = os.environ.get("REASONING_MODEL")
+    if env and env == (model or ""):
+        return True
+    mid = (model or "").lower()
+    return any(h in mid for h in REASONING_MODEL_HINTS)
+
+
+# 可见答案(播报/闲聊)默认换用的"会思考"映射:同一供应商下的推理模型。
+# 深度思考的效果靠它——路由/抽取仍用快模型,只有最终回答走这里。
+_THINKING_MODEL_MAP: dict[str, str] = {
+    "deepseek-chat": "deepseek-reasoner",
+}
+
+
+def thinking_model_for(model: str | None, provider: str | None) -> str:
+    """给定编排模型 → 可见答案应使用的推理模型。
+
+    - 环境变量 THINKING_MODEL 显式指定时优先;
+    - 已经是推理模型(r1/reasoner/thinking)→ 原样返回;
+    - DeepSeek 官方双模型 → deepseek-chat 换 deepseek-reasoner;
+    - 其他(智谱 GLM/OpenAI 兼容网关)→ 同名模型,靠 do_think 打开思考
+      (GLM 支持 thinking 字段;不支持的原样应答,优雅降级)。
+    """
+    env = os.environ.get("THINKING_MODEL")
+    if env:
+        return env
+    model = str(model or "")
+    if _default_thinking(model, provider):
+        return model
+    return _THINKING_MODEL_MAP.get(model.lower(), model)
+
+
 def normalize_base_url(value: str | None) -> str | None:
     """校验并规范化用户填的 Base URL(只允许 http/https,去掉账号密码与尾斜杠)。"""
     raw = (value or "").strip()
@@ -60,10 +103,12 @@ def normalize_base_url(value: str | None) -> str | None:
 def set_request_llm(*, api_key: str | None = None,
                     model: str | None = None,
                     base_url: str | None = None,
-                    provider: str | None = None) -> contextvars.Token:
+                    provider: str | None = None,
+                    enable_thinking: bool | None = None) -> contextvars.Token:
     return _request_override.set({
         "api_key": api_key, "model": model,
-        "base_url": base_url, "provider": provider})
+        "base_url": base_url, "provider": provider,
+        "enable_thinking": enable_thinking})
 
 
 def reset_request_llm(token: contextvars.Token) -> None:
@@ -221,7 +266,8 @@ class AnthropicChatModel:
 
 def get_llm(model: str | None = None, *, api_key: str | None = None,
             base_url: str | None = None, provider: str | None = None,
-            temperature: float = 0.1, **model_kwargs: Any) -> Any:
+            temperature: float = 0.1, enable_thinking: bool | None = None,
+            **model_kwargs: Any) -> Any:
     """返回一个可调用的聊天模型对象(具备 .invoke/.ainvoke)。
 
     Args:
@@ -251,12 +297,44 @@ def get_llm(model: str | None = None, *, api_key: str | None = None,
     # 延迟导入:无网络/无依赖的环境(纯单元测试)不必安装 langchain-openai
     from langchain_openai import ChatOpenAI
 
+    mk = dict(model_kwargs)
+    do_think = (enable_thinking if enable_thinking is not None
+                else _default_thinking(model, provider))
+    # 智谱 GLM thinking 模式需在请求体带 thinking 字段;DeepSeek 等推理模型
+    # 靠 reasoning_content 自动返回,无需额外 body。
+    # 注意:必须放进 ChatOpenAI 的 model_kwargs 里——作为顶层构造参数传入时
+    # langchain 会打 UserWarning("thinking is not default parameter"),虽仍能
+    # 透传但不规范。
+    if do_think and (str(provider or "").lower() == "zhipuai"
+                     or str(model or "").lower().startswith("glm")):
+        inner = mk.get("model_kwargs")
+        if not isinstance(inner, dict):
+            inner = {}
+        inner.setdefault("thinking", {"type": "enabled"})
+        mk["model_kwargs"] = inner
+    model_name = model or os.environ.get("ZAI_MODEL", DEFAULT_MODEL)
+    # DeepSeek 系走官方适配器:langchain-openai 的流式不透出 reasoning_content
+    # (1.6.2 源码明确"not extracted"),ChatDeepSeek 才会把它逐 token 塞进
+    # additional_kwargs.reasoning_content——前端思考面板的数据来源。
+    # 未安装 langchain-deepseek 时降级 ChatOpenAI(能答,但没有思考流)。
+    if "deepseek" in model_name.lower():
+        try:
+            from langchain_deepseek import ChatDeepSeek
+            return ChatDeepSeek(
+                model=model_name,
+                api_key=key,
+                api_base=base_url or os.environ.get(
+                    "ZAI_BASE_URL", "https://api.deepseek.com"),
+                temperature=temperature,
+                **mk)
+        except ImportError:
+            pass
     return ChatOpenAI(
-        model=model or os.environ.get("ZAI_MODEL", DEFAULT_MODEL),
+        model=model_name,
         api_key=key,
         base_url=base_url or os.environ.get("ZAI_BASE_URL", DEFAULT_BASE_URL),
         temperature=temperature,
-        **model_kwargs,
+        **mk,
     )
 
 
@@ -284,13 +362,24 @@ class RequestLLM:
         return (os.environ.get("ZAI_MODEL") or self._fallback_model
                 or DEFAULT_MODEL)
 
-    def _resolve(self) -> Any:
+    def _resolve(self, strong: bool = False) -> Any:
         ov = _request_override.get() or {}
         key = ov.get("api_key") or os.environ.get("ZAI_API_KEY")
         model = (ov.get("model") or os.environ.get("ZAI_MODEL")
                  or self._fallback_model or DEFAULT_MODEL)
         provider = (ov.get("provider") or os.environ.get("ZAI_PROVIDER")
                     or "openai")
+        enable_thinking = ov.get("enable_thinking")
+        # strong=可见答案(播报/闲聊):除非用户显式关闭深度思考
+        # (enable_thinking=False),否则换用"会思考"的推理模型——
+        # DeepSeek 效果的落点:reasoning_content 逐 token 流进思考面板。
+        use_think_model = bool(strong) and enable_thinking is not False
+        do_think = (enable_thinking if enable_thinking is not None
+                    else _default_thinking(model, provider))
+        eff_model = (thinking_model_for(model, provider)
+                     if use_think_model else model)
+        if use_think_model:
+            do_think = True
         family = provider_family(provider)
         if family == "anthropic":
             base = ov.get("base_url") or ANTHROPIC_BASE_URL
@@ -301,15 +390,26 @@ class RequestLLM:
             raise RuntimeError(
                 "未配置 API Key:请在界面「大模型管理」里接入供应商,"
                 "或部署时配置 ZAI_API_KEY 环境变量。")
-        ck = (family, str(base), str(key), str(model))
+        ck = (family, str(base), str(key), str(eff_model), bool(do_think))
         if ck not in self._instances:
             self._instances[ck] = self._factory(
-                model=model, api_key=key, base_url=base,
-                provider=provider, **self._base_kwargs)
+                model=eff_model, api_key=key, base_url=base,
+                provider=provider, enable_thinking=do_think,
+                **self._base_kwargs)
         return self._instances[ck]
 
-    async def ainvoke(self, messages: Any, **kwargs: Any) -> Any:
-        return await self._resolve().ainvoke(messages, **kwargs)
+    async def ainvoke(self, messages: Any, *, strong: bool = False,
+                      **kwargs: Any) -> Any:
+        return await self._resolve(strong).ainvoke(messages, **kwargs)
 
-    async def astream(self, messages: Any, **kwargs: Any) -> Any:
-        return await self._resolve().astream(messages, **kwargs)
+    async def astream(self, messages: Any, *, strong: bool = False,
+                      **kwargs: Any) -> Any:
+        """代理底层模型的 astream(逐 token 异步生成器)。
+
+        注意:langchain 的 astream 返回的是异步生成器,不能 await;
+        必须逐块 yield 出来,供上层(agent.graph.ask_llm)累加下发。
+        strong=True 时解析为"会思考"的模型(见 thinking_model_for)。
+        """
+        resolved = self._resolve(strong)
+        async for chunk in resolved.astream(messages, **kwargs):
+            yield chunk

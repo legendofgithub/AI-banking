@@ -13,6 +13,7 @@ import {
   ToolInput,
   ToolOutput,
 } from "../ai-elements/tool";
+import { BankDataPart } from "./bank-parts";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
@@ -21,7 +22,6 @@ import { MessageActions } from "./message-actions";
 import { MessageReasoning } from "./message-reasoning";
 import { PreviewAttachment } from "./preview-attachment";
 import { Weather } from "./weather";
-import { BankDataPart } from "./bank-parts";
 
 function WaitingText() {
   const { waitingStatus } = useDataStream();
@@ -156,6 +156,10 @@ const PurePreviewMessage = ({
     },
     { isStreaming: false, rendered: false, text: "" }
   ) ?? { isStreaming: false, rendered: false, text: "" };
+
+  // data-thinking(九宫格步骤面板)已下线:思考过程改由模型原生
+  // reasoning_content 流式驱动(message-reasoning 面板,DeepSeek 效果)。
+  // 该类型部件走到下方 data- 分支后由 BankDataPart 返回 null,不再占位。
 
   const parts = message.parts?.map((part, index) => {
     const { type } = part;

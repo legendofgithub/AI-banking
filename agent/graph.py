@@ -89,6 +89,7 @@ from langgraph.types import interrupt
 
 from agent import core as core_mod
 from agent import memory as memory_mod
+from agent import tasks as tasks_mod
 from agent.analysis import build_analysis_card, build_thinking
 from agent.bank import BankTools, load_bank_tools
 from agent.plan import (DEFAULT_ACTIONS, build_plan, compute_disposable,
@@ -121,6 +122,7 @@ ROUTER_SYS = """你是银行智能助手的意图分类器。只输出一个 JSO
 - 理财/产品/申购/赎回/持仓/风险测评 → wealth
 - 卡片/银行卡/挂失/锁卡/解锁/限额/办卡 → card
 - 订阅/会员/自动扣费/代扣/续费/退订/订阅预审/即将扣费(查订阅花销、取消会员自动扣费、处理即将扣款) → subscription
+- 你是谁/你能做什么/你会什么/怎么用 等身份、能力或使用帮助的询问 → chat
 - 其他(问候、闲聊) → chat"""
 
 EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对话】,输出完整转账槽位 JSON,不要任何多余文字:
@@ -256,6 +258,7 @@ _FALLBACK_TEXT = {
     "no_bill_context": "当前会话里没有可结算的 AA 账单,或没听清是谁付的款。",
     "duplicate_order": "这笔转账之前已经处理过了,本次没有重复建单、没有重复扣款。",
     "clarify_gaveup": "问了几轮还是没集齐必要信息,这次先不办理,请想好收款人、金额和时间再说。",
+    "clarify_cancel": "好的,这次先不办理,需要的时候再说一声。",
     "settle_cancelled": "好的,没有标记该成员已付。",
     "contact_added": "收款人已保存,之后可以直接按姓名给 ta 转账。",
     "contact_dup": "这个手机号已经是联系人了,没有重复保存。",
@@ -301,6 +304,11 @@ _FALLBACK_TEXT = {
     "plan_blocked": ("本月可支配额度不足以锁定预算,已停止执行。"
                      "可以先取消订阅或降低预算,再对我说「规划生日」。"),
     "plan_need_info": "还差生日日期或预算,这次先不生成计划。补齐后再说一次即可。",
+    # ---- 长程任务(轨道通用+剧本注册;第一期剧本:储蓄目标) ----
+    "task_created": "长程任务已建档:计划、复盘提醒都已排好,到点我会自己醒来检查进度。",
+    "task_exists": "你已有一个进行中的任务,先把它办完再开新的;进度见下。",
+    "task_review_done": "任务复盘完成:进度与调整建议如下。",
+    "no_task": "当前没有进行中的长程任务。想开始可以说「帮我规划30天存出3000」。",
 }
 
 
@@ -764,15 +772,45 @@ def _wants_plan(text: str) -> bool:
 # Agent Core 不让 LLM 自由挑工具(迭代计划 §2.2):只有命中"分析/复盘/诊断/规划"
 # 这类词、且 LLM 又把消息归到账单/理财意图时,才把这一轮交给 Core 编排。
 # 命中才走 Core;否则旧 b_*/w_* 路径一字不变(迭代计划 §13.3 回归红线)。
+# 2026-10-22 扩充:补齐"花了多少/花哪/花得最多/消费报告"等日常只读问账说法,
+# 让思维链面板在自然口语下也能触发;已核对不与既有测试用语碰撞
+# ("看下上个月的账单月报"等仍走旧路径)。
 _ANALYSIS_TRIGGER_WORDS = ("分析", "复盘", "诊断", "规划", "行动方案", "资产配置",
                            "怎么省", "怎么花", "哪里花", "花多了", "花太多", "超支",
-                           "省出", "省下", "给点建议", "出个方案")
+                           "省出", "省下", "给点建议", "出个方案",
+                           "花了多少", "花哪", "花的最多", "花得最多", "消费报告")
 _BILL_TRIGGER_WORDS = ("账单", "开支", "开销", "消费", "收支", "流水", "月报")
 _WEALTH_TRIGGER_WORDS = ("理财", "持仓", "基金", "定投", "收益", "资产", "配置")
 # 生日目标词:只有用户明说"要过生日/准备生日"才把 plan_birthday 编进计划,
 # 避免"分析账单,生日那天花了多少"这类纯查询被误判成要建生日计划。
 _BIRTHDAY_GOAL_WORDS = ("过生日", "生日预算", "生日准备", "准备生日",
                         "生日计划", "生日安排", "生日礼物")
+
+# ---- 长程任务触发(轨道通用,剧本注册制:第一期只注册"存钱"剧本) ----
+# 触发词刻意选"储蓄动词"(存出/攒出/每天省…),与既有触发面零交集:
+# - 生日计划 p_* 的演示句("帮我规划老婆生日,预算3000…")不含这些词;
+# - Core 分析的触发词里"省出/省下"是"省"字族,这里是"存/攒"字族,互不劫持。
+# 唤醒:任务复盘提醒的标题固定带 "(任务提醒)" 前缀(webui 横幅点击原样发进对话)。
+_LONGTASK_TRIGGER_WORDS = ("存出", "存够", "攒出", "攒够", "存钱", "每天省",
+                           "存一笔", "攒一笔")
+_TASK_WAKE_PREFIX = "(任务提醒)"
+
+
+def _wants_longtask(text: str) -> bool:
+    """用户想设立一个跨天的存钱/攒钱目标(确定性判定,router 用)。"""
+    t = str(text or "")
+    return any(w in t for w in _LONGTASK_TRIGGER_WORDS)
+
+
+def _wants_task_wake(text: str) -> bool:
+    """任务复盘唤醒:系统提醒前缀,或用户主动提到"任务"的复盘/进度。
+
+    要求显式含"任务"二字,避免劫持普通"复盘消费"的分析请求(Core 分析)。
+    """
+    t = str(text or "")
+    if t.startswith(_TASK_WAKE_PREFIX):
+        return True
+    return "任务" in t and ("复盘" in t or "进度" in t)
 
 
 def _wants_analysis(text: str) -> bool:
@@ -1211,6 +1249,13 @@ def _sub_view_of(s: dict) -> dict:
 # ===================================================================== 节点工厂
 # 四条管线的 gate/clarify 控制流逐行同构,差异(问题文案/载荷/取消 notice)走参数。
 
+# 补槽反问回答里的"放弃办理"信号(确定性子串匹配,不走 LLM):
+# 用户在回答"还差什么"的反问时说这些,意为不想继续办了,应立即收尾,
+# 而不是把回答当槽位送回抽取节点导致同一问题反复追问。
+# 与闸门的 _NO_WORDS 分开:闸门管"这笔钱转不转",这里管"这件事还办不办"。
+_CLARIFY_CANCEL_WORDS = ("不办", "不弄", "不做", "不用", "不搞", "算了", "先不",
+                         "暂不", "取消", "不想要")
+
 
 def _make_clarify_node(missing_key: str, question_of):
     """缺槽反问节点工厂(t/sb/c 三份 clarify 共用),控制流与原三份逐行等价。
@@ -1228,8 +1273,17 @@ def _make_clarify_node(missing_key: str, question_of):
         question = question_of(missing)
         answer = interrupt({"type": "ask_slot", "question": question,
                             "missing": missing})
+        answer_text = str(answer or "")
+        # 放弃检测(确定性,不依赖 LLM):用户说"不办了/算了/取消"等 → 立即按
+        # "本次不办理"收尾。此前这类回答会被当普通槽位送回抽取节点重新抽取,
+        # 抽不出槽位又回到反问,造成"我说我不办了它还在问"的死循环体感。
+        # notice 一置,各 after_*_clarify 路由即转 report 兜底收尾,资金零变动。
+        if any(w in answer_text for w in _CLARIFY_CANCEL_WORDS):
+            return {"messages": [HumanMessage(content=answer_text)],
+                    missing_key: [],
+                    "notice": {"kind": "clarify_cancel"}}
         return {"messages": [AIMessage(content=question),
-                             HumanMessage(content=str(answer))],
+                             HumanMessage(content=answer_text)],
                 missing_key: [], "clarify_round": round_no + 1}
 
     return clarify
@@ -1323,12 +1377,30 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     """
 
     async def ask_llm(system: str, history: list[BaseMessage], extra: str = "",
-                      n: int = 12) -> str:
+                      n: int = 12, strong: bool = False) -> str:
         msgs = [SystemMessage(content=system), *history[-n:]]
         if extra:
             msgs.append(HumanMessage(content=extra))
-        ai = await llm.ainvoke(msgs)
-        return ai.content if isinstance(ai.content, str) else str(ai.content)
+        # 改为流式累加:真实模型逐 token 产出,便于后端边生成边下发(text-delta);
+        # 返回语义不变(仍是合并后的字符串),所有调用方零改动。
+        # strong=True:可见答案(播报/闲聊)换用"会思考"的推理模型——
+        # reasoning_content 逐 token 走 messages 通道 → 前端思考面板流式展开;
+        # 推理模型调用失败(欠费/下线/超时)时回落快模型重试,保证有答案
+        # (铁律:演示现场模型/网络兜底)。
+        async def _run(use_strong: bool) -> str:
+            parts: list[str] = []
+            async for chunk in llm.astream(msgs, strong=use_strong):
+                c = getattr(chunk, "content", "")
+                if isinstance(c, str):
+                    parts.append(c)
+            return "".join(parts)
+
+        try:
+            return await _run(strong)
+        except Exception:
+            if not strong:
+                raise
+            return await _run(False)
 
     def _jr(name: str, args: dict, result: Any) -> dict:
         """单条银行调用记录(评审修复:不再用 {**base, **journal(...)} 合并——
@@ -1351,6 +1423,23 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         # 本轮触发指令原文:幂等键的组成部分(同文本重放=同一笔;换说法=新一笔)
         turn_text = next((m.content for m in reversed(state["messages"])
                           if isinstance(m, HumanMessage)), "")
+        # 长程任务(轨道通用+剧本注册):触发词是"存/攒"字族,与生日计划(p_*)、
+        # Core 分析(省字族)零交集,放在 linkage 改写**之前**——"规划30天存出3000"
+        # 这类话虽含 生日/规划,但语义是储蓄目标,不是预算锁定。
+        # 唤醒两类:① 系统提醒前缀 '(任务提醒)'(webui 横幅原样转发);
+        #           ② 用户显式问任务进度/要求复盘(必须含"任务"二字)。
+        # 都要求库里有 active 任务才改道,否则照常走原意图(没有任务就没有轨道)。
+        latest = str(turn_text or "")
+        if not latest.startswith("(到期提醒)"):
+            uid_now = state.get("auth_user_id")
+            if _wants_task_wake(latest):
+                # 唤醒判定必须先于创建判定:提醒标题自带"存钱"二字,会被
+                # 创建触发词误捕(实测)。有 active 任务 → 复盘;没有 → 原意图。
+                if tasks_mod.get_active_task(uid_now) is not None:
+                    intent = "task_review"
+            elif _wants_longtask(latest):
+                intent = ("task_new" if tasks_mod.get_active_task(uid_now) is None
+                          else "task_review")
         # 生日预算计划:仅当 LLM 判 linkage 且消息含明确"规划/省钱"信号时走 p_ 管线。
         # 到期优先级(实测 "我的生日计划到期了，帮我处理一下" 两个谓词都命中):
         # - 强触发词(规划/钱不够/砍订阅/取消订阅/省钱)= 用户明确要计划,压过到期文本;
@@ -3147,8 +3236,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             constraints=constraints_of(text), memory_used=hints)
         # 把 router 的 LLM 意图分类写进 trace，思维链面板据此告诉用户"我理解成什么"
         plan = core_mod.add_trace(plan, "perceive", note=str(state.get("intent") or ""))
+        # 思维链最早信号:感知完成即把"识别意图"推给用户(比规划更早可见)
         return {"analysis_skills": skills, "agent_plan": plan, "notice": None,
-                "analysis_view": None}
+                "analysis_view": None,
+                "thinking_view": build_thinking(plan, memory_used=hints)}
 
     async def a_plan(state: AgentState) -> dict:
         """Plan + Guard:按技能目录生成步骤,再过一遍静态校验。"""
@@ -3183,10 +3274,19 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             # Guard 拦下:一步都不执行(审计里要能看到为什么被拦)
             plan = core_mod.add_trace(plan, "guard", status="blocked",
                                       note="; ".join(errors))
-            return {"agent_plan": {**plan, "status": core_mod.PLAN_FAILED},
+            failed = {**plan, "status": core_mod.PLAN_FAILED}
+            # 思维链提前到规划阶段下发:被拦也要让用户当场看到"为什么没办成"
+            return {"agent_plan": failed,
+                    "thinking_view": build_thinking(
+                        failed, memory_used=plan.get("memory_used")),
                     "notice": {"kind": "analysis_blocked", "errors": errors}}
         plan = core_mod.add_trace(plan, "guard", status="passed")
-        return {"agent_plan": plan, "notice": None}
+        # 思维链提前到规划阶段下发:执行还没开始,用户就能看到
+        # "识别意图 → 制定计划 → 安全守卫"的全貌(此前要到 a_reflect 才可见)
+        return {"agent_plan": plan,
+                "thinking_view": build_thinking(
+                    plan, memory_used=plan.get("memory_used")),
+                "notice": None}
 
     async def a_exec(state: AgentState) -> dict:
         """Act + Observe:按拓扑序跑可自主执行的技能,逐个对照成功条件。"""
@@ -3222,7 +3322,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
 
         intent = ("bill" if "analyze_bill" in observations
                   else "wealth" if "analyze_wealth" in observations else "")
-        update: dict = {"agent_plan": plan, "bank_calls": calls}
+        # 思维链始终随执行进度下发(累计:识别意图→计划→守卫→已执行步骤),
+        # 让面板在执行阶段就生长,而非等到复盘才一次性出现。
+        update: dict = {"agent_plan": plan, "bank_calls": calls,
+                        "thinking_view": build_thinking(
+                            plan, memory_used=plan.get("memory_used"))}
         if any(step.get("status") == core_mod.STEP_DELEGATED
                for step in (plan.get("steps") or [])):
             # 有步骤要交给既有链路:先把已跑完的分析展示给用户,再转交
@@ -3230,9 +3334,6 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                                        bill=observations.get("analyze_bill"),
                                        wealth=observations.get("analyze_wealth"))
             update["analysis_view"] = card
-            # 思维链:把"识别意图→计划→守卫→已执行步骤→转交"暴露给用户看
-            update["thinking_view"] = build_thinking(
-                plan, memory_used=plan.get("memory_used"))
         return update
 
     async def a_replan(state: AgentState) -> dict:
@@ -3324,21 +3425,158 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                 "notice": {"kind": "analysis_report", "analysis": intent,
                            "summary": reflection.summary}}
 
+    # ------------------------------------------------------------ 长程任务
+    # 轨道通用 + 剧本注册(第一期剧本:储蓄目标)。两个节点,零 LLM:
+    #   a_task_new    建档 + 排复盘提醒(提醒标题带 "(任务提醒)" 前缀,
+    #                 到期经 /api/reminders 横幅原样发回对话,router 分流回这里)
+    #   a_task_review 复盘:读任务档案 → 查当月收支(只读) → 差值算术出调整建议
+    #                 → 写进度 → (可选)终结。任何动钱仍由用户在既有闸门办理。
+    # 日期/金额全部确定性计算;LLM 只在 a_report 转述事实。
+
+    def _parse_task_deadline(text: str) -> str:
+        """从目标句解析期限:显式 ISO 日期 > "M月D日" > 默认 30 天后(确定性)。"""
+        m = re.search(r"(20\d{2})-(\d{1,2})-(\d{1,2})", text)
+        if m:
+            try:
+                d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                if d >= date.today():
+                    return d.isoformat()
+            except ValueError:
+                pass
+        m = re.search(r"(\d{1,2})月(\d{1,2})[日号]", text)
+        if m:
+            try:
+                d = date.today().replace(month=int(m.group(1)),
+                                         day=int(m.group(2)))
+                if d < date.today():
+                    d = d.replace(year=d.year + 1)
+                return d.isoformat()
+            except ValueError:
+                pass
+        return (date.today() + timedelta(days=30)).isoformat()
+
+    def _parse_task_target(text: str) -> str:
+        m = re.search(r"(?:存|攒)[出够了]?(\d{3,6})(?:块|元)?", text)
+        return m.group(1) if m else "1000"
+
+    async def a_task_new(state: AgentState) -> dict:
+        """建任务档案:解析目标/期限 → 落库 → 排复盘提醒(只读+LOW 调度)。"""
+        uid = state.get("auth_user_id")
+        text = _latest_human(state)
+        existing = tasks_mod.get_active_task(uid)
+        if existing is not None:
+            return {"notice": {"kind": "task_exists", "task": {
+                "goal": existing["goal"],
+                "target_yuan": existing["target_yuan"],
+                "saved_yuan": existing["saved_yuan"],
+                "deadline": existing["deadline"],
+                "task_id": existing["task_id"]}}}
+
+        target = _parse_task_target(text)
+        deadline = _parse_task_deadline(text)
+        days = max(1, (date.fromisoformat(deadline) - date.today()).days)
+        daily = max(1, round(int(target) / days))
+        reviews = [tasks_mod.next_review_date(days=7),
+                   tasks_mod.next_review_date(days=14)]
+        reviews = [r for r in reviews if r < deadline]
+        task = tasks_mod.create_task(
+            uid, goal=text[:160], target_yuan=target, deadline=deadline,
+            daily_target_yuan=str(daily), review_dates=reviews)
+        if task is None:
+            return {"notice": {"kind": "bank_error", "where": "create_task",
+                               "error": "任务建档失败(可能已有进行中的任务)"}}
+        # 复盘提醒:标题自带 "(任务提醒)" 前缀——到期经横幅点击原样发回对话,
+        # router 据此前缀分流回 a_task_review,payload 带任务号便于对账。
+        calls: list[dict] = []
+        for rd in reviews:
+            args = {"title": (f"{_TASK_WAKE_PREFIX} 存钱任务该复盘了:"
+                              f"检查进度并调整计划(任务 {task['task_id']})"),
+                    "run_at": f"{rd}T20:00:00",
+                    "payload_json": json.dumps(
+                        {"task_id": task["task_id"], "kind": "task_review"},
+                        ensure_ascii=False)}
+            res = await tools.call("schedule_reminder", **args)
+            calls.append(_jr("schedule_reminder", args, res))
+        return {"bank_calls": calls,
+                "notice": {"kind": "task_created", "task": {
+                    "goal": task["goal"], "target_yuan": task["target_yuan"],
+                    "daily_target_yuan": task["daily_target_yuan"],
+                    "deadline": task["deadline"],
+                    "reviews": reviews, "task_id": task["task_id"]}}}
+
+    async def a_task_review(state: AgentState) -> dict:
+        """复盘回合:当月收支(只读) + 差值算术 → 进度落库 + 调整建议。"""
+        uid = state.get("auth_user_id")
+        task = tasks_mod.get_active_task(uid)
+        if task is None:
+            return {"notice": {"kind": "no_task"}}
+        calls: list[dict] = []
+        month = date.today().strftime("%Y-%m")
+        rep = await tools.call("monthly_report", month=month)
+        calls.append(_jr("monthly_report", {"month": month}, rep))
+        if _has_error(rep) or not isinstance(rep, dict):
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error",
+                               "where": "monthly_report",
+                               "error": _has_error(rep) or "月报读取失败"}}
+        net = 0
+        try:  # 工具返回"元"字符串(可能为 "0.00");yuan_to_cents 拒绝 0,这里容错
+            net = int(round(float(str(rep.get("net_yuan") or "0")) * 100))
+        except (TypeError, ValueError):
+            net = 0
+        saved = max(0, net)  # v1 口径:当月净结余即"已省"(整数分,演示够用)
+        target_c = yuan_to_cents(task["target_yuan"])
+        saved_c = min(saved, target_c)
+        days_left = (date.fromisoformat(task["deadline"]) - date.today()).days
+        remain_c = max(0, target_c - saved_c)
+        # 每日目标 = 剩余金额 ÷ 剩余天数,向上取整到元(整数分算术,绝不用浮点)
+        daily_needed = (max(1, -(-remain_c // (max(1, days_left) * 100)))
+                        if remain_c > 0 and days_left > 0 else 0)
+        prev_daily = int(yuan_to_cents(task["daily_target_yuan"]) // 100)
+        adjusted = daily_needed > prev_daily
+        # 可省建议(只报不砍):订阅候选第一名,砍不砍由用户走既有密码闸门
+        suggestion = ""
+        subs = await tools.call("list_subscriptions")
+        calls.append(_jr("list_subscriptions", {}, subs))
+        cands = filter_cut_candidates(subs if isinstance(subs, list) else [])
+        if adjusted and cands:
+            top = cands[0]
+            suggestion = (f"可考虑取消「{top.get('merchant')}」"
+                          f"(每月 {top.get('amount_yuan')} 元)"
+                          "——回复「取消它的自动扣费」我会带你走确认。")
+        next_review = (tasks_mod.next_review_date(days=7)
+                       if days_left > 7 else "")
+        updated = tasks_mod.update_progress(
+            uid, task["task_id"], saved_yuan=cents_to_yuan(saved_c),
+            note=(f"复盘:当月净结余 {cents_to_yuan(max(0, net))} 元,"
+                  f"每日目标 {daily_needed} 元"
+                  + ("(已上调)" if adjusted else "(维持)")),
+            next_review_at=next_review if days_left > 7 else "",
+            daily_target_yuan=str(daily_needed))
+        done = saved_c >= target_c or days_left <= 0
+        if done:
+            tasks_mod.finish_task(uid, task["task_id"],
+                                  status="done" if saved_c >= target_c
+                                  else "failed")
+        return {"bank_calls": calls,
+                "notice": {"kind": "task_review_done", "task": {
+                    "goal": task["goal"],
+                    "target_yuan": task["target_yuan"],
+                    "saved_yuan": cents_to_yuan(saved_c),
+                    "days_left": max(0, days_left),
+                    "daily_needed": str(daily_needed),
+                    "prev_daily": str(prev_daily),
+                    "adjusted": adjusted, "done": done,
+                    "suggestion": suggestion,
+                    "task_id": task["task_id"]}}}
+
     async def a_report(state: AgentState) -> dict:
         """Respond:播报 + Plan Trace(分析卡已在 a_exec/a_reflect 节点下发)。
 
-        仅当分析被 Guard 拦下(analysis_blocked,此时 a_exec/a_reflect 未发卡)
-        时,这里补发一份思维链,让用户看到"为什么没办成"。
+        思维链已提前到 a_plan 下发(规划阶段即可见,含 Guard 拦下场景),
+        这里不再补发,避免同一轮出现两张重复的思维链面板。
         """
-        base = await _announce(state)
-        notice = state.get("notice") or {}
-        if notice.get("kind") == "analysis_blocked":
-            plan = state.get("agent_plan") or {}
-            if plan:
-                base = {**base,
-                        "thinking_view": build_thinking(
-                            plan, memory_used=plan.get("memory_used"))}
-        return base
+        return await _announce(state)
 
     # ---------------------------------------------------------------- 闲聊兜底
 
@@ -3351,7 +3589,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         return {"notice": {"kind": "login_required"}}
 
     async def chat(state: AgentState) -> dict:
-        text = await ask_llm(CHAT_SYS, state["messages"])
+        text = await ask_llm(CHAT_SYS, state["messages"], strong=True)
         return {"messages": [AIMessage(content=text or "我在。")]}
 
     # ---------------------------------------------------------------- 通用播报
@@ -3366,6 +3604,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                  "plan_card": state.get("plan_card"),
                  "plan_cut": state.get("plan_cut"),
                  "bank_calls": state.get("bank_calls", [])[-6:]}
+        # 播报用快模型(不 strong):业务办理要快,播报是对工具事实的转述,
+        # 推理模型在这里只会白等十几秒;深度思考保留在闲聊(chat)上——
+        # 开放式问题才值得让模型"想",办理类问题要的是立刻办。
         text = await ask_llm(REPORT_SYS, state["messages"],
                              "【事实】" + json.dumps(facts, ensure_ascii=False, default=str))
         if not text or not text.strip():
@@ -3743,6 +3984,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                      ("a_perceive", a_perceive), ("a_plan", a_plan),
                      ("a_exec", a_exec), ("a_replan", a_replan),
                      ("a_reflect", a_reflect), ("a_report", a_report),
+                     # ---- 长程任务(轨道通用+剧本注册) ----
+                     ("a_task_new", a_task_new), ("a_task_review", a_task_review),
                      ("auth_guard", auth_guard), ("chat", chat)]:
         g.add_node(name, fn)
 
@@ -3756,7 +3999,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         "card": "k_extract", "subscription": "s_extract",
         "plan": "p_extract", "chat": "chat",
         # Agent Core:账单/理财的分析类请求走唯一的编排入口
-        "a_perceive": "a_perceive"})
+        "a_perceive": "a_perceive",
+        # 长程任务:建档 / 复盘(轨道通用,剧本注册)
+        "task_new": "a_task_new", "task_review": "a_task_review"})
     # ---- Agent Core 闭环 ----
     g.add_edge("a_perceive", "a_plan")
     g.add_conditional_edges("a_plan", after_a_plan, ["a_exec", "a_report"])
@@ -3765,6 +4010,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     g.add_edge("a_replan", "a_exec")
     g.add_edge("a_reflect", "a_report")
     g.add_edge("a_report", END)
+    # ---- 长程任务:两个节点都直接收尾播报(零 LLM,LLM 只在 a_report 转述) ----
+    g.add_edge("a_task_new", "a_report")
+    g.add_edge("a_task_review", "a_report")
     g.add_conditional_edges("t_extract", after_extract, ["t_clarify", "t_resolve"])
     g.add_conditional_edges("t_clarify", after_clarify, ["t_extract", "t_report"])
     g.add_conditional_edges("t_resolve", after_resolve,

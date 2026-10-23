@@ -545,3 +545,25 @@ textarea:focus-visible {
 .field-flash {
   animation: field-flash 0.5s ease-in-out 2;
 }
+
+/* 思维链流式入场:每条思考随 SSE 帧到达时淡入上移一次(只播一次) */
+@keyframes pvThinkIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.pv-think-in {
+  animation: pvThinkIn 0.45s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-think-in {
+    animation: none;
+  }
+}

@@ -56,7 +56,9 @@ RE_FE_DATA = re.compile(r'type\s*===\s*"(data-[a-z-]+)"')
 
 # ---- SSE 帧词表(Vercel AI SDK 5 UIMessageChunk,见 agent/api.py 头部注释) ----
 WIRE_VOCAB = frozenset({
-    "start", "text-start", "text-delta", "text-end", "error", "finish",
+    "start", "text-start", "text-delta", "text-end",
+    "reasoning-start", "reasoning-delta", "reasoning-end",
+    "error", "finish",
 })
 RE_FRAME_TYPE = re.compile(r'_frame\(\{\s*"type":\s*"([A-Za-z-]+)"')
 

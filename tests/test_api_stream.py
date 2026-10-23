@@ -18,8 +18,15 @@ from bank_core.money import cents_to_yuan
 from test_agent_graph import DEFAULT_BALANCE, _balance, _mk_db, _order
 
 
-def _fake_llm(*responses: str) -> FakeMessagesListChatModel:
-    return FakeMessagesListChatModel(responses=[AIMessage(content=r) for r in responses])
+def _fake_llm(*messages) -> FakeMessagesListChatModel:
+    """构造注入用假模型。
+
+    每个参数可以是 str(自动包成 AIMessage)或现成的 AIMessage
+    (可带 additional_kwargs 以测试 reasoning_content 等扩展字段)。
+    """
+    from langchain_core.messages import AIMessage as _AIMessage
+    built = [m if isinstance(m, _AIMessage) else _AIMessage(content=m) for m in messages]
+    return FakeMessagesListChatModel(responses=built)
 
 
 def _client(tmp_path: Path, responses: list[str]) -> tuple[TestClient, Path]:
@@ -205,6 +212,55 @@ def test_chat_stream_sse_protocol(tmp_path):
 
         # 闲聊兜底不该有任何确认卡片
         assert _find_data(frames, "data-transfer-confirmation") is None
+        # 非推理假模型:不应出现 reasoning 帧(优雅降级,默认折叠面板不会出现)
+        assert not any(f["type"].startswith("reasoning-") for f in frames)
+
+
+# ----------------------------------------------------------------- 深度思考(reasoning_content)流式
+def test_reasoning_model_emits_reasoning_frames(tmp_path):
+    from langchain_core.messages import AIMessage
+
+    # 第二个响应带 reasoning_content:模拟 DeepSeek / 智谱 GLM thinking 的原生推理
+    reasoning_ai = AIMessage(
+        content="好的,我来帮您查询余额。",
+        additional_kwargs={"reasoning_content": "先判断意图:用户问余额,属查询类,直接作答即可。"},
+    )
+    client, _db, _tok = _client(tmp_path, [
+        '{"intent": "chat"}',
+        reasoning_ai,
+    ])
+    with client:
+        r = _post_chat(client, "我的余额多少", "api-chat-reason")
+        assert r.status_code == 200
+        frames = _frames(r.text)
+        starts = [f for f in frames if f["type"] == "reasoning-start"]
+        deltas = [f for f in frames if f["type"] == "reasoning-delta"]
+        ends = [f for f in frames if f["type"] == "reasoning-end"]
+        # 成对的 reasoning 帧
+        assert len(starts) == len(ends) >= 1, frames
+        assert len(deltas) >= 1
+        rid = starts[0]["id"]
+        assert all(d["id"] == rid for d in deltas), "reasoning delta 的 id 应一致"
+        assert all(e["id"] == rid for e in ends), "reasoning end 的 id 应一致"
+        joined = "".join(d.get("delta", "") for d in deltas)
+        assert "查询类" in joined, "模型原生推理文本应被捕获并下发"
+        # 正文照常流式
+        assert any(f["type"] == "text-delta" for f in frames)
+
+
+def test_non_reasoning_model_has_no_reasoning_frames(tmp_path):
+    client, _db, _tok = _client(tmp_path, [
+        '{"intent": "chat"}',
+        "你好,我是练功假银行助手。",
+    ])
+    with client:
+        r = _post_chat(client, "你好呀", "api-chat-noreason")
+        assert r.status_code == 200
+        frames = _frames(r.text)
+        # 普通模型:无推理帧,仅正文流式(优雅降级)
+        assert not any(f["type"].startswith("reasoning-") for f in frames), \
+            f"非推理模型不应出现 reasoning 帧: {[f['type'] for f in frames]}"
+        assert any(f["type"] == "text-delta" for f in frames)
 
 
 # ----------------------------------------------------------------- 建单 → 中断帧 → 确认 → 执行完成
