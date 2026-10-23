@@ -15,6 +15,14 @@
 2. **改完必须过测试**:改动要配套新增/更新测试,并跑全量
    `.venv/Scripts/python.exe -m pytest tests -q`(当前 205 个,全绿才能交付)。
    跨层改动(闸门/卡片/播报)先跑 `pytest tests/test_contract.py -q` 确认没破坏接口契约。
+   > **测试默认走进程内工具替身**(`tests/_mcp_inprocess.py`,2026-10-23 起):
+   > 不再为每次工具调用冷启动 `python -m bank_core.mcp_server` 子进程
+   > (单次固定开销约 2.27s:import fastmcp 1.08s + import bank_core 1.19s)。
+   > 想验证真实 stdio 链路时设 `BANK_TESTS_STDIO=1` 跑——
+   > 怀疑"替身与真实链路不一致"必须先这样对照一次。
+   > 替身只替换传输层,`agent.bank.unwrap()` 解包契约、异常包装文本、
+   > (库,用户) 隔离语义均逐条对齐;MCP 协议本身仍由
+   > `tests/test_contract.py` 与 `scripts/mcp_smoke.py` 覆盖。
 3. **Python 一律用 venv**:`.venv/Scripts/python.exe`。裸 pip 指向不存在的 Python 3.14(损坏);
    系统 Python312 没装项目依赖(服务用它能起来是历史环境假象,重启必失败)。
 4. **动钱链路改动手动验证**:涉及转账/支付密码/注册登录的改动,除了 pytest,必须在浏览器里

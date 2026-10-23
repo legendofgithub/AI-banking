@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -30,26 +29,24 @@ DEFAULT_BALANCE = 5_000_000  # 5 万元(分)
 
 
 def _mk_db(tmp_path: Path) -> Path:
+    """临时库:1 用户 + checking/savings 两个账户 + 登录态。
+
+    进程内 `init_db(path)` 直写,不启子进程——`bank_core/db.py` 的库路径
+    已是调用点延迟解析,与进程环境无关,子进程只剩约 2.5s 的固定开销。
+    """
+    from bank_core.db import init_db
+
     db = tmp_path / "bank.db"
-    env = {**os.environ, "BANK_CORE_DB": str(db)}
-    script = (
-        "from bank_core.db import init_db\n"
-        "import sys\n"
-        "c = init_db(sys.argv[1])\n"
-        "c.execute(\"INSERT INTO users (id,name,phone,created_at) "
-        "VALUES (1,'测试用户','13800000000','2026-01-01T00:00:00')\")\n"
-        f"c.execute(\"INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
-        f"VALUES (1,1,'checking','工资卡',{DEFAULT_BALANCE},'2026-01-01T00:00:00')\")\n"
-        f"c.execute(\"INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
-        f"VALUES (2,1,'savings','理财专户',0,'2026-01-01T00:00:00')\")\n"
-        "c.commit(); c.close()\n")
-    import subprocess
-    import sys
-    proc = subprocess.run(
-        [sys.executable, "-c", script, str(db)],
-        cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=120)
-    assert proc.returncode == 0, f"临时库初始化失败:\n{proc.stdout}\n{proc.stderr}"
+    c = init_db(db)
+    c.execute("INSERT INTO users (id,name,phone,created_at) "
+              "VALUES (1,'测试用户','13800000000','2026-01-01T00:00:00')")
+    c.execute("INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
+              "VALUES (1,1,'checking','工资卡',?,'2026-01-01T00:00:00')",
+              (DEFAULT_BALANCE,))
+    c.execute("INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
+              "VALUES (2,1,'savings','理财专户',0,'2026-01-01T00:00:00')")
+    c.commit()
+    c.close()
     from bank_core.auth_core import hash_password as _hp
     ac = sqlite3.connect(db)
     ac.execute(
@@ -197,3 +194,47 @@ def test_longtask_review_requires_active_task(tmp_path, monkeypatch):
 
 def run(coro):
     asyncio.run(coro)
+
+
+# ----------------------------------------------- 任务库健壮性(2026-10-23)
+
+def test_second_active_task_is_rejected(tmp_path, monkeypatch):
+    """每用户一个 active:第二个建档返回 None(并发竞态由唯一索引兜底)。"""
+    _tasks_db(tmp_path, monkeypatch)
+    from agent import tasks as tasks_mod
+    first = tasks_mod.create_task(1, goal="生日存钱", target_yuan="600",
+                                  deadline="2026-11-20")
+    assert first is not None
+    assert tasks_mod.create_task(1, goal="再存一笔", target_yuan="100",
+                                 deadline="2026-11-21") is None
+    assert tasks_mod.get_active_task(1)["task_id"] == first["task_id"]
+
+
+def test_duplicate_active_rows_are_collapsed(tmp_path, monkeypatch):
+    """老库漂移(索引建立前的竞态年代留下两个 active):下一次建库连接时
+    每用户保留最新一条,其余置 cancelled,并把唯一索引建起来。"""
+    db = _tasks_db(tmp_path, monkeypatch)
+    from agent import tasks as tasks_mod
+    tasks_mod.create_task(7, goal="原任务", target_yuan="100",
+                          deadline="2026-12-01")
+    conn = sqlite3.connect(db)
+    try:  # 绕过唯一索引手工塞一个更晚的 active 行,模拟旧版本竞态产物
+        conn.execute("DROP INDEX IF EXISTS ux_agent_tasks_one_active")
+        conn.execute(
+            "INSERT INTO agent_tasks (task_id,user_id,goal,target_yuan,"
+            "deadline,status,created_at) VALUES "
+            "('dup-1',7,'漂移任务','50','2026-12-01','active','2099-01-01')")
+        conn.commit()
+    finally:
+        conn.close()
+    tasks_mod._connect(create=True)  # 触发去重迁移 + 重建索引
+    active = tasks_mod.get_active_task(7)
+    assert active["goal"] == "漂移任务"  # rowid 更大的新行保留
+    conn = sqlite3.connect(db)
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM agent_tasks WHERE user_id=7 "
+            "AND status='active'").fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 1
