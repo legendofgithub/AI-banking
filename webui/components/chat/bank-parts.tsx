@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { ReceiptButton } from "@/components/chat/receipt-dialog";
+import { AgentPlanVisualization } from "./agent-plan-visualization";
 import { useActiveChat } from "@/hooks/use-active-chat";
 
 /*
@@ -1489,65 +1490,11 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
  * 思维链面板:把 Agent 的推理步骤(识别意图/调取记忆/计划/守卫/执行/复盘)按时间顺序
  * 列出来,带阶段名与状态着色。默认折叠,点标题展开——既是"看它怎么想",也避免刷屏。
  */
-const THINKING_STATUS_STYLE: Record<string, { dot: string; chip: string }> = {
-  info: { dot: "bg-slate-400", chip: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300" },
-  passed: { dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
-  done: { dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
-  success: { dot: "bg-emerald-500", chip: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" },
-  blocked: { dot: "bg-rose-500", chip: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300" },
-  failed: { dot: "bg-rose-500", chip: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300" },
-  delegated: { dot: "bg-amber-500", chip: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" },
-};
-
 function ThinkingPanel({ data }: { data: ThinkingData }) {
   const thoughts = data.thoughts ?? [];
-  const [open, setOpen] = useState(false);
-  if (thoughts.length === 0) {
-    return null;
-  }
-  return (
-    <div className="w-[min(100%,420px)] rounded-2xl border border-slate-200/70 bg-gradient-to-br from-slate-50 to-slate-100/60 p-3 shadow-[var(--shadow-card)] dark:border-slate-700/50 dark:from-slate-900/40 dark:to-slate-800/30">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 text-left text-[13px] font-semibold text-slate-700 dark:text-slate-200"
-      >
-        <span className="flex items-center gap-2">
-          <span aria-hidden>🧠</span>
-          思维链
-          <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground dark:bg-slate-800/60">
-            {thoughts.length} 步
-          </span>
-        </span>
-        <span className="text-[11px] text-muted-foreground">
-          {open ? "收起" : "展开"}
-        </span>
-      </button>
-      {open ? (
-        <ol className="mt-2 flex flex-col gap-1.5 border-l border-slate-200 pl-3 dark:border-slate-700">
-          {thoughts.map((t, i) => {
-            const style = THINKING_STATUS_STYLE[t.status ?? "info"] ?? THINKING_STATUS_STYLE.info;
-            return (
-              <li key={i} className="relative">
-                <span
-                  className={`absolute -left-[18px] top-1.5 h-2 w-2 rounded-full ${style.dot}`}
-                  aria-hidden
-                />
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${style.chip}`}>
-                    {t.phase ?? "步骤"}
-                  </span>
-                </div>
-                <div className="mt-0.5 text-[12px] leading-[1.6] text-slate-600 [overflow-wrap:anywhere] dark:text-slate-300">
-                  {t.text}
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      ) : null}
-    </div>
-  );
+  // 直接渲染富规划可视化：9 阶段闭环 + 真实思维链 + 安全护栏。
+  // 即便思维链为空也展示规划方法论，避免「看不到」。
+  return <AgentPlanVisualization thoughts={thoughts} />;
 }
 
 export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
@@ -1606,7 +1553,10 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
     return <AnalysisPlanCard data={(data ?? {}) as AnalysisPlanData} />;
   }
   if (type === "data-thinking") {
-    return <ThinkingPanel data={(data ?? {}) as ThinkingData} />;
+    // 九宫格步骤面板已下线:思考过程改由模型原生 reasoning_content 驱动
+    // (message-reasoning 流式面板,DeepSeek 效果)。分支保留守住契约
+    // (前后端 data-* 集合必须一致),但不再渲染任何内容。
+    return null;
   }
   if (type === "data-ask-slot") {
     return <AskSlot data={(data ?? {}) as { missing?: string[] }} />;

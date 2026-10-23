@@ -215,3 +215,65 @@ table.tbl .flow { color: var(--ink); font-weight: 600; }
   .toolbar { padding: 10px 16px; top: 84px; }
   .rail-list { grid-template-columns: 1fr; }
 }
+
+/* ===== 规划可视化（P20 · Agent 规划可视化,375 手机画板） ===== */
+.plan-viz {
+  margin: 8px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  background: var(--card);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.plan-viz-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px; font-size: 13px; font-weight: 700; color: var(--ink);
+  border-bottom: 1px solid var(--line-2);
+}
+.plan-viz-head .pv-badge {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  background: var(--line-2); border-radius: 999px; padding: 2px 8px;
+}
+.plan-viz-body { padding: 10px 12px 12px; }
+.plan-sub {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+  color: var(--muted); margin: 2px 0 7px;
+}
+.plan-sub i { flex: 1; height: 1px; background: var(--line-2); display: block; }
+
+.plan-loop { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+@keyframes pvpop { from { opacity: .35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.plan-step {
+  position: relative; border: 1px solid var(--line); border-radius: 12px;
+  padding: 8px 7px 7px; background: #fafbfc; text-align: left;
+  opacity: 0; animation: pvpop .42s cubic-bezier(.22,1,.36,1) forwards;
+}
+.plan-step .ps-no {
+  position: absolute; top: -7px; left: 8px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--line-2); color: var(--muted); font-size: 9px; font-weight: 800;
+  display: flex; align-items-center; justify-content: center;
+}
+.plan-step .ps-ico { font-size: 14px; line-height: 1; margin-top: 2px; }
+.plan-step .ps-zh { font-size: 12px; font-weight: 700; color: var(--text); margin-top: 3px; }
+.plan-step .ps-en { font-size: 8px; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
+.plan-step.on { border-color: var(--gold); background: var(--gold-bg); box-shadow: 0 0 0 1px var(--gold-line); }
+.plan-step.on .ps-no { background: var(--gold); color: #fff; }
+
+.plan-chain { border-left: 2px solid var(--line); padding-left: 9px; }
+.plan-item { position: relative; padding-bottom: 9px; }
+.plan-item:last-child { padding-bottom: 0; }
+.plan-item .pi-dot {
+  position: absolute; left: -15px; top: 3px; width: 9px; height: 9px; border-radius: 50%;
+  border: 2px solid var(--card);
+}
+.plan-item .pi-chip {
+  display: inline-block; font-size: 10px; font-weight: 700; border-radius: 999px; padding: 1px 7px;
+}
+.plan-item .pi-txt { font-size: 11.5px; line-height: 1.55; color: var(--text-2); margin-top: 2px; }
+
+.plan-guard { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.plan-gcard { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 8px; }
+.plan-gcard .pg-ico { font-size: 13px; }
+.plan-gcard .pg-title { font-size: 12px; font-weight: 700; color: var(--text); margin-top: 2px; }
+.plan-gcard .pg-desc { font-size: 10px; line-height: 1.45; color: var(--muted); margin-top: 2px; }

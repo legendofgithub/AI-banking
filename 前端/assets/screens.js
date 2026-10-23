@@ -163,6 +163,77 @@
   /* ============================================================
      页面集合
      ============================================================ */
+  /* ---------------------- 规划可视化（P20 复用） ---------------------- */
+  const planViz = (sc) => {
+    sc = sc || 'read';
+    const phases = [
+      ['感知', 'Perceive', '👁'], ['规划', 'Plan', '🗺'], ['守卫', 'Guard', '🛡'],
+      ['计划卡', 'PlanCard', '📋'], ['执行', 'Act', '⚡'], ['观察', 'Observe', '🔍'],
+      ['复盘', 'Reflect', '🧭'], ['重规划', 'Replan', '🔁'], ['记忆', 'Remember', '💾']
+    ];
+    const loop = '<div class="plan-loop">' + phases.map(function (p, i) {
+      return '<div class="plan-step on" style="animation-delay:' + (i * 60) + 'ms">' +
+        '<span class="ps-no">' + (i + 1) + '</span>' +
+        '<div class="ps-ico">' + p[2] + '</div>' +
+        '<div class="ps-zh">' + p[0] + '</div>' +
+        '<div class="ps-en">' + p[1] + '</div></div>';
+    }).join('') + '</div>';
+
+    const chains = sc === 'pay' ? [
+      ['识别意图', 'info', '你这句话,我理解为:转账给「老王」。'],
+      ['调取记忆', 'info', '翻了下长期记忆:常用收款人「老王」(尾号 8821)。'],
+      ['制定计划', 'info', '核验收款人 → 创建订单 → 转账确认(高风险,需支付密码)。'],
+      ['安全守卫', 'passed', '检测到高风险步骤,已强制绑定 confirm_transfer 闸门。'],
+      ['核验收款人', 'done', '已锁定老王(尾号 8821),同名 2 人已消歧。'],
+      ['创建转账订单', 'delegated', '订单已建(¥500),交给带支付密码闸门的链路,我不替你确认。'],
+      ['转账确认', 'blocked', '⏸ 等待你输入支付密码——闸门前零扣款。']
+    ] : [
+      ['识别意图', 'info', '你这句话,我理解为:账单分析。'],
+      ['制定计划', 'info', '账单读取 → 分类汇总 → 异常扫描。只读,不会动你的钱。'],
+      ['安全守卫', 'passed', '静态守卫通过:无越权工具,无高风险步骤。'],
+      ['账单读取', 'done', '已读取 9 月 1–30 日共 142 笔交易。'],
+      ['分类汇总', 'done', '餐饮 ¥2,340 · 交通 ¥680 · 订阅 ¥199。'],
+      ['异常扫描', 'done', '发现 2 笔陌生商户扣款,已标记。'],
+      ['复盘', 'done', '全部步骤通过成功条件,零资金变动。']
+    ];
+
+    const colorMap = {
+      info: ['var(--line-2)', 'var(--muted)'],
+      passed: ['var(--green-bg)', 'var(--green)'],
+      done: ['var(--green-bg)', 'var(--green)'],
+      blocked: ['var(--red-bg)', 'var(--red)'],
+      delegated: ['var(--gold-bg)', 'var(--gold-ink)']
+    };
+    const chain = '<div class="plan-chain">' + chains.map(function (c) {
+      const cc = colorMap[c[1]] || colorMap.info;
+      return '<div class="plan-item">' +
+        '<span class="pi-dot" style="background:' + cc[1] + '"></span>' +
+        '<span class="pi-chip" style="background:' + cc[0] + ';color:' + cc[1] + '">' + c[0] + '</span>' +
+        '<div class="pi-txt">' + c[2] + '</div></div>';
+    }).join('') + '</div>';
+
+    const guards = [
+      ['🚦', '四档风险分级', 'READ 只读 · LOW · MED · HIGH 动钱(必过闸门)'],
+      ['🔐', '6 类合法闸门', 'confirm_plan / transfer / wealth / sub_cancel / card / linkage'],
+      ['⛔', '8 个禁规划工具', 'Planner 不能规划自动确认 / 自动扣款'],
+      ['🧮', '确定性铁律', '金额 / 日期 / 限额全由代码算,LLM 只理解 + 播报']
+    ];
+    const guard = '<div class="plan-guard">' + guards.map(function (g) {
+      return '<div class="plan-gcard"><div class="pg-ico">' + g[0] + '</div>' +
+        '<div class="pg-title">' + g[1] + '</div>' +
+        '<div class="pg-desc">' + g[2] + '</div></div>';
+    }).join('') + '</div>';
+
+    return '<div class="plan-viz">' +
+      '<div class="plan-viz-head"><span>🧠 Agent 规划可视化</span>' +
+      '<span class="pv-badge">' + chains.length + ' 步思维链</span></div>' +
+      '<div class="plan-viz-body">' +
+      '<div class="plan-sub"><span>规划闭环</span><i></i></div>' + loop +
+      '<div class="plan-sub" style="margin-top:10px"><span>思维链</span><i></i></div>' + chain +
+      '<div class="plan-sub" style="margin-top:10px"><span>为什么安全</span><i></i></div>' + guard +
+      '</div></div>';
+  };
+
   const screens = [
 
     /* ---------------- P1 登录 ---------------- */
@@ -256,7 +327,8 @@
           <div class="chips">
             ${[
               ['我要转账', 'p4'], ['帮我准备生日', 'p10a'], ['账单分析', 'p6'],
-              ['理财操作', 'p7a'], ['卡片管理', 'p8a'], ['订阅代扣管理', 'p9a']
+              ['理财操作', 'p7a'], ['卡片管理', 'p8a'], ['订阅代扣管理', 'p9a'],
+              ['AI 怎么想', 'p20']
             ].map((c) => `<button class="chip" data-goto="${c[1]}" data-act="goto:${c[1]}">${c[0]}</button>`).join('')}
           </div>
           <div class="hint" style="justify-content:center;text-align:center;padding:0 10px">
@@ -764,7 +836,25 @@
         </div>
         ${homeBar()}
       </div>`
-    }
+    },
+    /* ---------------- P20 对话中 · Agent 规划可视化 ---------------- */
+    {
+      id: 'p20', no: 'P20', group: '对话核心', title: '对话中 · Agent 规划可视化',
+      note: '用户一句话 → AI 展示规划闭环(9 阶段)与逐步思维链;动钱走支付密码闸门,全程可追溯',
+      html: `
+      <div style="display:flex;flex-direction:column;height:100%;background:var(--bg)">
+        ${chatHead('AI 银行助手', { left: 'ham', right: demoFastBtn })}
+        <div class="body" style="padding-top:4px">
+          ${userMsg('帮我看看上个月花了多少钱?')}
+          ${aiMsg('好的,我先理一下思路,再给你报告:')}
+          ${planViz('read')}
+          ${aiMsg('已为你生成账单报告,全程只读、零资金变动。')}
+        </div>
+        ${fab()}
+        ${composer()}
+        ${homeBar()}
+      </div>`
+    },
   ];
 
   /* ---------------------- 交互连线表 ---------------------- */
@@ -782,7 +872,8 @@
     ['「确认取消(输支付密码)」', 'P9b 取消代扣确认', 'P5 支付密码弹层', 'p9b', 'p5'],
     ['「现在购买(需支付密码)」', 'P10b 联动到期', 'P5 支付密码弹层', 'p10b', 'p5'],
     ['「演示快进」按钮', 'P3 顶栏', 'P13b 快进弹窗 → P10b 到期态', 'p3', 'p13b'],
-    ['「确认计划」', 'P10a 建计划', 'P3(助手回复「计划已建立,到期我会提醒你」)', 'p10a', 'p3']
+    ['「确认计划」', 'P10a 建计划', 'P3(助手回复「计划已建立,到期我会提醒你」)', 'p10a', 'p3'],
+    ['建议胶囊「AI 怎么想」', 'P3 对话主界面', 'P20 规划可视化', 'p3', 'p20']
   ];
 
   /* ---------------------- 验收清单 ---------------------- */
@@ -798,5 +889,5 @@
     ['交互链接按第四节连完,重点走通:转账流 P3→P4→P5、联动流 P3→P13→P10', true]
   ];
 
-  window.PROTO = { screens: screens, links: links, checklist: checklist, icons: I, composer: composer, fab: fab, pendingBubble: pendingBubble, pendingSheet: pendingSheet, homeBar: homeBar, keypad: keypad, pwdCells: pwdCells, sb: sb, nav: nav };
+  window.PROTO = { screens: screens, links: links, checklist: checklist, icons: I, composer: composer, fab: fab, pendingBubble: pendingBubble, pendingSheet: pendingSheet, homeBar: homeBar, keypad: keypad, pwdCells: pwdCells, sb: sb, nav: nav, planViz: planViz };
 })();

@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   Reasoning,
   ReasoningContent,
@@ -16,18 +15,11 @@ export function MessageReasoning({
   isLoading,
   reasoning,
 }: MessageReasoningProps) {
-  const [hasBeenStreaming, setHasBeenStreaming] = useState(isLoading);
-
-  useEffect(() => {
-    if (isLoading) {
-      setHasBeenStreaming(true);
-    }
-  }, [isLoading]);
-
   return (
     <Reasoning
       data-testid="message-reasoning"
-      defaultOpen={hasBeenStreaming}
+      // DeepSeek 效果:流式期间自动展开思考面板,结束后 1 秒自动收起
+      // (Reasoning 内部按 isStreaming 驱动开关;defaultOpen=false 会把它钉死)
       isStreaming={isLoading}
     >
       <ReasoningTrigger />

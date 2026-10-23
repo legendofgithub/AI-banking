@@ -908,6 +908,38 @@ def test_wealth_query_filters_by_risk_level(tmp_path):
     run(scenario())
 
 
+def test_wealth_clarify_cancel_stops_asking(tmp_path):
+    """补槽反问中用户明确说"不办了" → 立即按"本次不办理"收尾,
+    不再回环重问同一问题;全程零资金变动(2026-10-22 评审修复)。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "wealth"}',
+            json.dumps({"action": None, "keyword": None, "product_id": None,
+                        "amount_yuan": None, "holding_id": None, "p_type": None,
+                        "assess_answer": None}, ensure_ascii=False),
+            "",  # 播报 LLM 返回空 → 走确定性兜底文案
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "w-cancel"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("帮我弄下理财")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "ask_slot"
+            r2 = await graph.ainvoke(Command(resume="我不办了"), cfg)
+            # 关键断言:不再反问(没有新 interrupt),直接兜底收尾
+            assert not r2.get("__interrupt__")
+            assert "先不办理" in _ai_text(r2)
+            snap = await graph.aget_state(cfg)
+            notice = snap.values.get("notice") or {}
+            assert notice.get("kind") == "clarify_cancel"
+            assert _balance(db) == DEFAULT_BALANCE
+            assert _count(db, "transfer_orders") == 0
+
+    run(scenario())
+
+
 def test_wealth_subscribe_gate_then_execute(tmp_path):
     """申购全流程:关键词定位 → confirmed=False 建单(不动钱)→ confirm_wealth 闸门
     → 确认后同参数 confirmed=True 真扣款:持仓新增、余额恰好扣减、两段轨迹留痕。"""

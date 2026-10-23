@@ -21,6 +21,9 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
     {"type": "text-start", "id": "..."}                  文本块开始
     {"type": "text-delta", "id": "...", "delta": "..."}  文本增量(注意是 delta 不是 textDelta)
     {"type": "text-end", "id": "..."}                    文本块结束
+    {"type": "reasoning-start", "id": "..."}             模型原生推理开始(思维链,可折叠面板)
+    {"type": "reasoning-delta", "id": "...", "delta":…"}  推理增量(字段名同为 delta,非 textDelta)
+    {"type": "reasoning-end", "id": "..."}               推理结束
     {"type": "data-<name>", "data": {...}}               自定义数据部件(type 必须 data- 前缀;
                                                           id/transient 可选)
     {"type": "error", "errorText": "..."}                错误(字段名就是 errorText)
@@ -39,7 +42,14 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
     data-linkage-action         联动到期动作确认卡片(逐项购买闸门)
     data-plan                   生日预算计划确认卡片(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
     data-analysis-plan          Agent Core 只读分析计划卡片(目标/事实行/步骤/复盘/上次记忆,无按钮)
-    data-thinking               Agent Core 思维链(识别意图→调取记忆→制定计划→安全守卫→执行→复盘,可折叠面板)
+    data-thinking               Agent Core 编排思维链(识别意图→调取记忆→制定计划→安全守卫→
+                                执行→复盘,可折叠面板)
+                                注意:reasoning-* 与 data-thinking 是两层不同的"思考",二者并存:
+                                  reasoning-*     = 模型原生推理文本(reasoning_content),只有
+                                                    DeepSeek-R1 / GLM thinking 等推理模型才有;
+                                                    非推理模型不产生任何 reasoning 帧(优雅降级)
+                                  data-thinking   = 本服务 Agent Core 的编排进度(确定性生成,
+                                                    与模型是否推理无关)
     data-wealth-confirmation    理财确认卡片(kind=subscribe|redeem;order=产品/金额/费率/锁定期/风险/账户)
     data-card-confirmation      卡片确认卡片(kind=apply|limits|status;card=card_id/尾号/类型/当前值/目标值)
     data-contact-choices        同名联系人选项(卡片式消歧,而非开放反问)
@@ -79,7 +89,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
@@ -133,6 +143,10 @@ class ChatRequest(BaseModel):
     provider: str | None = Field(default=None, max_length=32)
     # 模型切换(可选):前端选择器选中的模型;不填走自动选型
     model: str | None = Field(default=None, max_length=64)
+    # 深度思考(可选):是否启用模型原生推理(reasoning_content)。
+    # None=后端按模型名自动判定(如 deepseek-r1 / glm-thinking);True/False 强制开/关。
+    # 前端无需改动即可生效——选推理模型时后端自动开启。
+    enable_thinking: bool | None = None
     # 登录会话(可选):注册/登录下发的 token;不带=观光模式(闲聊可用,
     # 业务意图被 auth_guard 引导登录)
     token: str | None = Field(default=None, max_length=128)
@@ -224,6 +238,31 @@ def _text_frames(text: str, chunk_size: int = TEXT_CHUNK_SIZE) -> list[str]:
             frames.append(_frame({"type": "text-delta", "id": part_id, "delta": piece}))
     frames.append(_frame({"type": "text-end", "id": part_id}))
     return frames
+
+
+def _chunk_reasoning(chunk: Any) -> str:
+    """从流式 chunk 抽取模型原生推理文本(reasoning_content),多 provider 兼容。
+
+    兼容:OpenAI 兼容(DeepSeek / 智谱 GLM thinking)的
+    additional_kwargs["reasoning_content"](字符串)或 reasoning_details(list);
+    Anthropic 风格 langchain AIMessageChunk.reasoning。
+    """
+    ak = getattr(chunk, "additional_kwargs", None) or {}
+    if isinstance(ak, dict):
+        rc = ak.get("reasoning_content")
+        if isinstance(rc, str) and rc:
+            return rc
+        rd = ak.get("reasoning_details")
+        if isinstance(rd, list):
+            txt = "".join(d.get("text", "") for d in rd if isinstance(d, dict))
+            if txt:
+                return txt
+    r = getattr(chunk, "reasoning", None)
+    if isinstance(r, str) and r:
+        return r
+    if isinstance(r, list):
+        return "".join(d.get("text", "") for d in r if isinstance(d, dict))
+    return ""
 
 
 def _snippet(text: str, needle: str, radius: int = 18) -> str:
@@ -334,6 +373,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         try:  # 跨设备同步:最后写入的设备/标签页(自己写的更新不用回拉覆盖本地卡片)
             await tconn.execute(
                 "ALTER TABLE threads ADD COLUMN last_client_id "
+                "TEXT NOT NULL DEFAULT ''")
+        except Exception:  # noqa: BLE001
+            pass
+        try:  # 深度思考:最近一条助手消息的原生推理文本(刷新后思考面板不丢)
+            await tconn.execute(
+                "ALTER TABLE threads ADD COLUMN last_reasoning "
                 "TEXT NOT NULL DEFAULT ''")
         except Exception:  # noqa: BLE001
             pass
@@ -449,6 +494,16 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 continue
             msgs.append({"id": f"m{i}", "role": role,
                          "parts": [{"type": "text", "text": content}]})
+        # 深度思考:该 thread 最近一条助手消息的原生推理文本落库在
+        # threads.last_reasoning,刷新后作为 reasoning 部件挂回最后一条
+        # 助手消息(前端 mergedReasoning 渲染思考面板)。
+        rrow = await app.state.threads.execute(
+            "SELECT last_reasoning FROM threads WHERE thread_id=?", (thread_id,))
+        rrow_row = await rrow.fetchone()
+        last_reasoning = (rrow_row[0] if rrow_row else "") or ""
+        if last_reasoning and msgs and msgs[-1]["role"] == "assistant":
+            msgs[-1]["parts"].insert(0, {"type": "reasoning",
+                                         "text": last_reasoning})
         # 本 thread 停在闸门时,把待答问题补成最后一条助手消息
         # (存在会话目录里;刷新/另一台设备恢复时不再是"没理人")
         prow = await app.state.threads.execute(
@@ -1179,6 +1234,7 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                  updated_at=excluded.updated_at,
                  pending_question='',
                  pending_payload='',
+                 last_reasoning='',
                  revision=revision+1,
                  last_client_id=excluded.last_client_id""",
             (thread_id, title or "新会话", now, now, owner, client_id))
@@ -1241,68 +1297,205 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             # BYOK/模型切换:本请求携带的 Key/端点/供应商覆盖图内所有 LLM 调用
             token = set_request_llm(api_key=req.api_key, model=req.model,
                                     base_url=base_url,
-                                    provider=req.provider)
+                                    provider=req.provider,
+                                    enable_thinking=req.enable_thinking)
+            open_text: dict[str, str] = {}
+            open_reason: dict[str, str] = {}
+            cur_text: str | None = None
+            cur_reason: str | None = None
+            streamed_nodes: set[str] = set()
+            # messages 通道去重:LLM 消息会以两种形态出现——
+            #   ① 流式模型的 AIMessageChunk(逐 token);
+            #   ② 节点经 add_messages 落状态的完整 AIMessage(回显,必现:
+            #      ask_llm 改 astream 后"token chunks + 状态回显"都走本通道)。
+            # 回显再发就是同 id 巨型 delta → 回复整体重复。非流式模型的 LLM
+            # 结果也是普通 AIMessage(带 reasoning_content,必须发),它先于
+            # 回显出现。规则:chunk 恒发;普通 AIMessage 仅当该节点"既没流过
+            # token、也没发过普通消息"时才发(= 非流式模型的 LLM 结果),
+            # 其余一律视为回显跳过。
+            streamed_any: dict[str, bool] = {}
+            plain_seen: set[str] = set()
+            # 深度思考持久化:本轮全部 reasoning 文本(刷新后 /api/history 挂回)
+            reason_saved: list[str] = []
+            # reasoning 合帧:推理模型每秒可产出几十个增量,逐帧下发会把前端
+            # 打卡(整棵消息树反复重渲染)。攒够 REASON_FLUSH_CHARS 字符才发一帧;
+            # 节点切换/推理结束由 _close 兜底清空缓冲。
+            reason_buf: dict[str, list[str]] = {}
+            REASON_FLUSH_CHARS = 60
+
+            def _flush_reason(node: str) -> list[str]:
+                buf = reason_buf.pop(node, None)
+                rid = open_reason.get(node)
+                if not buf or rid is None:
+                    return []
+                piece = "".join(buf)
+                reason_saved.append(piece)
+                return [_frame({"type": "reasoning-delta", "id": rid,
+                                "delta": piece})]
+
+            def _close(node: str) -> list[str]:
+                nonlocal cur_text, cur_reason
+                fr = _flush_reason(node)
+                t = open_text.pop(node, None)
+                if t is not None:
+                    fr.append(_frame({"type": "text-end", "id": t}))
+                r = open_reason.pop(node, None)
+                if r is not None:
+                    fr.append(_frame({"type": "reasoning-end", "id": r}))
+                if cur_text == node:
+                    cur_text = None
+                if cur_reason == node:
+                    cur_reason = None
+                return fr
+
             try:
                 # 评审修复:单轮整体 deadline(模型/工具挂起时前端 guaranteed 收到
                 # error 帧 + finish,不再无限等待;asyncio.timeout 取消底层流)
                 async with asyncio.timeout(TURN_DEADLINE_S):
-                    async for chunk in graph.astream(graph_input, cfg,
-                                                     stream_mode="updates"):
-                        for node, update in chunk.items():
-                            if node == "__interrupt__":
-                                for intr in update:
-                                    payload = intr.value if isinstance(intr.value, dict) else {}
-                                    question = str(payload.get("question") or "")
-                                    if question:
-                                        for f in _text_frames(question):
-                                            yield f
-                                    for f in await _interrupt_frames(payload, app):
+                    async for mode, data in graph.astream(
+                            graph_input, cfg,
+                            stream_mode=["messages", "updates"]):
+                        if mode == "messages":
+                            chunk, meta = data
+                            node = (meta or {}).get("langgraph_node")
+                            if node not in ANNOUNCE_NODES:
+                                continue
+                            if isinstance(chunk, AIMessageChunk):
+                                streamed_any[node] = True
+                            else:
+                                # 普通 AIMessage:LLM 结果或状态回显,二选一
+                                if node in plain_seen or streamed_any.get(node):
+                                    continue  # 状态回显,已发过
+                                plain_seen.add(node)
+                            # 推理先流:捕获模型原生 reasoning_content
+                            rtext = _chunk_reasoning(chunk)
+                            if rtext:
+                                if cur_reason is not None and cur_reason != node:
+                                    for f in _close(cur_reason):
                                         yield f
-                                    gate = {"gate_type": payload.get("type"),
-                                            "question": question}
-                                    gate_payload = payload
-                            elif node in ANNOUNCE_NODES and isinstance(update, dict):
-                                for m in update.get("messages") or []:
-                                    if isinstance(m, AIMessage) and m.content:
-                                        for f in _text_frames(str(m.content)):
+                                rid = open_reason.get(node)
+                                if rid is None:
+                                    rid = uuid4().hex
+                                    open_reason[node] = rid
+                                    yield _frame({"type": "reasoning-start", "id": rid})
+                                # 合帧下发(见 reason_buf 注释),不再逐 token 轰炸
+                                buf = reason_buf.setdefault(node, [])
+                                buf.append(rtext)
+                                if sum(len(p) for p in buf) >= REASON_FLUSH_CHARS:
+                                    for f in _flush_reason(node):
+                                        yield f
+                                cur_reason = node
+                            # 文本再流:真实逐 token
+                            ctext = (chunk.content if isinstance(chunk.content, str)
+                                     else "")
+                            if ctext:
+                                if cur_text is not None and cur_text != node:
+                                    for f in _close(cur_text):
+                                        yield f
+                                tid = open_text.get(node)
+                                if tid is None:
+                                    tid = uuid4().hex
+                                    open_text[node] = tid
+                                    yield _frame({"type": "text-start", "id": tid})
+                                    # 同节点答案开始即闭合其推理(推理先于答案)
+                                    if node in open_reason:
+                                        for f in _flush_reason(node):
                                             yield f
-                            elif node == "s_list" and isinstance(update, dict) \
-                                    and update.get("sub_view"):
-                                # 订阅清单只读无闸门:列表卡随节点更新直接下发
-                                # (与闸门卡不同,它不占 interrupt,刷新恢复时由
-                                # /api/history 的文本播报兜底)
-                                yield _frame({"type": "data-subscription-list",
-                                              "data": update["sub_view"]})
-                            elif node == "s_precheck" and isinstance(update, dict) \
-                                    and update.get("precheck_view"):
-                                # 代扣预审卡(事前知情):与订阅清单同款下发模式,
-                                # 决策按钮以普通消息回话,不占 interrupt
-                                yield _frame({"type": "data-subscription-precheck",
-                                              "data": update["precheck_view"]})
-                            elif node in ("a_exec", "a_reflect") \
-                                    and isinstance(update, dict) \
-                                    and update.get("analysis_view"):
-                                # Agent Core 只读分析卡:与订阅清单同款下发模式
-                                # (不占 interrupt)。a_exec 只在"要转交既有受闸门
-                                # 链路"时发卡,a_reflect 在只读闭环收尾时发卡,
-                                # 两条路互斥,不会重复渲染两张卡。
-                                yield _frame({"type": "data-analysis-plan",
-                                              "data": update["analysis_view"]})
-                            elif node in ("a_exec", "a_reflect", "a_report") \
-                                    and isinstance(update, dict) \
-                                    and update.get("thinking_view"):
-                                # 思维链:把 Agent Core 的"识别意图→计划→守卫→执行→
-                                # 复盘"暴露给用户。a_report 仅在分析被 Guard 拦下时
-                                # 补发(a_exec/a_reflect 已发过则不重复)。
-                                yield _frame({"type": "data-thinking",
-                                              "data": update["thinking_view"]})
+                                        yield _frame({"type": "reasoning-end",
+                                                      "id": open_reason.pop(node)})
+                                yield _frame({"type": "text-delta", "id": tid,
+                                              "delta": ctext})
+                                cur_text = node
+                            # 只有真正下发过内容才标记"已流式"。避免两种情况误伤:
+                            # ① OpenAI 流式首个 chunk 常只有 role(content=""),
+                            #    若因此被标记,updates 兜底会跳过 → 答案丢失;
+                            # ② content 非字符串(多模态 list)时 messages 侧发不出文本,
+                            #    必须留给 updates 兜底。
+                            if rtext or ctext:
+                                streamed_nodes.add(node)
+                        else:  # updates 模式:保留原 data-* / data-thinking / interrupt 逻辑
+                            for node, update in data.items():
+                                if node == "__interrupt__":
+                                    for intr in update:
+                                        payload = intr.value if isinstance(intr.value, dict) else {}
+                                        question = str(payload.get("question") or "")
+                                        if question:
+                                            for f in _text_frames(question):
+                                                yield f
+                                        for f in await _interrupt_frames(payload, app):
+                                            yield f
+                                        gate = {"gate_type": payload.get("type"),
+                                                "question": question}
+                                        gate_payload = payload
+                                elif node in ANNOUNCE_NODES and isinstance(update, dict):
+                                    if node in streamed_nodes:
+                                        continue  # 已通过 messages 逐字下发,避免重复
+                                    for m in update.get("messages") or []:
+                                        if isinstance(m, AIMessage):
+                                            rtext = _chunk_reasoning(m)
+                                            if rtext:
+                                                reason_saved.append(rtext)
+                                                rid = uuid4().hex
+                                                yield _frame({"type": "reasoning-start",
+                                                              "id": rid})
+                                                yield _frame({"type": "reasoning-delta",
+                                                              "id": rid, "delta": rtext})
+                                                yield _frame({"type": "reasoning-end",
+                                                              "id": rid})
+                                            if m.content:
+                                                for f in _text_frames(str(m.content)):
+                                                    yield f
+                                elif node == "s_list" and isinstance(update, dict) \
+                                        and update.get("sub_view"):
+                                    # 订阅清单只读无闸门:列表卡随节点更新直接下发
+                                    # (与闸门卡不同,它不占 interrupt,刷新恢复时由
+                                    # /api/history 的文本播报兜底)
+                                    yield _frame({"type": "data-subscription-list",
+                                                  "data": update["sub_view"]})
+                                elif node == "s_precheck" and isinstance(update, dict) \
+                                        and update.get("precheck_view"):
+                                    # 代扣预审卡(事前知情):与订阅清单同款下发模式,
+                                    # 决策按钮以普通消息回话,不占 interrupt
+                                    yield _frame({"type": "data-subscription-precheck",
+                                                  "data": update["precheck_view"]})
+                                elif node in ("a_exec", "a_reflect") \
+                                        and isinstance(update, dict) \
+                                        and update.get("analysis_view"):
+                                    # Agent Core 只读分析卡:与订阅清单同款下发模式
+                                    # (不占 interrupt)。a_exec 只在"要转交既有受闸门
+                                    # 链路"时发卡,a_reflect 在只读闭环收尾时发卡,
+                                    # 两条路互斥,不会重复渲染两张卡。
+                                    yield _frame({"type": "data-analysis-plan",
+                                                  "data": update["analysis_view"]})
+                                elif node in ("a_perceive", "a_plan", "a_exec",
+                                              "a_reflect") \
+                                        and isinstance(update, dict) \
+                                        and update.get("thinking_view"):
+                                    # 思维链:把 Agent Core 的"识别意图→计划→守卫→执行→
+                                    # 复盘"按节点真实进度流式暴露给用户。a_perceive 最早
+                                    # 发"识别意图",a_plan 补全规划与守卫,a_exec 追加执行,
+                                    # a_reflect 收尾复盘——每帧都是累计全貌,前端合并成
+                                    # 一个实时生长的面板。
+                                    yield _frame({"type": "data-thinking",
+                                                  "data": update["thinking_view"]})
+                    # 收尾:闭合所有仍开着的 part,避免前端 part 永远处于 streaming
+                    for node in list(open_text) + list(open_reason):
+                        for f in _close(node):
+                            yield f
             except TimeoutError:
+                # 先闭合仍开着的 part,避免前端永远停在"生成中"
+                for node in list(open_text) + list(open_reason):
+                    for f in _close(node):
+                        yield f
                 yield _frame({"type": "error",
                               "errorText": f"本轮处理超时(>{TURN_DEADLINE_S:.0f}秒),"
                                            "已中止;如需继续请重新发起。"})
                 yield _frame({"type": "finish", "finishReason": "error"})
                 return
             except Exception as exc:  # noqa: BLE001 —— 流式响应里必须转成 error 帧
+                for node in list(open_text) + list(open_reason):
+                    for f in _close(node):
+                        yield f
                 yield _frame({"type": "error",
                               "errorText": f"{type(exc).__name__}: {exc}"})
                 yield _frame({"type": "finish", "finishReason": "error"})
@@ -1334,6 +1527,17 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 except Exception:  # noqa: BLE001 —— 补记失败不影响本轮收尾
                     pass
             # 本轮结束再推一次版本:另一台设备据此拉取完整助手文本/待答问题
+            # 深度思考落库:思考文本存 threads.last_reasoning,刷新后
+            # /api/history 把它作为 reasoning 部件挂回最后一条助手消息
+            # (新回合开始时 _touch_thread 会清空,只保留最近一轮)。
+            if reason_saved:
+                try:
+                    await app.state.threads.execute(
+                        "UPDATE threads SET last_reasoning=? WHERE thread_id=?",
+                        ("".join(reason_saved)[-8000:], req.thread_id))
+                    await app.state.threads.commit()
+                except Exception:  # noqa: BLE001 —— 落库失败不影响回复
+                    pass
             try:
                 await _bump_thread(req.thread_id, uid or 0,
                                    req.client_id or "")

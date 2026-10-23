@@ -26,6 +26,7 @@ langgraph-checkpoint-sqlite>=3.1.1,<4   # AsyncSqliteSaver (thread resume; sync 
 langchain-core>=1.6.3,<2
 langchain-mcp-adapters>=0.3.2,<0.4      # pins mcp>=1.24,<2.0 -- never co-install with fastmcp 4.x
 langchain-openai>=1.6.2,<2              # OpenAI-compatible endpoint used by get_llm() (Zhipu GLM)
+langchain-deepseek>=1.0,<2              # DeepSeek adapter; streams reasoning_content for the thinking panel
 aiosqlite>=0.22.1,<1                    # AsyncSqliteSaver backend, used directly by agent/graph.py
 httpx>=0.28.1,<1                        # needed by fastapi.testclient streaming endpoint tests
 
