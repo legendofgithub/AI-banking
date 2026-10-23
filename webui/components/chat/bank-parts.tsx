@@ -1338,14 +1338,70 @@ const SLOT_LABELS: Record<string, string> = {
   to: "收款人",
 };
 
-function AskSlot({ data }: { data: { missing?: string[] } }) {
+function AskSlot({ data }: { data: { missing?: string[]; options?: string[] } }) {
+  const { answered, busy, reply } = useGateReply();
+  const [other, setOther] = useState("");
+  const disabled = answered || busy;
   const missing = (data.missing ?? []).map((slot) =>
     // 风险测评缺槽令牌带题号(assess_qN,graph.py w_extract 注释),统一显示中文
     slot.startsWith("assess_q") ? "风险测评答案" : (SLOT_LABELS[slot] ?? slot)
   );
+  const options = data.options ?? [];
+  const sendOther = useCallback(() => {
+    const text = other.trim();
+    if (text) {
+      reply(text);
+    }
+  }, [other, reply]);
   return (
-    <div className="w-fit rounded-xl border border-blue-200/70 bg-blue-50/60 px-3 py-2 text-[13px] text-blue-700 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-300">
-      还差:{missing.join("、")} —— 直接回复补充即可
+    <div className="w-fit max-w-full rounded-xl border border-blue-200/70 bg-blue-50/60 px-3 py-2 text-[13px] text-blue-700 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-300">
+      还差:{missing.join("、")}
+      {options.length > 0 ? (
+        <>
+          {/*
+           * 枚举型反问:选项点击即以该文本回话(免打字,走 useGateReply 与
+           * 闸门卡同一条发送链路);底部固定一个「其他」自由输入区——选项
+           * 没覆盖的需求仍可用自然语言描述,两种入口二选一。
+           */}
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {options.map((option) => (
+              <button
+                className="rounded-full border border-blue-300/80 bg-white/80 px-3 py-1 text-[12px] transition hover:border-blue-500 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-500/40 dark:bg-blue-900/30 dark:hover:bg-blue-900/60"
+                disabled={disabled}
+                key={option}
+                onClick={() => reply(option)}
+                type="button"
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5">
+            <input
+              className="min-w-0 flex-1 rounded-lg border border-blue-300/70 bg-white/80 px-2 py-1 text-[12px] outline-none transition placeholder:text-blue-400 focus:border-blue-500 disabled:opacity-50 dark:border-blue-500/40 dark:bg-blue-950/40"
+              disabled={disabled}
+              onChange={(e) => setOther(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  sendOther();
+                }
+              }}
+              placeholder="其他:直接输入你想办的业务"
+              value={other}
+            />
+            <button
+              className="shrink-0 rounded-lg bg-blue-600 px-2.5 py-1 text-[12px] text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={disabled || !other.trim()}
+              onClick={sendOther}
+              type="button"
+            >
+              发送
+            </button>
+          </div>
+        </>
+      ) : (
+        <span className="ml-1">直接回复补充即可</span>
+      )}
     </div>
   );
 }
@@ -1559,7 +1615,11 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
     return null;
   }
   if (type === "data-ask-slot") {
-    return <AskSlot data={(data ?? {}) as { missing?: string[] }} />;
+    return (
+      <AskSlot
+        data={(data ?? {}) as { missing?: string[]; options?: string[] }}
+      />
+    );
   }
   if (type === "data-gate-pending") {
     // 不再渲染黄胶囊:确认卡已有按钮、播报也已说明如何确认/取消,底部再挂
