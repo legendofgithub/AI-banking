@@ -94,6 +94,8 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from agent import auth as auth_mod
+from agent import memory as memory_mod
+from agent import tasks as tasks_mod
 from agent.bank import BankTools, load_bank_tools
 from agent.graph import build_agent_graph, make_sqlite_checkpointer
 from bank_core.db import migrate_cards_bound
@@ -814,6 +816,40 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             "created_at": r["created_at"],
             "scheduled_at": r["scheduled_at"] or "",
         } for r in rows]}
+
+    # ------------------------------------------------ Agent 记忆检阅(view/delete)
+    # 参考 Anthropic memory tool:按主题"一档一文件"、人类可读、可看可删。
+    # 记忆是用户个人数据,只作用于本人(自作用域),未登录 401。
+    @app.get("/api/memory")
+    async def agent_memory(
+            x_bank_token: str | None = Header(default=None)) -> dict:
+        """当前用户全部长期记忆(画像置顶,含渲染行与更新时间)+长程任务轨道。
+
+        「Agent 记忆」弹窗的数据源;库异常软处理返回空列表,绝不 500。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "未登录或会话过期"})
+        return {"modules": memory_mod.memory_overview(me["user_id"]),
+                "active_task": tasks_mod.get_active_task(me["user_id"])}
+
+    @app.delete("/api/memory/{module}")
+    async def forget_memory(module: str,
+                            x_bank_token: str | None = Header(default=None)) -> dict:
+        """忘记一个模块的记忆(用户对记忆有完全控制权)。
+
+        白名单校验;返回剩余模块与任务轨道,前端原地刷新。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "未登录或会话过期"})
+        if module not in memory_mod.MEMORY_MODULES:
+            return JSONResponse(status_code=404, content={"error": "未知记忆模块"})
+        memory_mod.forget(me["user_id"], module)
+        return {"modules": memory_mod.memory_overview(me["user_id"]),
+                "active_task": tasks_mod.get_active_task(me["user_id"])}
 
     @app.get("/api/orders/{order_id}/receipt")
     async def order_receipt(order_id: int,

@@ -1051,3 +1051,38 @@ def test_order_receipt_audit_chain(tmp_path):
         assert client.get(f"/api/orders/{oid}/receipt").status_code == 401
         assert client.get("/api/orders/99999/receipt",
                           headers={"x-bank-token": tok}).status_code == 404
+
+
+# ----------------------------------------------------------------- 记忆检阅入口(2026-10-23)
+
+def test_memory_view_and_forget_endpoints(tmp_path, monkeypatch):
+    """「Agent 记忆」弹窗数据源:GET /api_memory(view)画像置顶+长程任务轨道;
+    DELETE(忘记)自作用域;未登录 401、未知模块 404。"""
+    # 任务库指到 tmp(conftest 只隔离了记忆库)
+    monkeypatch.setenv("AGENT_TASKS_DB", str(tmp_path / "api_tasks.sqlite"))
+    from agent import memory as memory_mod, tasks as tasks_mod
+    tasks_mod.create_task(1, goal="生日存钱", target_yuan="600",
+                          deadline="2026-12-01")
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    headers = {"x-bank-token": tok}
+    with client:
+        # 未登录 401(记忆是个人数据)
+        assert client.get("/api/memory").status_code == 401
+        assert client.delete("/api/memory/bill").status_code == 401
+        memory_mod.remember(1, "profile", {"risk_level": "稳健"})
+        memory_mod.remember(1, "bill", {"top_category": "餐饮"})
+        r = client.get("/api/memory", headers=headers)
+        assert r.status_code == 200
+        body = r.json()
+        mods = body["modules"]
+        assert [m["module"] for m in mods] == ["profile", "bill"]  # 画像置顶
+        assert mods[0]["label"] == "用户画像"
+        assert mods[0]["lines"] == ["风险偏好：稳健"]
+        assert mods[0]["updated_at"]  # 留痕:什么时候记的
+        assert body["active_task"]["goal"] == "生日存钱"  # 长程任务轨道
+        # 忘记一个模块 → 返回剩余;未知模块 404
+        r = client.delete("/api/memory/bill", headers=headers)
+        assert [m["module"] for m in r.json()["modules"]] == ["profile"]
+        assert memory_mod.recall(1, "bill") is None
+        assert client.delete("/api/memory/随便写",
+                             headers=headers).status_code == 404
