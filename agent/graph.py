@@ -1125,6 +1125,17 @@ def _bill_slot_question(missing: list[str]) -> str:
     return "想看哪种账单报告、哪个时间范围?"
 
 
+# 反问选项(确定性文案,点击即以该文本回话,经既有抽取器解析回槽位——
+# 文案措辞必须落在各抽取器的判定规则内,改动需同步核对)
+def _bill_options(missing: list[str]) -> list[str]:
+    if "ask" in missing:
+        return ["看月度收支月报", "看消费分类占比", "看消费Top商户",
+                "查异常可疑交易"]
+    if "period" in missing:
+        return ["上个月", "这个月", "最近三个月"]
+    return []
+
+
 def _wealth_slot_question(missing: list[str]) -> str:
     m = str(missing[0]) if missing else ""
     if m.startswith("assess_q"):  # 测评题号编码在缺槽令牌里(见 w_extract 注释)
@@ -1143,6 +1154,15 @@ def _wealth_slot_question(missing: list[str]) -> str:
     return "请补充理财业务信息。"
 
 
+def _wealth_options(missing: list[str]) -> list[str]:
+    m = str(missing[0]) if missing else ""
+    if m.startswith("assess_q"):  # 测评题 1-5 档,点击即作答
+        return ["1", "2", "3", "4", "5"]
+    if "action" in missing:
+        return ["推荐适合我的产品", "做风险测评", "申购理财产品", "赎回我的持仓"]
+    return []
+
+
 def _card_slot_question(missing: list[str]) -> str:
     if "card" in missing:
         # 工厂问句只拿得到缺槽键名,带不出库内清单;改为线索式反问,
@@ -1158,6 +1178,16 @@ def _card_slot_question(missing: list[str]) -> str:
     if "action" in missing:
         return "想办理哪类卡片业务?可以说:看卡 / 办卡 / 调限额 / 锁卡解锁挂失。"
     return "请补充卡片业务信息。"
+
+
+def _card_options(missing: list[str]) -> list[str]:
+    if "card_type" in missing:
+        return ["借记卡", "信用卡"]
+    if "status_target" in missing:
+        return ["锁定这张卡", "解锁这张卡", "挂失这张卡"]
+    if "action" in missing:
+        return ["查看我的卡片", "办一张新卡", "调整卡片限额", "锁卡/解锁/挂失"]
+    return []
 
 
 # ---------------------------------------------------------------- 新管线闸门文案/视图(确定性)
@@ -1234,6 +1264,12 @@ def _sub_slot_question(missing: list[str]) -> str:
     return "想查看订阅清单、处理即将扣费(订阅预审),还是取消某个自动扣费?"
 
 
+def _sub_options(missing: list[str]) -> list[str]:
+    if "merchant" in missing:
+        return ["查我的订阅清单"]  # 具体商户是自由输入,给一个引导型快捷项
+    return ["查我的订阅清单", "取消某个自动扣费", "查看即将扣费(订阅预审)"]
+
+
 def _sub_confirm_question(s: dict) -> str:
     v = s.get("sub") or {}
     return (f"确认取消「{v.get('merchant_name')}」的自动扣费?"
@@ -1257,12 +1293,15 @@ _CLARIFY_CANCEL_WORDS = ("不办", "不弄", "不做", "不用", "不搞", "算�
                          "暂不", "取消", "不想要")
 
 
-def _make_clarify_node(missing_key: str, question_of):
+def _make_clarify_node(missing_key: str, question_of, options_of=None):
     """缺槽反问节点工厂(t/sb/c 三份 clarify 共用),控制流与原三份逐行等价。
 
-    踩坑(评审修复):递归上限对 interrupt-resume 循环无效,每次 resume 都
-    重新计数,必须状态里显式封顶,超限放弃并兜底话术收尾;载荷
+    踩坑(评审修复):递归上限对 interrupt-resume 循环无效,每次 resume 重新
+    计数,必须在状态里显式封顶,超限放弃并兜底话术收尾;载荷
     {"type": "ask_slot", question, missing} 是 data-ask-slot 部件的前端契约。
+    options_of(missing) → list[str]:枚举型反问附带可点选的选项按钮
+    (前端 AskSlot 渲染,点击即以该选项文本回话,免打字);自由输入型反问
+    不传 options_of,载荷不带 options 键,前端只显示文本框。
     """
 
     async def clarify(state: AgentState) -> dict:
@@ -1271,8 +1310,13 @@ def _make_clarify_node(missing_key: str, question_of):
             return {"notice": {"kind": "clarify_gaveup", "asked": round_no}}
         missing = state.get(missing_key) or []
         question = question_of(missing)
-        answer = interrupt({"type": "ask_slot", "question": question,
-                            "missing": missing})
+        payload: dict = {"type": "ask_slot", "question": question,
+                         "missing": missing}
+        if options_of is not None:
+            options = options_of(missing)
+            if options:
+                payload["options"] = [str(o) for o in options]
+        answer = interrupt(payload)
         answer_text = str(answer or "")
         # 放弃检测(确定性,不依赖 LLM):用户说"不办了/算了/取消"等 → 立即按
         # "本次不办理"收尾。此前这类回答会被当普通槽位送回抽取节点重新抽取,
@@ -2103,7 +2147,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             draft["period_parsed"] = parsed_period
         return {"bill_slots": draft, "bill_missing": missing}
 
-    b_clarify = _make_clarify_node("bill_missing", _bill_slot_question)
+    b_clarify = _make_clarify_node("bill_missing", _bill_slot_question,
+                               _bill_options)
 
     async def b_run(state: AgentState) -> dict:
         draft = state.get("bill_slots") or {}
@@ -2202,7 +2247,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                 update["wealth_missing"] = [f"assess_q{len(ans) + 1}"]
         return update
 
-    w_clarify = _make_clarify_node("wealth_missing", _wealth_slot_question)
+    w_clarify = _make_clarify_node("wealth_missing", _wealth_slot_question,
+                               _wealth_options)
 
     async def w_query(state: AgentState) -> dict:
         draft = state.get("wealth") or {}
@@ -2566,7 +2612,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             missing.append("status_target")
         return {"card": draft, "card_missing": missing, "bank_calls": calls}
 
-    k_clarify = _make_clarify_node("card_missing", _card_slot_question)
+    k_clarify = _make_clarify_node("card_missing", _card_slot_question,
+                               _card_options)
 
     async def k_list(state: AgentState) -> dict:
         res = await tools.call("list_cards")
@@ -2728,7 +2775,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             missing.append("merchant")
         return {"sub": draft, "sub_missing": missing}
 
-    s_clarify = _make_clarify_node("sub_missing", _sub_slot_question)
+    s_clarify = _make_clarify_node("sub_missing", _sub_slot_question,
+                               _sub_options)
 
     async def s_list(state: AgentState) -> dict:
         calls: list[dict] = []

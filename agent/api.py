@@ -1609,8 +1609,11 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             return [{"type": "data-plan",
                             "data": {**(payload.get("plan") or {}), "pay_required": False}}]
         if ptype == "ask_slot":
+            # options:枚举型反问的可点选项(graph 各 *_options 提供,可缺省);
+            # 前端 AskSlot 渲染选项按钮 + 「其他」自由输入区
             return [{"type": "data-ask-slot",
-                            "data": {"missing": payload.get("missing") or []}}]
+                            "data": {"missing": payload.get("missing") or [],
+                                     "options": payload.get("options") or []}}]
         return []  # 未知类型只发问题文本,不臆造部件
 
     async def _interrupt_frames(payload: dict, app: FastAPI) -> list[str]:
