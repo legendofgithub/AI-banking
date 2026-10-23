@@ -5,6 +5,7 @@ import { AppSidebar } from "@/components/chat/app-sidebar";
 import { BoundCardsDialog } from "@/components/chat/bound-cards-dialog";
 import { DataStreamProvider } from "@/components/chat/data-stream-provider";
 import { DepositDialog } from "@/components/chat/deposit-dialog";
+import { MemoryDialog } from "@/components/chat/memory-dialog";
 import { ModelSettingsDialog } from "@/components/chat/model-settings-dialog";
 import { ChatShell } from "@/components/chat/shell";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -60,6 +61,7 @@ async function SidebarShell({ children }: { children: React.ReactNode }) {
       <ModelSettingsDialog />
       <DepositDialog />
       <BoundCardsDialog />
+      <MemoryDialog />
     </ChatModelProvider>
   );
 }
