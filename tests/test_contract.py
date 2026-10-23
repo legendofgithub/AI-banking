@@ -46,6 +46,11 @@ BANK_PARTS = ROOT / "webui" / "components" / "chat" / "bank-parts.tsx"
 RE_GATE_TYPE = re.compile(r'_make_gate_node\(\s*"([a-z_]+)"')
 # 2. 直接字面量 interrupt:反查缺槽(ask_slot)与同名消歧(pick_contact)
 RE_INTERRUPT_LITERAL = re.compile(r'interrupt\(\{\s*"type":\s*"([a-z_]+)"')
+# 3. 先建载荷变量再 interrupt:载荷需要条件追加字段时的写法(2026-10-23 起缺槽
+#    澄清要按槽位带 options 按钮,payload 改写为变量,原字面量正则漏掉 ask_slot,
+#    误报"api 映射了孤儿类型")。只认 `payload: dict = {"type": ...}` 这一种显式
+#    形态,不放宽到任意 dict 字面量,避免把 data-* 部件类型误当闸门。
+RE_INTERRUPT_PAYLOAD = re.compile(r'payload:\s*dict\s*=\s*\{\s*"type":\s*"([a-z_]+)"')
 
 # ---- api.py:处理了哪些闸门类型 / 发出哪些 data-* -----------------------------
 RE_API_HANDLED = re.compile(r'ptype\s*==\s*"([a-z_]+)"')
@@ -71,7 +76,9 @@ def _read(path: Path) -> str:
 def _gate_types_in_graph() -> set[str]:
     """graph.py 会抛出的全部闸门载荷类型。"""
     src = _read(GRAPH_PY)
-    return set(RE_GATE_TYPE.findall(src)) | set(RE_INTERRUPT_LITERAL.findall(src))
+    return (set(RE_GATE_TYPE.findall(src))
+            | set(RE_INTERRUPT_LITERAL.findall(src))
+            | set(RE_INTERRUPT_PAYLOAD.findall(src)))
 
 
 def _gate_types_handled_by_api() -> set[str]:

@@ -48,39 +48,36 @@ DEFAULT_BALANCE = 1_000_000  # 1 万元(整数分)
 
 # ----------------------------------------------------------------- 基础设施
 
-def _mk_db(tmp_path: Path, balance_cents: int = DEFAULT_BALANCE) -> Path:
+def _mk_db(tmp_path: Path, balance_cents: int = DEFAULT_BALANCE,
+           name: str = "bank.db") -> Path:
     """建临时银行库:1 用户 + 1 checking 账户 + 3 联系人(林悦同名 ×2)。
 
-    以子进程 + BANK_CORE_DB 环境变量初始化 bank_core(它导入时读该变量),
-    不触碰默认 data/bank.db。
-    """
-    import os
-    import subprocess
-    import sys
+    进程内直接 `init_db(path)` 写库,不触碰默认 data/bank.db。
 
-    db = tmp_path / "bank.db"
-    env = {**os.environ, "BANK_CORE_DB": str(db)}
-    script = (
-        "from bank_core.db import init_db\n"
-        "import sys\n"
-        "c = init_db(sys.argv[1])\n"
-        "c.execute(\"INSERT INTO users (id,name,phone,created_at) "
-        "VALUES (1,'测试用户','13800000000','2026-01-01T00:00:00')\")\n"
-        f"c.execute(\"INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
-        f"VALUES (1,1,'checking','工资卡',{balance_cents},'2026-01-01T00:00:00')\")\n"
-        "c.execute(\"INSERT INTO contacts (id,user_id,name,phone,relation,note) "
-        "VALUES (1,1,'林悦','13900008821','spouse','招商银行 尾号8821')\")\n"
-        "c.execute(\"INSERT INTO contacts (id,user_id,name,phone,relation,note) "
-        "VALUES (2,1,'林悦','13711112222','friend','建设银行 尾号2222')\")\n"
-        "c.execute(\"INSERT INTO contacts (id,user_id,name,phone,relation,note) "
-        "VALUES (3,1,'张三','13633334444','colleague','')\")\n"
-        "c.commit(); c.close()\n"
-    )
-    proc = subprocess.run(  # noqa: S603
-        [sys.executable, "-c", script, str(db)],
-        cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=120)
-    assert proc.returncode == 0, f"临时库初始化失败:\n{proc.stdout}\n{proc.stderr}"
+    历史写法是用 `subprocess.run([python, "-c", ...])` 起子进程建库,
+    理由是"bank_core 导入时读 BANK_CORE_DB 环境变量"——该理由已失效:
+    `bank_core/db.py::default_db_path()` 改成**调用点延迟解析**,
+    且 `init_db()` 本就收显式路径参数,与进程环境无关。
+    每次子进程建库固定花掉约 2.5s(解释器 + import fastmcp/bank_core),
+    本文件 30 处调用累计约 75s,是本文件耗时第二名。改进程内后降为毫秒级。
+    """
+    from bank_core.db import init_db
+
+    db = tmp_path / name
+    c = init_db(db)
+    c.execute("INSERT INTO users (id,name,phone,created_at) "
+              "VALUES (1,'测试用户','13800000000','2026-01-01T00:00:00')")
+    c.execute("INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
+              "VALUES (1,1,'checking','工资卡',?,'2026-01-01T00:00:00')",
+              (balance_cents,))
+    c.execute("INSERT INTO contacts (id,user_id,name,phone,relation,note) "
+              "VALUES (1,1,'林悦','13900008821','spouse','招商银行 尾号8821')")
+    c.execute("INSERT INTO contacts (id,user_id,name,phone,relation,note) "
+              "VALUES (2,1,'林悦','13711112222','friend','建设银行 尾号2222')")
+    c.execute("INSERT INTO contacts (id,user_id,name,phone,relation,note) "
+              "VALUES (3,1,'张三','13633334444','colleague','')")
+    c.commit()
+    c.close()
     # 登录态预置:user1 的 auth 行(登录密码 Demo@12345 / 支付密码 888888)。
     # 动钱/敏感闸门走 verify_pay_password 真实核验,测试应答用 "888888"。
     from bank_core.auth_core import hash_password as _hp
@@ -534,42 +531,15 @@ _LINK_ACTIONS_JSON = json.dumps(
 def _mk_linkage_db(tmp_path: Path) -> Path:
     """联动测试库:1 用户 + checking/savings 两账户(linkage 锁定单要求有理财专户)。
 
-    照 _mk_db 的子进程初始化写法(避免库结构漂移),只是多插一行 savings 账户。
+    复用 `_mk_db` 的标准装配(用户/账户/联系人/登录态),只额外补一行 savings,
+    避免两份脚本各写一套 SQL 造成库结构漂移。
     """
-    import os
-    import subprocess
-    import sys
-
-    db = tmp_path / "bank_linkage.db"
-    env = {**os.environ, "BANK_CORE_DB": str(db)}
-    script = (
-        "from bank_core.db import init_db\n"
-        "import sys\n"
-        "c = init_db(sys.argv[1])\n"
-        "c.execute(\"INSERT INTO users (id,name,phone,created_at) "
-        "VALUES (1,'测试用户','13800000000','2026-01-01T00:00:00')\")\n"
-        f"c.execute(\"INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
-        f"VALUES (1,1,'checking','工资卡',{DEFAULT_BALANCE},'2026-01-01T00:00:00')\")\n"
-        f"c.execute(\"INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
-        f"VALUES (2,1,'savings','理财专户',0,'2026-01-01T00:00:00')\")\n"
-        "c.commit(); c.close()\n"
-    )
-    proc = subprocess.run(  # noqa: S603
-        [sys.executable, "-c", script, str(db)],
-        cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=120)
-    assert proc.returncode == 0, f"临时库初始化失败:\n{proc.stdout}\n{proc.stderr}"
-    # 登录态预置:user1 的 auth 行(登录密码 Demo@12345 / 支付密码 888888)。
-    # 动钱/敏感闸门走 verify_pay_password 真实核验,测试应答用 "888888"。
-    from bank_core.auth_core import hash_password as _hp
-    ac = sqlite3.connect(db)
-    ac.execute(
-        "INSERT INTO auth_users (user_id, identifier, identifier_type, "
-        "password_hash, pay_hash, created_at) VALUES "
-        "(1,'13800000000','phone',?,?,'2026-01-01T00:00:00')",
-        (_hp("Demo@12345"), _hp("888888")))
-    ac.commit()
-    ac.close()
+    db = _mk_db(tmp_path, name="bank_linkage.db")
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
+              "VALUES (2,1,'savings','理财专户',0,'2026-01-01T00:00:00')")
+    c.commit()
+    c.close()
     return db
 
 
