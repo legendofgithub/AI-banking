@@ -3446,6 +3446,22 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                 "needs_assessment": bool(wealth.get("needs_assessment")),
                 "at": datetime.now().isoformat(timespec="seconds"),
             })
+        # 用户画像(profile):跨技能聚合的"关于这个人"短摘要——检阅入口的置顶
+        # 画像卡与计划卡画像提示都读它;浅合并只更新本次技能覆盖到的键。
+        if bill or wealth:
+            profile_patch: dict = {
+                "at": datetime.now().isoformat(timespec="seconds")}
+            if bill:
+                profile_patch["top_category"] = str(top.get("category") or "")
+                profile_patch["subscription_count"] = len(
+                    bill.get("subscriptions") or [])
+            if wealth:
+                profile_patch["risk_level"] = str(profile.get("level") or "")
+                profile_patch["preferred_type"] = top_holding
+                profile_patch["holding_count"] = len(holdings)
+                profile_patch["needs_assessment"] = bool(
+                    wealth.get("needs_assessment"))
+            memory_mod.merge(uid, "profile", profile_patch)
 
         plan = core_mod.add_trace(plan, "reflect", status=reflection.status,
                                   note=reflection.summary)

@@ -2109,6 +2109,11 @@ def test_core_bill_analysis_read_only_and_remembered(tmp_path):
             bill_mem = memory.recall(1, "bill") or {}
             assert bill_mem.get("top_category") == "餐饮"
             assert memory.recall(1, "plan_history")
+            # 画像(profile):跨技能聚合摘要接线——本次只跑了账单,
+            # 所以画像里有消费大头、没有风险等级(浅合并只更新覆盖到的键)
+            prof_mem = memory.recall(1, "profile") or {}
+            assert prof_mem.get("top_category") == "餐饮"
+            assert "risk_level" not in prof_mem
             # 思维链:data-thinking 由 a_reflect 发射,暴露在最终状态里
             think = r.get("thinking_view") or {}
             thoughts = think.get("thoughts") or []
@@ -2172,8 +2177,27 @@ def test_core_plan_combines_two_skills(tmp_path):
             # 两个技能的经验都写进记忆
             assert memory.recall(1, "bill")
             assert memory.recall(1, "wealth")
+            # 画像同时聚合两个技能的要素
+            prof_mem = memory.recall(1, "profile") or {}
+            assert prof_mem.get("top_category")
+            assert prof_mem.get("risk_level")
 
     run(scenario())
+
+
+def test_birthday_cut_cancel_cleans_stale_merchant_key(tmp_path):
+    """订阅从"保留"变"取消"后,上次的 rejected_cut_merchant 不再残留
+    (merge 删键语义;检阅入口直接展示这些字段,过期数据不能留)。"""
+    from agent.graph import _birthday_patch, _remember_birthday
+    memory.remember(1, "birthday",
+                    {"rejected_cut": True, "rejected_cut_merchant": "爱奇艺视频"})
+    state = {"plan_draft": {"recommended_budget_yuan": "500", "goal": "生日存钱"},
+             "plan_cut": {"status": "cancelled", "merchant": "腾讯视频"}}
+    _remember_birthday(1, _birthday_patch(state, "done"))
+    stored = memory.recall(1, "birthday") or {}
+    assert stored["rejected_cut"] is False
+    assert "rejected_cut_merchant" not in stored
+    assert stored["accepted_cut_merchant"] == "腾讯视频"
 
 
 def test_core_replans_only_the_failed_step(tmp_path):
