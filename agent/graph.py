@@ -914,9 +914,13 @@ def _birthday_patch(state: AgentState, result: str) -> dict:
     if status == "cancelled":  # 订阅确实取消了:下次仍可推荐
         patch["accepted_cut_merchant"] = merchant
         patch["rejected_cut"] = False
+        # 删掉上次"保留订阅"留下的过期商家名(merge 的 None=删键语义):
+        # 记忆检阅入口会直接展示这些字段,过期数据不能再留
+        patch["rejected_cut_merchant"] = None
     elif status == "kept":     # 保留订阅:下次默认不再推荐砍单
         patch["rejected_cut"] = True
         patch["rejected_cut_merchant"] = merchant
+        patch["accepted_cut_merchant"] = None
     return patch
 
 

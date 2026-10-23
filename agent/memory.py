@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 from datetime import datetime
@@ -31,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_log = logging.getLogger("agent.memory")
 
 # 记忆模块枚举：写库前做白名单校验，防止把任意字符串当成 module 污染库
 MEMORY_MODULES: frozenset[str] = frozenset({
@@ -85,17 +88,28 @@ def _valid_user_id(user_id: Any) -> int | None:
 
 
 def _connect(create: bool = True) -> sqlite3.Connection | None:
-    """打开记忆库；任何异常都返回 None（调用方按"记忆不可用"处理）。"""
+    """打开记忆库；任何异常都返回 None（调用方按"记忆不可用"处理）。
+
+    - WAL：默认 journal 模式下并发写会锁库 5 秒后被"软处理"吞掉，等于记忆
+      **静默丢失**；WAL 让读写不互斥（*.sqlite-wal/-shm 已被 .gitignore 拦截）。
+    - 纯读（create=False）先判文件存在：sqlite3.connect 对不存在的路径也会
+      建出空库文件，读路径不该留这种副作用。
+    """
     path = db_path()
     try:
         if create:
             path.parent.mkdir(parents=True, exist_ok=True)
+        elif not path.exists():
+            return None
         conn = sqlite3.connect(str(path), timeout=5)
         if create:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_CREATE_SQL)
             conn.commit()
         return conn
     except Exception:  # noqa: BLE001 —— 记忆不可用不能连带炸掉主流程
+        _log.warning("记忆库连接失败 path=%s create=%s", path, create, exc_info=True)
         return None
 
 
@@ -164,6 +178,7 @@ def remember(user_id: Any, module: str, content: dict) -> bool:
     try:
         payload = json.dumps(content, ensure_ascii=False, default=str)
     except Exception:  # noqa: BLE001
+        _log.warning("记忆序列化失败 uid=%s module=%s", uid, module, exc_info=True)
         return False
     conn = _connect(create=True)
     if conn is None:
@@ -177,7 +192,8 @@ def remember(user_id: Any, module: str, content: dict) -> bool:
             (uid, module, payload, _now_iso()))
         conn.commit()
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 —— 软处理但必须留痕，否则现场静默丢记忆无法排查
+        _log.warning("记忆写入失败 uid=%s module=%s", uid, module, exc_info=True)
         return False
     finally:
         try:
@@ -187,15 +203,62 @@ def remember(user_id: Any, module: str, content: dict) -> bool:
 
 
 def merge(user_id: Any, module: str, patch: dict) -> dict:
-    """在既有记忆上打补丁（浅合并一层），返回合并后的内容（写失败也返回合并值）。"""
-    base = recall(user_id, module) or {}
-    merged = {**base, **{k: v for k, v in patch.items()}}
-    remember(user_id, module, merged)
-    return merged
+    """在既有记忆上打补丁（浅合并一层），返回合并后的内容（写失败也返回合并值）。
+
+    - 读 + 合并 + 写在**同一连接同一事务**（BEGIN IMMEDIATE）里完成：并发回合
+      同时 merge 不再是"各自读到旧值、后写覆盖先写"的丢更新竞态。
+    - 删键语义（参考 Anthropic memory tool 的 str_replace/delete）：patch 里值
+      为 ``None`` 的键表示**删除该键**（合并结果里不保留），用于清理过期字段。
+    """
+    uid = _valid_user_id(user_id)
+    if not isinstance(patch, dict):
+        patch = {}
+    if uid is None or module not in MEMORY_MODULES:
+        return dict(patch)
+    conn = _connect(create=True)
+    if conn is None:
+        return dict(patch)
+    base: dict = {}
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT content_json FROM agent_memory WHERE user_id=? AND module=?",
+            (uid, module)).fetchone()
+        if row is not None:
+            try:
+                data = json.loads(row[0])
+                if isinstance(data, dict):
+                    base = data
+            except Exception:  # noqa: BLE001 —— 旧数据损坏按空底处理
+                base = {}
+        merged = {k: v for k, v in {**base, **patch}.items() if v is not None}
+        conn.execute(
+            "INSERT INTO agent_memory (user_id, module, content_json, updated_at) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(user_id, module) DO UPDATE SET "
+            "content_json=excluded.content_json, updated_at=excluded.updated_at",
+            (uid, module, json.dumps(merged, ensure_ascii=False, default=str),
+             _now_iso()))
+        conn.commit()
+        return merged
+    except Exception:  # noqa: BLE001
+        _log.warning("记忆合并写入失败 uid=%s module=%s", uid, module, exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return {k: v for k, v in {**base, **patch}.items() if v is not None}
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def push_plan_history(user_id: Any, entry: dict) -> list[dict]:
     """追加一条计划历史（保留最近 PLAN_HISTORY_LIMIT 条，最新在前）。
+
+    去重 + 写入在同一事务里完成（并发追加不再互相顶掉）。
 
     entry 建议字段：plan_id/goal/skills/result/reason/plan_version/updated_at。
     """
@@ -204,13 +267,49 @@ def push_plan_history(user_id: Any, entry: dict) -> list[dict]:
         return []
     item = dict(entry)
     item.setdefault("at", _now_iso())
-    prev = recall(uid, "plan_history") or {}
-    items = [i for i in (prev.get("items") or []) if isinstance(i, dict)]
-    items = [i for i in items if str(i.get("plan_id") or "") != str(item.get("plan_id") or "")]
-    items.insert(0, item)
-    items = items[:PLAN_HISTORY_LIMIT]
-    remember(uid, "plan_history", {"items": items})
-    return items
+    conn = _connect(create=True)
+    if conn is None:
+        return [item]
+    items: list[dict] = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT content_json FROM agent_memory "
+            "WHERE user_id=? AND module='plan_history'", (uid,)).fetchone()
+        if row is not None:
+            try:
+                prev = json.loads(row[0])
+                if isinstance(prev, dict):
+                    items = [i for i in (prev.get("items") or [])
+                             if isinstance(i, dict)]
+            except Exception:  # noqa: BLE001
+                items = []
+        items = [i for i in items
+                 if str(i.get("plan_id") or "") != str(item.get("plan_id") or "")]
+        items.insert(0, item)
+        items = items[:PLAN_HISTORY_LIMIT]
+        conn.execute(
+            "INSERT INTO agent_memory (user_id, module, content_json, updated_at) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(user_id, module) DO UPDATE SET "
+            "content_json=excluded.content_json, updated_at=excluded.updated_at",
+            (uid, "plan_history",
+             json.dumps({"items": items}, ensure_ascii=False, default=str),
+             _now_iso()))
+        conn.commit()
+        return items
+    except Exception:  # noqa: BLE001
+        _log.warning("计划历史写入失败 uid=%s", uid, exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return [item]
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def forget(user_id: Any, module: str | None = None) -> bool:
@@ -230,6 +329,7 @@ def forget(user_id: Any, module: str | None = None) -> bool:
         conn.commit()
         return True
     except Exception:  # noqa: BLE001
+        _log.warning("记忆删除失败 uid=%s module=%s", uid, module, exc_info=True)
         return False
     finally:
         try:
