@@ -244,6 +244,73 @@ def test_push_plan_history_on_broken_db_returns_new_item(
     assert items[0]["plan_id"] == "p1"
 
 
+# ----------------------------------------------- 渲染层与检阅视图(2026-10-23)
+
+def test_render_module_each_kind():
+    assert memory.render_module("profile", {
+        "risk_level": "稳健", "top_category": "餐饮",
+        "holding_count": 3, "preferred_type": "",
+    }) == ["风险偏好：稳健", "消费大头：餐饮", "持仓数：3"]
+    assert memory.render_module("bill", {
+        "top_category": "餐饮", "period": "2026-09",
+        "anomaly_count": 2, "subscription_count": 5,
+    }) == ["上次账单关注「餐饮」（2026-09）", "发现 2 笔异常", "5 笔订阅"]
+    assert memory.render_module("wealth", {
+        "risk_level": "C3", "preferred_type": "债基", "needs_assessment": True,
+    }) == ["风险等级 C3", "最大持仓「债基」", "待做风险测评"]
+    assert memory.render_module("birthday", {
+        "last_budget_yuan": "800", "rejected_cut": True,
+        "rejected_cut_merchant": "爱奇艺视频",
+    }) == ["上次生日预算 ¥800", "上次保留了订阅「爱奇艺视频」（不再默认推荐取消）"]
+    assert memory.render_module("plan_history", {"items": [
+        {"goal": "生日存钱", "result": "done", "at": "2026-10-15T09:00:00"},
+        {"goal": "账单分析"},
+    ]}) == ["1. 生日存钱 → done（10-15）", "2. 账单分析"]
+    # 空值不渲染、未知模块逐键兜底
+    assert memory.render_module("bill", {}) == []
+    assert memory.render_module("future_mod", {"x": 1, "y": ""}) == ["x：1"]
+
+
+def test_memory_overview_profiles_first_and_carries_meta():
+    memory.remember(11, "bill", {"top_category": "餐饮"})
+    memory.remember(11, "profile", {"risk_level": "稳健"})
+    overview = memory.memory_overview(11)
+    assert [m["module"] for m in overview] == ["profile", "bill"]
+    assert overview[0]["label"] == "用户画像"
+    assert overview[0]["lines"] == ["风险偏好：稳健"]
+    assert overview[0]["updated_at"]  # 留痕:什么时候记的
+    assert overview[0]["content"] == {"risk_level": "稳健"}
+    # 用户隔离:别的用户看不到
+    assert memory.memory_overview(12) == []
+
+
+def test_summarize_hints_carry_remembered_date():
+    """时间是一等公民:提示带"上次是什么时候记的"。"""
+    memory.remember(11, "bill", {"top_category": "餐饮",
+                                 "at": "2026-10-15T09:00:00"})
+    hints = memory.summarize_for_plan(11, ("bill",))
+    assert hints == ["上次账单关注「餐饮」(10-15)"]
+
+
+def test_summarize_profile_hints_only_for_uncovered_skills():
+    """画像只补当前技能没覆盖到的信息,不与 bill/wealth 模块提示重复。"""
+    memory.remember(11, "profile", {"risk_level": "稳健", "top_category": "餐饮"})
+    # 只做账单分析:补风险偏好,不再重复消费大类(bill 模块自己会说)
+    hints = memory.summarize_for_plan(11, ("bill",))
+    assert hints == ["用户是稳健型投资者"]
+    # 只做理财分析:补消费大头
+    hints = memory.summarize_for_plan(11, ("wealth",))
+    assert hints == ["常在「餐饮」上消费"]
+    # 两技能都做:画像提示全让位,不出现
+    hints = memory.summarize_for_plan(11, ("bill", "wealth"))
+    assert hints == []
+
+
+def test_module_label_unknown_passthrough():
+    assert memory.module_label("bill") == "账单经验"
+    assert memory.module_label("mystery") == "mystery"
+
+
 def test_stored_payload_is_json_column():
     """库列是 TEXT JSON：可读性优先（便于排障），由 json 库保证往返无损。"""
     memory.remember(11, "birthday", {"last_budget_yuan": "800.00"})

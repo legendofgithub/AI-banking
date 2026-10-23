@@ -47,6 +47,18 @@ MEMORY_MODULES: frozenset[str] = frozenset({
 # plan_history 只留最近几条计划，避免库无限增长
 PLAN_HISTORY_LIMIT = 5
 
+# 检阅视图(参考 Anthropic memory tool 的文件式记忆):每个模块 = 一个
+# "记忆文件",label 是它的展示名,渲染顺序 profile 画像置顶。
+_MODULE_LABELS: dict[str, str] = {
+    "profile": "用户画像",
+    "bill": "账单经验",
+    "wealth": "理财经验",
+    "birthday": "生日计划经验",
+    "plan_history": "计划历史",
+}
+_MODULE_ORDER: tuple[str, ...] = (
+    "profile", "bill", "wealth", "birthday", "plan_history")
+
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS agent_memory (
     user_id      INTEGER NOT NULL,
@@ -338,17 +350,30 @@ def forget(user_id: Any, module: str | None = None) -> bool:
             pass
 
 
+def _day_of(iso: Any) -> str:
+    """ISO 时间戳 → 'MM-DD'（解析不出返回空串）。
+
+    时间是记忆的一等公民（Zep 的核心主张）："上次你保留了订阅"远不如
+    "上次(10-15)你保留了订阅"可信，也给用户核对面。
+    """
+    s = str(iso or "")
+    return s[5:10] if len(s) >= 10 else ""
+
+
 def summarize_for_plan(user_id: Any, modules: tuple[str, ...]) -> list[str]:
     """把若干模块的记忆压成一两句"人话"，供计划卡的 memory_used 展示。
 
     纯确定性字符串拼接，不调 LLM；没有任何记忆时返回空列表。
+    profile 画像只补**当前技能没覆盖到**的信息（如只做账单分析时补一句
+    "你是稳健型投资者"），避免与 bill/wealth 模块提示重复。
     """
     out: list[str] = []
     memory = recall_all(user_id)
     if "bill" in modules and "bill" in memory:
         cat = str((memory["bill"].get("top_category") or "") or "")
         if cat:
-            out.append(f"上次账单关注「{cat}」")
+            when = _day_of(memory["bill"].get("at"))
+            out.append(f"上次账单关注「{cat}」" + (f"({when})" if when else ""))
     if "wealth" in modules and "wealth" in memory:
         pref = str((memory["wealth"].get("preferred_type") or "") or "")
         level = str((memory["wealth"].get("risk_level") or "") or "")
@@ -360,11 +385,143 @@ def summarize_for_plan(user_id: Any, modules: tuple[str, ...]) -> list[str]:
         b = memory["birthday"]
         budget = str(b.get("last_budget_yuan") or "")
         if budget:
-            out.append(f"上次生日预算 ¥{budget}")
+            when = _day_of(b.get("at"))
+            out.append(f"上次生日预算 ¥{budget}" + (f"({when})" if when else ""))
         if str(b.get("rejected_cut") or "") == "true" or b.get("rejected_cut") is True:
             out.append("上次保留订阅未取消")
         elif str(b.get("accepted_cut_merchant") or ""):
             out.append(f"上次接受取消「{b['accepted_cut_merchant']}」")
+    prof = memory.get("profile") or {}
+    if prof:
+        if "wealth" not in modules:
+            level = str(prof.get("risk_level") or "")
+            if level:
+                out.append(f"用户是{level}型投资者")
+        if "bill" not in modules:
+            cat = str(prof.get("top_category") or "")
+            if cat:
+                out.append(f"常在「{cat}」上消费")
+    return out
+
+
+def module_label(module: str) -> str:
+    """模块展示名（检阅入口用；未知模块原样返回）。"""
+    return _MODULE_LABELS.get(module, module)
+
+
+def render_module(module: str, content: dict) -> list[str]:
+    """把一个模块的记忆渲染成人类可读的中文行。
+
+    Anthropic memory tool 的 ``view`` 命令等价物：记忆不是黑盒 JSON，
+    而是随时可翻阅的"文件内容"。纯确定性拼接、不调 LLM；空值一律跳过，
+    未知模块（未来新增白名单时）逐键列出非空项兜底。
+    """
+    if not isinstance(content, dict) or not content:
+        return []
+    out: list[str] = []
+    if module == "profile":
+        pairs = (("risk_level", "风险偏好"), ("preferred_type", "偏好产品"),
+                 ("top_category", "消费大头"), ("holding_count", "持仓数"),
+                 ("subscription_count", "订阅数"))
+        for key, label in pairs:
+            v = content.get(key)
+            if v is not None and str(v) != "":
+                out.append(f"{label}：{v}")
+    elif module == "bill":
+        cat = str(content.get("top_category") or "")
+        if cat:
+            period = str(content.get("period") or "")
+            out.append(f"上次账单关注「{cat}」" + (f"（{period}）" if period else ""))
+        if content.get("anomaly_count"):
+            out.append(f"发现 {content['anomaly_count']} 笔异常")
+        if content.get("subscription_count"):
+            out.append(f"{content['subscription_count']} 笔订阅")
+    elif module == "wealth":
+        level = str(content.get("risk_level") or "")
+        if level:
+            out.append(f"风险等级 {level}")
+        pref = str(content.get("preferred_type") or "")
+        if pref:
+            out.append(f"最大持仓「{pref}」")
+        if content.get("holding_count"):
+            out.append(f"持仓 {content['holding_count']} 笔")
+        if content.get("needs_assessment") is True:
+            out.append("待做风险测评")
+    elif module == "birthday":
+        budget = str(content.get("last_budget_yuan") or "")
+        if budget:
+            out.append(f"上次生日预算 ¥{budget}")
+        goal = str(content.get("last_goal") or "")
+        if goal:
+            out.append(f"目标：{goal}")
+        if content.get("rejected_cut") is True:
+            m = str(content.get("rejected_cut_merchant") or "")
+            out.append("上次保留了订阅" + (f"「{m}」" if m else "") + "（不再默认推荐取消）")
+        elif str(content.get("accepted_cut_merchant") or ""):
+            out.append(f"上次接受取消「{content['accepted_cut_merchant']}」")
+    elif module == "plan_history":
+        for i, it in enumerate(content.get("items") or [], 1):
+            if not isinstance(it, dict):
+                continue
+            goal = str(it.get("goal") or "")[:30]
+            result = str(it.get("result") or "")
+            when = _day_of(it.get("at"))
+            line = f"{i}. {goal}"
+            if result:
+                line += f" → {result}"
+            if when:
+                line += f"（{when}）"
+            out.append(line)
+    if not out and module not in _MODULE_LABELS:
+        for k, v in content.items():
+            if v not in (None, "", [], {}):
+                out.append(f"{k}：{v}")
+    return out
+
+
+def memory_overview(user_id: Any) -> list[dict]:
+    """记忆检阅视图：每模块一条（label/updated_at/内容/渲染行），画像置顶。
+
+    供 8800 ``GET /api/memory`` 与前端「Agent 记忆」弹窗使用；任何异常
+    软处理返回空列表（检阅入口绝不能拖垮主流程）。
+    """
+    uid = _valid_user_id(user_id)
+    if uid is None:
+        return []
+    conn = _connect(create=False)
+    if conn is None:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT module, content_json, updated_at FROM agent_memory "
+            "WHERE user_id=?", (uid,)).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+    by_module: dict[str, tuple[dict, str]] = {}
+    for module, raw, updated in rows:
+        try:
+            data = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(data, dict):
+            by_module[str(module)] = (data, str(updated or ""))
+    out: list[dict] = []
+    for module in _MODULE_ORDER:
+        if module not in by_module:
+            continue
+        content, updated = by_module[module]
+        out.append({
+            "module": module,
+            "label": module_label(module),
+            "updated_at": updated,
+            "lines": render_module(module, content),
+            "content": content,
+        })
     return out
 
 
@@ -374,9 +531,12 @@ __all__ = [
     "db_path",
     "forget",
     "merge",
+    "memory_overview",
+    "module_label",
     "push_plan_history",
     "recall",
     "recall_all",
     "remember",
+    "render_module",
     "summarize_for_plan",
 ]
