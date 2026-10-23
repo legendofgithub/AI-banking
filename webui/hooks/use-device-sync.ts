@@ -60,6 +60,11 @@ export function useDeviceSync({
   const navigatingToRef = useRef("");
   const lastRevisionRef = useRef(-1);
   const syncingRef = useRef(false);
+  // 服务端 active 上次看到的值:跟随只在它"发生变化"时触发。
+  // 若按"≠本地就拽",新会话首条消息还在后端排队(thread 行未落库,
+  // /api/sync/active 登记不上)时,服务端 active 仍指旧会话,2.5s
+  // 保护窗一过就会把刚点开新会话的用户弹回旧会话。
+  const lastSeenServerThreadRef = useRef<string | null>(null);
   const [navTick, setNavTick] = useState(0);
 
   // 打开一个已存在的会话:登记为本机当前会话(另一台设备会跟随过来)
@@ -91,25 +96,38 @@ export function useDeviceSync({
   // 另一台设备切换了当前会话 → 跟随
   // 注意:首页(/ 新会话)不自动跟随,避免正常登录/主动开新会话被拽回旧会话;
   // 手机扫码登录页会在落地时直接跳到当前会话(见 /qr-login)。
+  // 只跟随服务端 active 的"变化":值没变 ≠ 另一台设备切了会话
+  // (新会话落库前服务端一直返回旧值),不拽人。
   // biome-ignore lint/correctness/useExhaustiveDependencies: navTick 仅作 hold 到期重查触发器
   useEffect(() => {
-    if (isNewChat) {
-      return;
-    }
     const target = sync?.thread_id;
     if (!target) {
+      lastSeenServerThreadRef.current = null;
+      return;
+    }
+    if (isNewChat) {
+      // 首页不跟随,但记住服务端当前值:从首页开新会话时它仍是旧值,
+      // 不能被误判成"另一台设备刚切换"
+      lastSeenServerThreadRef.current = target;
       return;
     }
     if (target === chatId) {
+      lastSeenServerThreadRef.current = target;
       navigatingToRef.current = "";
       return;
     }
     if (Date.now() < holdNavUntilRef.current) {
-      // 留守窗口内先不跟随;窗口结束再主动检查一次,避免错过这段时间的切换
+      // 留守窗口内先不跟随(也不记录该值);窗口结束再主动检查一次,避免错过切换
       const wait = holdNavUntilRef.current - Date.now() + 50;
       const timer = setTimeout(() => setNavTick((tick) => tick + 1), wait);
       return () => clearTimeout(timer);
     }
+    if (lastSeenServerThreadRef.current === target) {
+      // 服务端 active 与上次看到的一致:本机在新会话等待落库等场景,
+      // 不是设备间切换,保持原地
+      return;
+    }
+    lastSeenServerThreadRef.current = target;
     if (navigatingToRef.current === target) {
       return;
     }
