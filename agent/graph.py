@@ -88,6 +88,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from agent import core as core_mod
+from agent import guarded as guarded_mod
 from agent import memory as memory_mod
 from agent import persona as persona_mod
 from agent import tasks as tasks_mod
@@ -1534,9 +1535,12 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
 
     def _jr(name: str, args: dict, result: Any) -> dict:
         """单条银行调用记录(评审修复:不再用 {**base, **journal(...)} 合并——
-        那会让后一个 bank_calls 键整体覆盖前一个,丢失同节点内的早期调用)。"""
-        err = result.get("error") if isinstance(result, dict) else None
-        return {"tool": name, "args": args, "ok": err is None, "error": err}
+        那会让后一个 bank_calls 键整体覆盖前一个,丢失同节点内的早期调用)。
+
+        记账口径已收敛到 agent/guarded.py:journal_record(条目 5),此处只做转发,
+        保证 51 处手写调用点与新咽喉产出**完全同一份结构**。
+        """
+        return guarded_mod.journal_record(name, args, result)
 
     def _has_error(payload: Any) -> str | None:
         return payload.get("error") if isinstance(payload, dict) else None
@@ -2259,8 +2263,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
                                            "end": p.get("end"), "top_n": 5}
         else:
             name, args = "detect_anomalies", {"days": int(p.get("days") or 90)}
-        res = await tools.call(name, **args)
-        calls = [_jr(name, args, res)]
+        res, rec = await guarded_mod.guarded_call(tools, name, args)
+        calls = [rec]
         err = _has_error(res)
         if err:
             return {"bank_calls": calls,
@@ -2842,8 +2846,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
 
     async def _sub_rows(calls: list) -> list[dict] | None:
         """拉订阅清单(只取 active);工具失败返回 None(轨迹已记)。"""
-        res = await tools.call("list_subscriptions")
-        calls.append(_jr("list_subscriptions", {}, res))
+        res = await guarded_mod.guarded_call_into(calls, tools,
+                                                 "list_subscriptions")
         if _has_error(res) or not isinstance(res, list):
             return None
         return [r for r in res if r.get("status") == "active"]
@@ -2900,8 +2904,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         """代扣预审(事前知情):列出未来 N 天将发生的周期扣费(滚动修正+涨价
         对照),交用户决策——放行/跳过/解约由前端预审卡按钮回话驱动。"""
         calls: list[dict] = []
-        res = await tools.call("list_upcoming_precharges", within_days=3)
-        calls.append(_jr("list_upcoming_precharges", {"within_days": 3}, res))
+        res = await guarded_mod.guarded_call_into(
+            calls, tools, "list_upcoming_precharges", {"within_days": 3})
         if _has_error(res) or not isinstance(res, list):
             return {"bank_calls": calls,
                     "notice": {"kind": "bank_error",
@@ -2967,8 +2971,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         sub_id = draft.get("sub_id")
         if sub_id is None:
             return {"notice": {"kind": "sub_not_found"}}
-        res = await tools.call("cancel_subscription", subscription_id=int(sub_id))
-        calls = [_jr("cancel_subscription", {"subscription_id": sub_id}, res)]
+        res, rec = await guarded_mod.guarded_call(
+            tools, "cancel_subscription", {"subscription_id": int(sub_id)},
+            journal_args={"subscription_id": sub_id})
+        calls = [rec]
         err = _has_error(res)
         if err:
             return {"bank_calls": calls,
@@ -2999,10 +3005,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         if sub_id is None:
             return {"notice": {"kind": "sub_not_found"}}
         action = "allow" if draft.get("action") == "allow" else "skip"
-        res = await tools.call("decide_precharge", subscription_id=int(sub_id),
-                               decision=action)
-        calls = [_jr("decide_precharge",
-                     {"subscription_id": sub_id, "decision": action}, res)]
+        res, rec = await guarded_mod.guarded_call(
+            tools, "decide_precharge",
+            {"subscription_id": int(sub_id), "decision": action},
+            journal_args={"subscription_id": sub_id, "decision": action})
+        calls = [rec]
         err = _has_error(res)
         if err:
             return {"bank_calls": calls,
