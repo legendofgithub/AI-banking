@@ -33,7 +33,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   bankAgentBase,
   bankAuthHeaders,
@@ -171,7 +170,10 @@ export function MemoryDialog() {
             </DialogDescription>
           </DialogHeader>
 
-          <ScrollArea className="min-h-0 flex-1">
+          {/* 原生 overflow-y-auto,不用 Radix ScrollArea:它在 flex 撑高的
+              容器里 h-full 解析不出、viewport 长成内容高度,弹窗 overflow-hidden
+              一裁就永远滚不动(2026-10-24 PC 实测) */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="space-y-3 px-4 py-4">
               {needLogin ? (
                 <p className="py-8 text-center text-sm text-muted-foreground">
@@ -270,7 +272,7 @@ export function MemoryDialog() {
                 </>
               )}
             </div>
-          </ScrollArea>
+          </div>
         </DialogContent>
       </Dialog>
 
