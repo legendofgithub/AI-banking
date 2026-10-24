@@ -173,6 +173,7 @@ interface AnalysisPlanData {
   hint?: string;
   intent?: string;
   memory_used?: string[];
+  persona?: string;
   plan_id?: string;
   plan_version?: number;
   reflection?: { status?: string; summary?: string };
@@ -1459,6 +1460,17 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
           </span>
         ) : null}
       </div>
+      {data.persona ? (
+        <div className="mb-2 flex items-start gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[12px] leading-5 text-amber-700 dark:text-amber-300">
+          <span aria-hidden>🎭</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">
+            人设已加载：{data.persona}
+            <span className="ml-1 text-[10px] text-muted-foreground">
+              （只影响语气，不改事实）
+            </span>
+          </span>
+        </div>
+      ) : null}
       <div className="flex flex-col gap-1.5">
         <Row label="目标" value={data.goal} />
         {facts.map((row, index) => (

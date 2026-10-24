@@ -17,6 +17,7 @@ import {
   MonitorIcon,
   MoonIcon,
   SettingsIcon,
+  SparklesIcon,
   SunIcon,
   UserIcon,
   ZoomInIcon,
@@ -142,6 +143,11 @@ export function SidebarSettings() {
     window.dispatchEvent(new Event("open-memory"));
   }, []);
 
+  const handleOpenPersona = useCallback(() => {
+    // 给 Agent 设人设(性格/说话方式/温度):编辑弹窗同款链路
+    window.dispatchEvent(new Event("open-persona"));
+  }, []);
+
   const nickname = user?.nickname?.trim() || "";
   const themeValue = mounted ? (theme ?? "system") : "";
   const zoomValue =
@@ -202,6 +208,13 @@ export function SidebarSettings() {
                 >
                   <CreditCardIcon />
                   绑定银行卡
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  data-testid="settings-persona"
+                  onSelect={handleOpenPersona}
+                >
+                  <SparklesIcon />
+                  人设
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   data-testid="settings-memory"
