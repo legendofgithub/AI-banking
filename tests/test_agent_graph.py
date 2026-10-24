@@ -40,7 +40,7 @@ from langgraph.types import Command
 
 from agent import memory
 from agent.bank import load_bank_tools
-from agent.graph import build_agent_graph, make_sqlite_checkpointer
+from agent.graph import ROUTER_SYS, build_agent_graph, make_sqlite_checkpointer
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BALANCE = 1_000_000  # 1 万元(整数分)
@@ -509,6 +509,18 @@ def test_chat_fallback_no_bank_calls(tmp_path):
             assert _audited_tools(db) == []
 
     run(scenario())
+
+
+def test_router_prompt_self_intro_goes_chat_not_contact_add():
+    """路由提示词守卫:自我介绍必须导向 chat,contact_add 必须要求显式动作词。
+
+    2026-10-24 实测「我叫丁博文」被误判成录入收款人:旧规则在 contact_add
+    里裸写「报名字」,LLM 十选一看到人名就往业务桶塞。守卫三条措辞,
+    防止回归。
+    """
+    assert "报名字" not in ROUTER_SYS
+    assert "显式动作词" in ROUTER_SYS
+    assert "自我介绍" in ROUTER_SYS
 
 
 # ----------------------------------------------------------------- 跨场景联动(linkage)
