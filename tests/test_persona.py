@@ -84,3 +84,43 @@ def test_read_does_not_create_db_file(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("AGENT_PERSONA_DB", str(target))
     assert persona.get_persona(1) == EMPTY
     assert not target.exists()
+
+
+# ---------------------------------------------------------------- 温度透传(RequestLLM)
+
+def test_request_llm_threads_temperature_to_factory(monkeypatch):
+    """人设温度经门面层拦截并进 factory kwargs;None=不覆盖(默认);
+    同温度复用缓存实例(不重复构造模型)。"""
+    import asyncio
+
+    monkeypatch.setenv("ZAI_API_KEY", "test-key")
+    monkeypatch.setenv("ZAI_MODEL", "test-model")
+    from agent.llm import RequestLLM
+
+    calls: list[dict] = []
+
+    class _Recorder:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def astream(self, messages, **kw):
+            yield "chunk"
+
+    def factory(**kwargs):
+        calls.append(kwargs)
+        return _Recorder(**kwargs)
+
+    llm = RequestLLM(factory=factory)
+
+    async def run(temp):
+        out = []
+        async for c in llm.astream([], strong=False, temperature=temp):
+            out.append(c)
+        return out
+
+    assert asyncio.run(run(0.9)) == ["chunk"]
+    assert calls[0]["temperature"] == 0.9
+    asyncio.run(run(None))  # 不覆盖:factory 不收 temperature 键
+    assert "temperature" not in calls[1]
+    asyncio.run(run(0.9))  # 同温度命中缓存:factory 不再被调
+    assert len(calls) == 2

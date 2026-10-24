@@ -362,7 +362,8 @@ class RequestLLM:
         return (os.environ.get("ZAI_MODEL") or self._fallback_model
                 or DEFAULT_MODEL)
 
-    def _resolve(self, strong: bool = False) -> Any:
+    def _resolve(self, strong: bool = False,
+                 temperature: float | None = None) -> Any:
         ov = _request_override.get() or {}
         key = ov.get("api_key") or os.environ.get("ZAI_API_KEY")
         model = (ov.get("model") or os.environ.get("ZAI_MODEL")
@@ -390,26 +391,36 @@ class RequestLLM:
             raise RuntimeError(
                 "未配置 API Key:请在界面「大模型管理」里接入供应商,"
                 "或部署时配置 ZAI_API_KEY 环境变量。")
-        ck = (family, str(base), str(key), str(eff_model), bool(do_think))
+        # temperature(人设功能)进缓存键:不同温度各自实例化,绝不共用
+        ck = (family, str(base), str(key), str(eff_model), bool(do_think),
+              float(temperature) if temperature is not None else -1.0)
         if ck not in self._instances:
+            kwargs = dict(self._base_kwargs)
+            if temperature is not None:
+                kwargs["temperature"] = temperature
             self._instances[ck] = self._factory(
                 model=eff_model, api_key=key, base_url=base,
                 provider=provider, enable_thinking=do_think,
-                **self._base_kwargs)
+                **kwargs)
         return self._instances[ck]
 
     async def ainvoke(self, messages: Any, *, strong: bool = False,
+                      temperature: float | None = None,
                       **kwargs: Any) -> Any:
-        return await self._resolve(strong).ainvoke(messages, **kwargs)
+        return await self._resolve(strong, temperature).ainvoke(
+            messages, **kwargs)
 
     async def astream(self, messages: Any, *, strong: bool = False,
+                      temperature: float | None = None,
                       **kwargs: Any) -> Any:
         """代理底层模型的 astream(逐 token 异步生成器)。
 
         注意:langchain 的 astream 返回的是异步生成器,不能 await;
         必须逐块 yield 出来,供上层(agent.graph.ask_llm)累加下发。
         strong=True 时解析为"会思考"的模型(见 thinking_model_for)。
+        temperature 是**人设功能的请求级参数**:必须在门面层拦截消费,
+        不能透传给底层 astream(langchain 不认这个 kwargs)。
         """
-        resolved = self._resolve(strong)
+        resolved = self._resolve(strong, temperature)
         async for chunk in resolved.astream(messages, **kwargs):
             yield chunk
