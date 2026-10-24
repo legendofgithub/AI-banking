@@ -7,6 +7,7 @@ import { DataStreamProvider } from "@/components/chat/data-stream-provider";
 import { DepositDialog } from "@/components/chat/deposit-dialog";
 import { MemoryDialog } from "@/components/chat/memory-dialog";
 import { ModelSettingsDialog } from "@/components/chat/model-settings-dialog";
+import { PersonaDialog } from "@/components/chat/persona-dialog";
 import { ChatShell } from "@/components/chat/shell";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { ActiveChatProvider } from "@/hooks/use-active-chat";
@@ -62,6 +63,7 @@ async function SidebarShell({ children }: { children: React.ReactNode }) {
       <DepositDialog />
       <BoundCardsDialog />
       <MemoryDialog />
+      <PersonaDialog />
     </ChatModelProvider>
   );
 }
