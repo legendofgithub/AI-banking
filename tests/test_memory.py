@@ -361,3 +361,13 @@ def test_stored_payload_is_json_column():
         conn.close()
     assert row[0] == "birthday"
     assert json.loads(row[1])["last_budget_yuan"] == "800.00"
+
+
+def test_render_module_profile_includes_name():
+    """画像渲染行含姓名(2026-10-24 接线后新增字段),排第一;空值跳过。"""
+    assert memory.render_module("profile", {"name": "丁博文"}) == ["姓名：丁博文"]
+    assert memory.render_module(
+        "profile", {"name": "丁博文", "risk_level": "稳健"}
+    ) == ["姓名：丁博文", "风险偏好：稳健"]
+    assert memory.render_module("profile", {"risk_level": "稳健"}) == [
+        "风险偏好：稳健"]

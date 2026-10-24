@@ -1069,7 +1069,8 @@ def test_memory_view_and_forget_endpoints(tmp_path, monkeypatch):
         # 未登录 401(记忆是个人数据)
         assert client.get("/api/memory").status_code == 401
         assert client.delete("/api/memory/bill").status_code == 401
-        memory_mod.remember(1, "profile", {"risk_level": "稳健"})
+        memory_mod.remember(1, "profile", {"name": "丁博文",
+                                           "risk_level": "稳健"})
         memory_mod.remember(1, "bill", {"top_category": "餐饮"})
         r = client.get("/api/memory", headers=headers)
         assert r.status_code == 200
@@ -1077,7 +1078,7 @@ def test_memory_view_and_forget_endpoints(tmp_path, monkeypatch):
         mods = body["modules"]
         assert [m["module"] for m in mods] == ["profile", "bill"]  # 画像置顶
         assert mods[0]["label"] == "用户画像"
-        assert mods[0]["lines"] == ["风险偏好：稳健"]
+        assert mods[0]["lines"] == ["姓名：丁博文", "风险偏好：稳健"]
         assert mods[0]["updated_at"]  # 留痕:什么时候记的
         assert body["active_task"]["goal"] == "生日存钱"  # 长程任务轨道
         # 忘记一个模块 → 返回剩余;未知模块 404

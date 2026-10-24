@@ -441,7 +441,8 @@ def render_module(module: str, content: dict) -> list[str]:
         return []
     out: list[str] = []
     if module == "profile":
-        pairs = (("risk_level", "风险偏好"), ("preferred_type", "偏好产品"),
+        pairs = (("name", "姓名"), ("risk_level", "风险偏好"),
+                 ("preferred_type", "偏好产品"),
                  ("top_category", "消费大头"), ("holding_count", "持仓数"),
                  ("subscription_count", "订阅数"))
         for key, label in pairs:
