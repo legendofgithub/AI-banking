@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.pytest_tmp/          # pytest --basetemp 的临时目录(批次号递增,不复用);复用会触发 safe-delete 守卫导致 rc=1 假失败
 
 # ===== 前端 =====
 webui/node_modules/

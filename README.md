@@ -119,21 +119,26 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 205 个用例全绿(2026-10-21)
+.venv/Scripts/python.exe -m pytest tests -q      # 413 个用例全绿(2026-10-24 实测)
+.venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
+
+# 用例数不写固定值,一律以 --collect-only 实测为准(205/245/133 均为过期数字)
+# 全量推荐加 --basetemp=.pytest_tmp/<批次号>(批次号递增、目录全新),
+# 否则 pytest 清理旧临时库触发 safe-delete 守卫 → 用例全过却 rc=1 的假失败。
 
 tests/test_bank_core.py     26 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
                             AA 对账、挂失不可逆、理财风险闸门(含无测评限购 R1)、
                             申购幂等键、种子确定性、余额=入-出不变量、订阅/异常戏眼、
                             月报勾稽、事件联动
-tests/test_agent_graph.py   28 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅)
-tests/test_api_stream.py    24 个 —— SSE 协议帧、确认卡片、会话目录/搜索/同步、悬空单落地页
+tests/test_agent_graph.py   50 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅)
+tests/test_api_stream.py    28 个 —— SSE 协议帧、确认卡片、会话目录/搜索/同步、悬空单落地页
 tests/test_auth.py          31 个 —— 实名注册、密码策略、会话与支付密码核验
 tests/test_admin.py         14 个 —— 管理台资金/变更记录、调账、按用户隔离
 tests/test_review_fixes.py   8 个 —— 严格确认语义、犹豫答复绝不执行、幂等重放
 tests/test_linkage.py        9 个 —— 跨场景联动建/到期/取消与时间旅行
 tests/test_e2e_transfer.py   5 个 —— 端到端 A~E(立即/同名/超限/定时/AA)
 tests/test_llm_autoselect.py 8 个 —— 模型自动选型、连接参数与 Claude 适配
-tests/test_contract.py      21 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
+tests/test_contract.py      30 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
                             线协议词表、播报白名单、**部件载荷字段级冻结**——前端
                             interface 与后端键集漂移直接红灯),多人并行的"合同测试"
 tests/test_precheck.py       6 个 —— 代扣预审(事前知情):滚动数学/涨价对照/
@@ -143,4 +148,18 @@ tests/test_env_template.py  13 个 —— "clone 后只填一个 Key"契约守�
                             模板键齐全且默认值可用、setup_env.py 随机密钥/防覆盖
 tests/test_demo_launcher.py  7 个 —— 一键启动/停止、端口 PID、跳过构建
 tests/test_report_followup.py 5 个 —— 播报后的业务追问与收尾
+tests/test_analysis_plan.py  33 个 —— 只读分析技能:账单/理财事实行、卡片视图、
+                            风险过滤(候选风险等级必须 ≤ 用户等级)、空数据不装成功
+tests/test_core.py          30 个 —— Agent Core 契约:Plan/Guard 校验、拓扑执行序、
+                            Observe-Reflect、重规划只改受影响步骤(纯函数,不建库不调 LLM)
+tests/test_plan.py          28 个 —— agent.plan 纯函数:事件匹配/订阅候选/可支配/
+                            计划分支/预算编辑
+tests/test_memory.py        36 个 —— 长期记忆五模块 UPSERT、用户隔离、失败软处理、
+                            未登录不写、计划历史队列限 5 条
+tests/test_persona.py       11 个 —— 人设提示词存取、默认态、越界防御、温度透传
+tests/test_tool_meta.py     16 个 —— 44 工具身份证对账(多/少/风险等级漂移都红)、
+                            动钱面/两步类/不可逆类/敏感类清单、scoped 白名单视图
+tests/test_votes.py          8 个 —— 消息投票:投/换/取消往返、GET 恢复、管理台汇总
+tests/test_task_store.py     7 个 —— 长程任务存储层(纯 sqlite)
+tests/test_longtask.py       4 个 —— 长程任务图级闭环:建档 → 到期唤醒 → 复盘留痕
 ```
