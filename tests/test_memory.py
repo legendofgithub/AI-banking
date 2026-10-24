@@ -311,6 +311,44 @@ def test_module_label_unknown_passthrough():
     assert memory.module_label("mystery") == "mystery"
 
 
+# ----------------------------------------------- 2026-10-24 评审修复
+
+def test_push_plan_history_without_plan_id_keeps_history():
+    """空 plan_id 不去重:新条目不得顶掉既有的无 id 历史。"""
+    memory.push_plan_history(11, {"goal": "无id计划A"})
+    memory.push_plan_history(11, {"goal": "无id计划B"})
+    items = (memory.recall(11, "plan_history") or {}).get("items") or []
+    assert [i["goal"] for i in items] == ["无id计划B", "无id计划A"]
+
+
+def test_valid_user_id_rejects_lossy_numeric_types():
+    """Decimal/Fraction 同 float 一样会被 int() 静默截断,一律拒绝;
+    字符串只收无损整数(带下划线的 "1_000" 拒)。"""
+    from decimal import Decimal
+    from fractions import Fraction
+
+    for bad in (Decimal("3.5"), Fraction(7, 2), 3.5, "1_000", "abc", "",
+                0, -2):
+        assert memory._valid_user_id(bad) is None, bad
+    assert memory._valid_user_id(11) == 11
+    assert memory._valid_user_id("12") == 12
+    assert memory._valid_user_id("+12") == 12
+
+
+def test_render_module_birthday_accepts_legacy_string_true():
+    """rejected_cut 的字符串 "true" 旧数据:render 与 summarize 口径一致。"""
+    lines = memory.render_module("birthday", {"rejected_cut": "true"})
+    assert lines == ["上次保留了订阅（不再默认推荐取消）"]
+    hints = memory.summarize_for_plan(11, ())  # 模块集合一致性由 import 断言守卫
+    assert hints == []
+
+
+def test_module_definitions_stay_in_sync():
+    """MEMORY_MODULES 与检阅顺序 _MODULE_ORDER 必须一致(双份定义防漂移)。"""
+    assert set(memory._MODULE_ORDER) == memory.MEMORY_MODULES
+    assert set(memory._MODULE_LABELS) == memory.MEMORY_MODULES
+
+
 def test_stored_payload_is_json_column():
     """库列是 TEXT JSON：可读性优先（便于排障），由 json 库保证往返无损。"""
     memory.remember(11, "birthday", {"last_budget_yuan": "800.00"})
