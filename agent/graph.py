@@ -1425,7 +1425,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     """
 
     async def ask_llm(system: str, history: list[BaseMessage], extra: str = "",
-                      n: int = 12, strong: bool = False) -> str:
+                      n: int = 12, strong: bool = False,
+                      temperature: float | None = None) -> str:
         msgs = [SystemMessage(content=system), *history[-n:]]
         if extra:
             msgs.append(HumanMessage(content=extra))
@@ -1435,9 +1436,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         # reasoning_content 逐 token 走 messages 通道 → 前端思考面板流式展开;
         # 推理模型调用失败(欠费/下线/超时)时回落快模型重试,保证有答案
         # (铁律:演示现场模型/网络兜底)。
+        # temperature(人设功能):只在播报/闲聊调用点传入,抽取类调用零扰动。
         async def _run(use_strong: bool) -> str:
             parts: list[str] = []
-            async for chunk in llm.astream(msgs, strong=use_strong):
+            async for chunk in llm.astream(msgs, strong=use_strong,
+                                           temperature=temperature):
                 c = getattr(chunk, "content", "")
                 if isinstance(c, str):
                     parts.append(c)
