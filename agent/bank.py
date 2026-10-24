@@ -26,8 +26,9 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# bank_core 实际注册 41 个 @mcp.tool(新增 create/get/execute/cancel_linkage_plan 跨场景联动)
-EXPECTED_TOOL_COUNT = 42
+# bank_core 实际注册 44 个 @mcp.tool(与 bank_core.tool_meta.REGISTRY 逐一对账,
+# 漂移由 tests/test_tool_meta.py 在全量测试里拦下)
+EXPECTED_TOOL_COUNT = 44
 
 
 def _stdio_config(db_path: str, user_id: int = 1) -> dict[str, Any]:
@@ -107,6 +108,52 @@ class BankTools:
         except Exception as exc:  # noqa: BLE001 —— 会话/transport 层异常兜底
             return {"error": f"{type(exc).__name__}: {exc}"}
         return unwrap(raw)
+
+    def scoped(self, allow, *, label: str = "scoped") -> "ScopedBankTools":
+        """返回只放行 allow 内工具的白名单视图(fail-closed,借鉴 Claude Code
+        的角色隔离:分析/只读链路就算写错代码也摸不到白名单外的工具)。
+
+        allow: 工具名集合(通常来自 agent.skills.SKILLS[...].tools);
+        label: 报错时标注是哪条链路越权,方便定位编排层 bug。
+        """
+        return ScopedBankTools(self, frozenset(allow), label=label)
+
+
+class ToolScopeError(RuntimeError):
+    """白名单视图外的工具调用。
+
+    这不是银行侧异常(银行侧错误走 {"error": ...} 返回),而是**编排层 bug**:
+    某条链路试图调用它的白名单外的工具。宁可在这里炸出来,也不许静默放行
+    ——所以它 raise,让测试与开发期立即可见。
+    """
+
+
+class ScopedBankTools:
+    """BankTools 的白名单视图:call()/names() 只看到 allow 内的工具。
+
+    语义对齐 BankTools:db_path 原样透传,call() 的银行侧错误仍返回
+    {"error": ...};唯一的区别是白名单外调用直接 raise ToolScopeError。
+    """
+
+    def __init__(self, parent: BankTools, allow: frozenset[str], *, label: str):
+        self._parent = parent
+        self._allow = frozenset(allow)
+        self.label = label
+
+    @property
+    def db_path(self) -> str:
+        return self._parent.db_path
+
+    @property
+    def names(self) -> list[str]:
+        return sorted(n for n in self._parent.names if n in self._allow)
+
+    async def call(self, name: str, /, **args: Any) -> Any:
+        if name not in self._allow:
+            raise ToolScopeError(
+                f"[{self.label}] 调用了白名单外的工具 {name}"
+                f"(允许:{sorted(self._allow)})——编排层越权,请检查该链路的白名单")
+        return await self._parent.call(name, **args)
 
 
 def _text_blocks(content: Any) -> list[str]:
