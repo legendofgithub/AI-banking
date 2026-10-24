@@ -858,6 +858,37 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         return {"modules": memory_mod.memory_overview(me["user_id"]),
                 "active_task": tasks_mod.get_active_task(me["user_id"])}
 
+    @app.delete("/api/memory/active-task")
+    async def forget_active_task(
+            x_bank_token: str | None = Header(default=None)) -> dict:
+        """结束当前长程任务轨道(用户对"任何一块"记忆都有控制权)。
+
+        status=cancelled 落库留痕、不物理删;轨道视图立即清空。
+        字面路由必须先于 /api/memory/{module} 注册,否则会被白名单 404 拦下。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "未登录或会话过期"})
+        task = tasks_mod.get_active_task(me["user_id"])
+        if task:
+            tasks_mod.finish_task(me["user_id"], task.get("task_id"),
+                                  status="cancelled")
+        return {"modules": memory_mod.memory_overview(me["user_id"]),
+                "active_task": tasks_mod.get_active_task(me["user_id"])}
+
+    @app.delete("/api/memory")
+    async def forget_all_memory(
+            x_bank_token: str | None = Header(default=None)) -> dict:
+        """一键清空全部记忆档案(module=None 全删);长程任务轨道不受影响。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "未登录或会话过期"})
+        memory_mod.forget(me["user_id"], None)
+        return {"modules": memory_mod.memory_overview(me["user_id"]),
+                "active_task": tasks_mod.get_active_task(me["user_id"])}
+
     @app.delete("/api/memory/{module}")
     async def forget_memory(module: str,
                             x_bank_token: str | None = Header(default=None)) -> dict:

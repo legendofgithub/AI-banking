@@ -1086,6 +1086,17 @@ def test_memory_view_and_forget_endpoints(tmp_path, monkeypatch):
         assert memory_mod.recall(1, "bill") is None
         assert client.delete("/api/memory/随便写",
                              headers=headers).status_code == 404
+        # 结束长程任务轨道(2026-10-24):cancelled 留痕,视图立即清空
+        assert client.delete("/api/memory/active-task").status_code == 401
+        r = client.delete("/api/memory/active-task", headers=headers)
+        assert r.json()["active_task"] is None
+        assert tasks_mod.get_active_task(1) is None
+        # 一键清空全部档案(2026-10-24):任务轨道不在档案里,不受影响
+        memory_mod.remember(1, "wealth", {"risk_level": "C3"})
+        assert client.delete("/api/memory").status_code == 401
+        r = client.delete("/api/memory", headers=headers)
+        assert r.json()["modules"] == []
+        assert memory_mod.recall_all(1) == {}
 
 
 # ----------------------------------------------------------------- 人设接口(2026-10-24)
