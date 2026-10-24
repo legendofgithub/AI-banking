@@ -95,6 +95,7 @@ from pydantic import BaseModel, Field
 
 from agent import auth as auth_mod
 from agent import memory as memory_mod
+from agent import persona as persona_mod
 from agent import tasks as tasks_mod
 from agent.bank import BankTools, load_bank_tools
 from agent.graph import build_agent_graph, make_sqlite_checkpointer
@@ -199,6 +200,13 @@ class BoundCardIn(BaseModel):
     bank_name: str = Field(min_length=2, max_length=30)
     card_no: str = Field(min_length=16, max_length=23)
     holder_name: str = Field(min_length=2, max_length=30)
+
+
+class PersonaIn(BaseModel):
+    """人设提示词入参:空文本=清除(回到默认);温度只收 0-1。"""
+
+    persona: str = Field(default="", max_length=300)
+    temperature: float = Field(default=0.1, ge=0.0, le=1.0)
 
 
 class ContactIn(BaseModel):
@@ -850,6 +858,39 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         memory_mod.forget(me["user_id"], module)
         return {"modules": memory_mod.memory_overview(me["user_id"]),
                 "active_task": tasks_mod.get_active_task(me["user_id"])}
+
+    # ------------------------------------------------ Agent 人设(persona)
+    # 用户给 Agent 设定的性格/说话方式/温度;只作用于本人。未设置=完全现网行为。
+    @app.get("/api/persona")
+    async def get_persona(
+            x_bank_token: str | None = Header(default=None)) -> dict:
+        """读当前用户的人设(prompt + temperature)。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "未登录或会话过期"})
+        stored = persona_mod.get_persona(me["user_id"])
+        return {"persona": stored["text"],
+                "temperature": stored["temperature"]
+                if stored["temperature"] is not None else 0.1,
+                "is_default": not stored["text"]}
+
+    @app.put("/api/persona")
+    async def put_persona(req: PersonaIn,
+                          x_bank_token: str | None = Header(default=None)) -> dict:
+        """保存人设;persona 为空=恢复默认(不再注入)。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "未登录或会话过期"})
+        if not persona_mod.set_persona(me["user_id"], req.persona,
+                                       req.temperature):
+            return JSONResponse(status_code=500, content={"error": "人设保存失败"})
+        stored = persona_mod.get_persona(me["user_id"])
+        return {"persona": stored["text"],
+                "temperature": stored["temperature"]
+                if stored["temperature"] is not None else req.temperature,
+                "is_default": not stored["text"]}
 
     @app.get("/api/orders/{order_id}/receipt")
     async def order_receipt(order_id: int,
