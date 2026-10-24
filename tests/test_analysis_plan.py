@@ -194,7 +194,7 @@ def test_analysis_card_shape_is_frozen():
                                      "categories": CATEGORIES})
     assert set(card) == {"plan_id", "plan_version", "goal", "intent", "hint",
                          "facts", "steps", "reflection", "memory_used",
-                         "trace", "diff"}
+                         "persona", "trace", "diff"}
     assert card["plan_id"] == "aplan-1"
     assert card["intent"] == "bill"
     assert card["memory_used"] == ["上次关注餐饮"]

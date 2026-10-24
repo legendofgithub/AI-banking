@@ -281,8 +281,8 @@ PART_FIELD_CONTRACT: list[dict] = [
     # 视图冻结在纯函数层 agent/analysis.py::build_analysis_card,
     # 故三张 interface 都用 backend_sources 追加 analysis.py 供契约 6 扫描。
     {"interface": "AnalysisPlanData", "required": {
-        "diff", "facts", "goal", "hint", "intent", "memory_used", "plan_id",
-        "plan_version", "reflection", "steps", "trace"},
+        "diff", "facts", "goal", "hint", "intent", "memory_used", "persona",
+        "plan_id", "plan_version", "reflection", "steps", "trace"},
      "frontend_only": set(), "backend_sources": ("analysis.py",)},
     {"interface": "AnalysisFactRow", "required": {"hint", "label", "value"},
      "frontend_only": set(), "backend_sources": ("analysis.py",)},
