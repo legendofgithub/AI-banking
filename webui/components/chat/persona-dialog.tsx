@@ -13,6 +13,7 @@
 import { SparklesIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -108,9 +109,14 @@ export function PersonaDialog() {
         }
         setText(body.persona ?? "");
         setIsDefault(Boolean(body.is_default));
-        toast.success(
-          body.is_default ? "已恢复默认人设" : "人设已保存，下次回复生效",
-        );
+        // 反馈必须能自证发生了什么:带内容摘要,空文本明说是"清空",
+        // 绝不用含糊的"恢复默认"让用户猜有没有存上
+        if (body.is_default) {
+          toast.success("已清空人设，Agent 将按默认风格回复");
+        } else {
+          const brief = (body.persona ?? "").slice(0, 16);
+          toast.success(`人设已保存：「${brief}${(body.persona ?? "").length > 16 ? "…" : ""}」，下次回复生效`);
+        }
       } catch {
         toast.error("保存失败，请稍后再试");
       } finally {
@@ -147,6 +153,19 @@ export function PersonaDialog() {
           </p>
         ) : (
           <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+              当前状态：
+              <Badge
+                className={
+                  isDefault
+                    ? "h-5 px-1.5 text-[10px]"
+                    : "h-5 border-amber-500/40 bg-amber-500/15 px-1.5 text-[10px] text-amber-700 dark:text-amber-300"
+                }
+                variant="secondary"
+              >
+                {isDefault ? "默认风格（未设人设）" : "自定人设生效中"}
+              </Badge>
+            </div>
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between text-[12px] text-muted-foreground">
                 <span>人设描述（空 = 不使用人设）</span>
