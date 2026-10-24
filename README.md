@@ -1,4 +1,4 @@
-# AI Banking Agent —— 练功假银行（bank_core）
+# AI Banking Agent —— 全自动银行助手（bank_core）
 
 > 2026 深圳国际金融科技大赛 · AI Banking Agent 赛道 ｜ 研发计划见 [docs/AI-Banking-Agent-产品研发计划.md](docs/AI-Banking-Agent-产品研发计划.md)
 
