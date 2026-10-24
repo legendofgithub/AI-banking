@@ -195,6 +195,7 @@ def build_analysis_card(plan: dict, *, intent: str = "",
                         bill: dict | None = None,
                         wealth: dict | None = None,
                         reflection: Reflection | None = None,
+                        persona: str = "",
                         hint: str = ANALYSIS_HINT) -> dict:
     """计划 + 观察结果 → ``data-analysis-plan`` 卡片载荷（纯函数）。
 
@@ -204,6 +205,7 @@ def build_analysis_card(plan: dict, *, intent: str = "",
         bill:       bill 观察结果：report/categories/merchants/anomalies/subscriptions。
         wealth:     wealth 观察结果：profile/holdings/products/max_risk_level。
         reflection: Reflect 阶段结论（复盘摘要）。
+        persona:    当前用户人设（摘录，卡片头部🎭行展示；空=不展示）。
     """
     plan = plan if isinstance(plan, dict) else {}
     if intent == "wealth":
@@ -234,18 +236,22 @@ def build_analysis_card(plan: dict, *, intent: str = "",
                        "summary": (refl.summary if refl
                                    else "尚未复盘")},
         "memory_used": list(plan.get("memory_used") or []),
+        # 当前人设摘录(前端卡片头部🎭行;没有人设时为空串不展示)
+        "persona": str(persona or "").strip()[:60],
         "trace": trace_view(plan),
         # 重规划 diff(新增/删除/修改了哪些步骤):验收要求"改了什么必须可见"
         "diff": plan.get("diff_from_version"),
     }
 
 
-def build_thinking(plan: dict, *, memory_used: list | None = None) -> list[dict]:
-    """把 Core 的 trace + 意图 + 记忆拼成"人话思维链"（纯函数，确定性）。
+def build_thinking(plan: dict, *, memory_used: list | None = None,
+                   persona: str = "") -> list[dict]:
+    """把 Core 的 trace + 意图 + 记忆 + 人设拼成"人话思维链"（纯函数，确定性）。
 
     前端 ``data-thinking`` 据此渲染可折叠的 🧠 思维链面板，让用户看到
-    Agent 是怎么想的：识别意图 → 调取记忆 → 制定计划 → 安全守卫 → 执行 → 复盘。
-    不引入任何新的 LLM 调用，全部来自既有的确定性 trace。
+    Agent 是怎么想的：人设 → 识别意图 → 调取记忆 → 制定计划 → 安全守卫
+    → 执行 → 复盘。不引入任何新的 LLM 调用，全部来自既有的确定性 trace。
+    每个图节点重建思维链都会带上 persona(有人设时置顶),不会被后续节点覆盖掉。
     """
     plan = plan if isinstance(plan, dict) else {}
     mem = list(memory_used if memory_used is not None
@@ -254,6 +260,15 @@ def build_thinking(plan: dict, *, memory_used: list | None = None) -> list[dict]
     title_of = lambda sk: SKILL_TITLES.get(str(sk or ""), str(sk or "技能"))
 
     thoughts: list[dict] = []
+
+    # 0) 人设(用户设定,置顶:用户能看到"我按哪套人设办事";空=不出现)
+    persona_text = str(persona or "").strip()
+    if persona_text:
+        thoughts.append({
+            "phase": "人设",
+            "text": persona_text,
+            "status": "info",
+        })
 
     # 1) 识别意图（a_perceive 写入的 perceive trace；没有则跳过）
     perceive = next((t for t in (plan.get("trace") or [])

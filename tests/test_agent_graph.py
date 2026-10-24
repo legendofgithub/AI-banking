@@ -2321,3 +2321,33 @@ def test_second_birthday_plan_reads_memory_and_drops_cut(tmp_path):
             _assert_plan_zero_writes(db)
 
     run(scenario())
+
+
+def test_core_persona_loaded_into_state_thinking_and_card(tmp_path):
+    """人设闭环:a_perceive 每轮读取 → 图状态 + 思维链置顶"人设"条目 +
+    计划卡🎭行;规划/抽取零 LLM 扰动(确定性代码不变)。"""
+    from agent import persona as persona_mod
+    persona_mod.set_persona(1, "说话像江湖侠客,先结论后细节", 0.9)
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    y, m = _prev_month_ym()
+    _seed_tx_month(db, y, m)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "bill_analysis"}',
+            "上个月餐饮花得最多,建议关注。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "core-persona"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我分析上个月的账单")]}, cfg)
+            assert r.get("persona") == "说话像江湖侠客,先结论后细节"
+            thoughts = (r.get("thinking_view") or {}).get("thoughts") or []
+            assert thoughts[0]["phase"] == "人设"
+            assert "江湖侠客" in thoughts[0]["text"]
+            assert thoughts[1]["phase"] == "识别意图"  # 置顶但不取代既有链
+            view = r.get("analysis_view") or {}
+            assert view.get("persona") == "说话像江湖侠客,先结论后细节"
+
+    run(scenario())

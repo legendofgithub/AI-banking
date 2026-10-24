@@ -124,3 +124,20 @@ def test_request_llm_threads_temperature_to_factory(monkeypatch):
     assert "temperature" not in calls[1]
     asyncio.run(run(0.9))  # 同温度命中缓存:factory 不再被调
     assert len(calls) == 2
+
+
+# ---------------------------------------------------------------- 图注入(_persona_ctx)
+
+def test_persona_ctx_builds_subordinate_block():
+    """有人设:注入块带人设文本+从属规则(事实数字红线)+温度;
+    没人设:("", None)=现网行为。"""
+    from agent.graph import _persona_ctx
+    persona.set_persona(1, "说话像江湖侠客", 0.7)
+    block, temp = _persona_ctx({"auth_user_id": 1})
+    assert "【人设" in block and "说话像江湖侠客" in block
+    # 从属规则必须钉死:人设不得碰事实数字,冲突以工作规则为准
+    assert "不得改变、新增或推算任何事实数字" in block
+    assert "以工作规则为准" in block
+    assert temp == pytest.approx(0.7)
+    block, temp = _persona_ctx({"auth_user_id": None})
+    assert block == "" and temp is None
