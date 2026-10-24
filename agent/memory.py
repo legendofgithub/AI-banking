@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import json
 import logging
+import numbers
 import os
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -59,6 +61,10 @@ _MODULE_LABELS: dict[str, str] = {
 _MODULE_ORDER: tuple[str, ...] = (
     "profile", "bill", "wealth", "birthday", "plan_history")
 
+# 两份定义必须一致:只往 MEMORY_MODULES 加模块、忘了 _MODULE_ORDER,
+# 记忆会"写进去但检阅视图看不到"——import 即校验,别等现场才发现
+assert set(_MODULE_ORDER) == MEMORY_MODULES
+
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS agent_memory (
     user_id      INTEGER NOT NULL,
@@ -79,24 +85,32 @@ def db_path() -> Path:
 
 
 def _now_iso() -> str:
+    """本地时间 ISO 串。
+
+    全项目口径就是本地时间（bank.db/任务库/种子数据皆然）；切 UTC 会新旧
+    格式混排、``_day_of`` 切出的日期整体漂移 8 小时，单一时区部署下刻意不换。
+    """
     return datetime.now().isoformat(timespec="seconds")
 
 
 def _valid_user_id(user_id: Any) -> int | None:
     """规范化 user_id：未登录/非法一律 None（调用方据此跳过读写）。
 
-    只认整数或纯数字字符串：**浮点数一律拒绝**（``int(3.5)`` 会静默截断成 3,
-    把 11 号用户的经验写到 3 号头上就是跨用户记忆污染）。
+    只认**真整数**（int 及 numbers.Integral）或纯数字字符串：一切"数学上
+    接近整数"的类型（float/Decimal/Fraction——``int()`` 都会静默截断成
+    整数部分）一律拒绝，把 11 号用户的经验写到 3 号头上就是跨用户记忆
+    污染；字符串分支只收无损整数（``int("1_000")`` 这类带下划线的也拒）。
     """
     if isinstance(user_id, bool) or user_id is None:
         return None
-    if isinstance(user_id, float):
-        return None
-    try:
-        uid = int(user_id)
-    except (TypeError, ValueError):
-        return None
-    return uid if uid > 0 else None
+    if isinstance(user_id, numbers.Integral):
+        return int(user_id) if user_id > 0 else None
+    if isinstance(user_id, str):
+        digits = user_id.strip().lstrip("+-")
+        if digits.isdigit():
+            uid = int(user_id)
+            return uid if uid > 0 else None
+    return None
 
 
 def _connect(create: bool = True) -> sqlite3.Connection | None:
@@ -116,7 +130,6 @@ def _connect(create: bool = True) -> sqlite3.Connection | None:
         conn = sqlite3.connect(str(path), timeout=5)
         if create:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_CREATE_SQL)
             conn.commit()
         return conn
@@ -143,7 +156,8 @@ def recall(user_id: Any, module: str) -> dict | None:
             return None
         data = json.loads(row[0])
         return dict(data) if isinstance(data, dict) else None
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 —— 含"损坏 JSON 返回 None"这一设计内场景
+        _log.debug("记忆读取失败 uid=%s module=%s", uid, module, exc_info=True)
         return None
     finally:
         try:
@@ -165,6 +179,7 @@ def recall_all(user_id: Any) -> dict[str, dict]:
             "SELECT module, content_json FROM agent_memory WHERE user_id=?",
             (uid,)).fetchall()
     except Exception:  # noqa: BLE001
+        _log.debug("记忆全量读取失败 uid=%s", uid, exc_info=True)
         return {}
     finally:
         try:
@@ -182,26 +197,29 @@ def recall_all(user_id: Any) -> dict[str, dict]:
     return out
 
 
+def _upsert(conn: sqlite3.Connection, uid: int, module: str,
+            content: dict) -> None:
+    """写一行记忆（remember/merge/push_plan_history 三处共用的 UPSERT SQL，
+    改表结构只改这里；事务开启与提交由调用方负责）。"""
+    conn.execute(
+        "INSERT INTO agent_memory (user_id, module, content_json, updated_at) "
+        "VALUES (?,?,?,?) "
+        "ON CONFLICT(user_id, module) DO UPDATE SET "
+        "content_json=excluded.content_json, updated_at=excluded.updated_at",
+        (uid, module, json.dumps(content, ensure_ascii=False, default=str),
+         _now_iso()))
+
+
 def remember(user_id: Any, module: str, content: dict) -> bool:
     """UPSERT 一条记忆（每个模块只保留最新一条）。返回是否写成功。"""
     uid = _valid_user_id(user_id)
     if uid is None or module not in MEMORY_MODULES or not isinstance(content, dict):
         return False
-    try:
-        payload = json.dumps(content, ensure_ascii=False, default=str)
-    except Exception:  # noqa: BLE001
-        _log.warning("记忆序列化失败 uid=%s module=%s", uid, module, exc_info=True)
-        return False
     conn = _connect(create=True)
     if conn is None:
         return False
     try:
-        conn.execute(
-            "INSERT INTO agent_memory (user_id, module, content_json, updated_at) "
-            "VALUES (?,?,?,?) "
-            "ON CONFLICT(user_id, module) DO UPDATE SET "
-            "content_json=excluded.content_json, updated_at=excluded.updated_at",
-            (uid, module, payload, _now_iso()))
+        _upsert(conn, uid, module, content)
         conn.commit()
         return True
     except Exception:  # noqa: BLE001 —— 软处理但必须留痕，否则现场静默丢记忆无法排查
@@ -244,13 +262,7 @@ def merge(user_id: Any, module: str, patch: dict) -> dict:
             except Exception:  # noqa: BLE001 —— 旧数据损坏按空底处理
                 base = {}
         merged = {k: v for k, v in {**base, **patch}.items() if v is not None}
-        conn.execute(
-            "INSERT INTO agent_memory (user_id, module, content_json, updated_at) "
-            "VALUES (?,?,?,?) "
-            "ON CONFLICT(user_id, module) DO UPDATE SET "
-            "content_json=excluded.content_json, updated_at=excluded.updated_at",
-            (uid, module, json.dumps(merged, ensure_ascii=False, default=str),
-             _now_iso()))
+        _upsert(conn, uid, module, merged)
         conn.commit()
         return merged
     except Exception:  # noqa: BLE001
@@ -270,9 +282,12 @@ def merge(user_id: Any, module: str, patch: dict) -> dict:
 def push_plan_history(user_id: Any, entry: dict) -> list[dict]:
     """追加一条计划历史（保留最近 PLAN_HISTORY_LIMIT 条，最新在前）。
 
-    去重 + 写入在同一事务里完成（并发追加不再互相顶掉）。
+    去重 + 写入在同一事务里完成（并发追加不再互相顶掉）；
+    entry 的 plan_id **缺失/为空时不去重**（新条目不会顶掉既有的无 id 历史）。
 
     entry 建议字段：plan_id/goal/skills/result/reason/plan_version/updated_at。
+    注意：异常分支返回的 ``[item]`` 只是本轮这一个条目，**不代表库内历史**
+    （现有调用方均不读返回值，真状态以 recall 为准）。
     """
     uid = _valid_user_id(user_id)
     if uid is None or not isinstance(entry, dict):
@@ -296,18 +311,13 @@ def push_plan_history(user_id: Any, entry: dict) -> list[dict]:
                              if isinstance(i, dict)]
             except Exception:  # noqa: BLE001
                 items = []
-        items = [i for i in items
-                 if str(i.get("plan_id") or "") != str(item.get("plan_id") or "")]
+        new_pid = str(item.get("plan_id") or "")
+        if new_pid:  # 只有带 id 的条目才参与去重,空 id 不得清掉历史
+            items = [i for i in items
+                     if str(i.get("plan_id") or "") != new_pid]
         items.insert(0, item)
         items = items[:PLAN_HISTORY_LIMIT]
-        conn.execute(
-            "INSERT INTO agent_memory (user_id, module, content_json, updated_at) "
-            "VALUES (?,?,?,?) "
-            "ON CONFLICT(user_id, module) DO UPDATE SET "
-            "content_json=excluded.content_json, updated_at=excluded.updated_at",
-            (uid, "plan_history",
-             json.dumps({"items": items}, ensure_ascii=False, default=str),
-             _now_iso()))
+        _upsert(conn, uid, "plan_history", {"items": items})
         conn.commit()
         return items
     except Exception:  # noqa: BLE001
@@ -360,7 +370,18 @@ def _day_of(iso: Any) -> str:
     return s[5:10] if len(s) >= 10 else ""
 
 
-def summarize_for_plan(user_id: Any, modules: tuple[str, ...]) -> list[str]:
+def _as_bool(v: Any) -> bool:
+    """bool 或旧字符串 "true" 都认。
+
+    存储端（_birthday_patch）一直写 JSON bool，字符串形态是给早期/手改
+    数据的防御；summarize 与 render 两处渲染口径必须一致，统一走这里。
+    """
+    if isinstance(v, bool):
+        return v
+    return str(v or "").strip().lower() == "true"
+
+
+def summarize_for_plan(user_id: Any, modules: Iterable[str]) -> list[str]:
     """把若干模块的记忆压成一两句"人话"，供计划卡的 memory_used 展示。
 
     纯确定性字符串拼接，不调 LLM；没有任何记忆时返回空列表。
@@ -387,7 +408,7 @@ def summarize_for_plan(user_id: Any, modules: tuple[str, ...]) -> list[str]:
         if budget:
             when = _day_of(b.get("at"))
             out.append(f"上次生日预算 ¥{budget}" + (f"({when})" if when else ""))
-        if str(b.get("rejected_cut") or "") == "true" or b.get("rejected_cut") is True:
+        if _as_bool(b.get("rejected_cut")):
             out.append("上次保留订阅未取消")
         elif str(b.get("accepted_cut_merchant") or ""):
             out.append(f"上次接受取消「{b['accepted_cut_merchant']}」")
@@ -454,7 +475,7 @@ def render_module(module: str, content: dict) -> list[str]:
         goal = str(content.get("last_goal") or "")
         if goal:
             out.append(f"目标：{goal}")
-        if content.get("rejected_cut") is True:
+        if _as_bool(content.get("rejected_cut")):
             m = str(content.get("rejected_cut_merchant") or "")
             out.append("上次保留了订阅" + (f"「{m}」" if m else "") + "（不再默认推荐取消）")
         elif str(content.get("accepted_cut_merchant") or ""):
@@ -496,6 +517,7 @@ def memory_overview(user_id: Any) -> list[dict]:
             "SELECT module, content_json, updated_at FROM agent_memory "
             "WHERE user_id=?", (uid,)).fetchall()
     except Exception:  # noqa: BLE001
+        _log.debug("记忆检阅读取失败 uid=%s", uid, exc_info=True)
         return []
     finally:
         try:

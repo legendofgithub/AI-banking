@@ -92,7 +92,6 @@ def _connect(create: bool = True) -> sqlite3.Connection | None:
         conn.row_factory = sqlite3.Row
         if create:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
             conn.execute(_CREATE_SQL)
             try:
                 conn.execute(_CREATE_ACTIVE_INDEX_SQL)
