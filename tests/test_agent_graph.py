@@ -39,6 +39,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
 
 from agent import memory
+from agent import graph as graph_mod
 from agent.bank import load_bank_tools
 from agent.graph import ROUTER_SYS, build_agent_graph, make_sqlite_checkpointer
 
@@ -521,6 +522,48 @@ def test_router_prompt_self_intro_goes_chat_not_contact_add():
     assert "报名字" not in ROUTER_SYS
     assert "显式动作词" in ROUTER_SYS
     assert "自我介绍" in ROUTER_SYS
+
+
+# ----------------------------------------------------------------- 长期记忆:自我介绍捕获
+
+def test_self_intro_name_extraction():
+    """「我叫XX」抽取纯函数:正例命中,动宾误报(叫车/叫外卖)不收。"""
+    ex = graph_mod.extract_self_intro_name
+    assert ex("我叫丁博文") == "丁博文"
+    assert ex("你好,我叫林悦,想看看这个月账单") == "林悦"
+    assert ex("我的名字是阿依古丽·买买提") == "阿依古丽·买买提"
+    assert ex("叫我小王就行") == "小王"
+    assert ex("我叫Tony") == "Tony"
+    assert ex("我叫车就不用了") == ""      # 动宾:叫车
+    assert ex("我叫外卖送过来") == ""      # 动宾:叫外卖
+    assert ex("今天天气不错") == ""
+
+
+def test_profile_ctx_reads_memory():
+    """闲聊注入块:profile 有姓名才注入;无记忆返回空串(conftest 隔离记忆库)。"""
+    assert graph_mod._profile_ctx({"auth_user_id": 11}) == ""
+    memory.remember(11, "profile", {"name": "丁博文"})
+    ctx = graph_mod._profile_ctx({"auth_user_id": 11})
+    assert "丁博文" in ctx
+    assert graph_mod._profile_ctx({"auth_user_id": None}) == ""
+
+
+def test_router_captures_self_intro_to_profile_memory(tmp_path):
+    """说「我叫丁博文」(chat 兜底)后,长期记忆 profile.name 落库。"""
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "chat"}',
+            "你好,丁博文!",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "t-self-intro"}}
+            await graph.ainvoke(
+                {"auth_user_id": 11, "messages": [HumanMessage("我叫丁博文")]},
+                cfg)
+            assert (memory.recall(11, "profile") or {}).get("name") == "丁博文"
+
+    run(scenario())
 
 
 # ----------------------------------------------------------------- 跨场景联动(linkage)

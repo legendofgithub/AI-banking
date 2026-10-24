@@ -127,6 +127,58 @@ ROUTER_SYS = """你是银行智能助手的意图分类器。只输出一个 JSO
 - 用户自我介绍、告知姓名等个人信息(如"我叫XX") → chat
 - 其他(问候、闲聊) → chat"""
 
+# ---------------------------------------------------------------- 长期记忆:自我介绍捕获
+# 2026-10-24:「我叫丁博文」曾被路由误判成录入收款人(提示词已修),修好后这句话
+# 归 chat,但线程历史只活在当前会话——刷新/新开会话就"失忆"。根因是 profile
+# 记忆模块预留未接线。这里在路由器里做确定性捕获(不额外调 LLM):
+# 命中自我介绍句式 → 写 profile.name,任何新会话的闲聊节点都能读到称呼。
+_SELF_INTRO_RE = re.compile(
+    r"(?:我的名字(?:是|叫)|我叫|叫我)\s*"
+    r"([\u4e00-\u9fa5·]{2,12}|[A-Za-z][A-Za-z0-9]{1,15})"
+)
+# 误报闸:捕获串首字命中即放弃("我叫车""我叫个外卖""我叫外卖"这类动宾结构)
+_PROFILE_NAME_STOP_HEAD = set("个车外菜你他她它这那谁啥的吗呢吧啊呀哦嗯了没别")
+# 尾部修剪:句式尾巴(叫我小王"就行")不算名字的一部分;从长到短反复剥
+_PROFILE_NAME_TAIL = ("就可以", "就行啦", "谢谢啦", "就行", "即可", "谢谢",
+                      "就好", "好了", "好啦", "啦", "呗", "哦", "呀", "哈",
+                      "嘛", "吧", "呢", "啊", "了")
+
+
+def extract_self_intro_name(text: str) -> str:
+    """从用户消息提取自我介绍的姓名;不是自我介绍返回空串。纯函数,可单测。
+
+    只认"我叫X/叫我X/我的名字是X"句式;姓名限 2-12 个汉字(可带·)或英文名,
+    首字命中误报闸(车/外卖/个…)不认,尾部语气词(就行/啦/吧…)剥掉。
+    业务槽位话术("添加收款人,姓名XX")天然不命中,不受影响。
+    """
+    for m in _SELF_INTRO_RE.finditer(str(text or "")):
+        name = m.group(1).strip()
+        if not name or name[0] in _PROFILE_NAME_STOP_HEAD:
+            continue
+        while True:
+            for tail in _PROFILE_NAME_TAIL:
+                if name.endswith(tail) and len(name) > len(tail):
+                    name = name[:-len(tail)]
+                    break
+            else:
+                break
+        if len(name) >= 2:
+            return name
+    return ""
+
+
+def _profile_ctx(state: dict) -> str:
+    """长期记忆注入块:读 profile.name 给闲聊/播报自然称呼;无记忆返回空串。
+
+    与人设块同款拼法(追加在系统提示词后);只做建议,不替代实时事实。
+    """
+    prof = memory_mod.recall(state.get("auth_user_id"), "profile") or {}
+    name = str(prof.get("name") or "").strip()
+    if not name:
+        return ""
+    return (f"\n【长期记忆】用户此前自我介绍过姓名「{name}」,可自然地用这个"
+            f"称呼对方;这是已知信息,不要再反问对方叫什么。")
+
 EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对话】,输出完整转账槽位 JSON,不要任何多余文字:
 {"payee": "收款人姓名或称呼|null", "payee_phone": "11位手机号|null",
  "amount_yuan": "金额,纯数字字符串,单位元|null", "when": "now|scheduled",
@@ -1496,6 +1548,14 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         # 本轮触发指令原文:幂等键的组成部分(同文本重放=同一笔;换说法=新一笔)
         turn_text = next((m.content for m in reversed(state["messages"])
                           if isinstance(m, HumanMessage)), "")
+        # 长期记忆:自我介绍确定性捕获(写 profile.name,见 extract_self_intro_name);
+        # 同名不重写,避免每轮 UPSERT 空转。
+        intro_name = extract_self_intro_name(turn_text)
+        if intro_name:
+            prof = memory_mod.recall(state.get("auth_user_id"), "profile") or {}
+            if str(prof.get("name") or "") != intro_name:
+                memory_mod.merge(state.get("auth_user_id"), "profile",
+                                 {"name": intro_name})
         # 长程任务(轨道通用+剧本注册):触发词是"存/攒"字族,与生日计划(p_*)、
         # Core 分析(省字族)零交集,放在 linkage 改写**之前**——"规划30天存出3000"
         # 这类话虽含 生日/规划,但语义是储蓄目标,不是预算锁定。
@@ -3695,7 +3755,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
 
     async def chat(state: AgentState) -> dict:
         persona_block, persona_temp = _persona_ctx(state)
-        text = await ask_llm(CHAT_SYS + persona_block, state["messages"],
+        text = await ask_llm(CHAT_SYS + persona_block + _profile_ctx(state),
+                             state["messages"],
                              strong=True, temperature=persona_temp)
         return {"messages": [AIMessage(content=text or "我在。")]}
 
