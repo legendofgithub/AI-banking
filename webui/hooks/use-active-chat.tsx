@@ -26,7 +26,7 @@ import {
 import { getChatHistoryPaginationKey } from "@/components/chat/sidebar-history";
 import { toast } from "@/components/chat/toast";
 import { useAutoResume } from "@/hooks/use-auto-resume";
-import { getStoredToken } from "@/hooks/use-bank-auth";
+import { bankAuthHeaders, getStoredToken } from "@/hooks/use-bank-auth";
 import { useChatModel } from "@/hooks/use-chat-model";
 import { useDeviceSync } from "@/hooks/use-device-sync";
 import { getActiveConnection } from "@/lib/ai/byok";
@@ -270,11 +270,12 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   const isReadonly = isNewChat ? false : (chatData?.isReadonly ?? false);
 
+  // 投票走 8800(threads 库落库;带登录头,访客不带由后端放行匿名)
   const { data: votes } = useSWR<Vote[]>(
     !isReadonly && messages.length >= 2
-      ? `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/vote?chatId=${chatId}`
+      ? `${agentBase}/api/vote?chatId=${chatId}`
       : null,
-    fetcher,
+    (url) => fetch(url, { headers: bankAuthHeaders() }).then((r) => r.json()),
     { revalidateOnFocus: false }
   );
 

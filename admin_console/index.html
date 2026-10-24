@@ -246,6 +246,21 @@ input.mono{font-family:var(--mono)}
       </table>
     </div>
   </div>
+  <div class="card">
+    <h3>用户满意度<span class="head-note">webui 对话里的点赞/点踩(跨库只读 agent_threads.message_votes)</span></h3>
+    <div class="stat-grid">
+      <div class="stat"><div class="k">最近投票数</div><div class="v" id="voteTotal">—</div></div>
+      <div class="stat"><div class="k">👍 点赞</div><div class="v" id="voteUp">—</div></div>
+      <div class="stat"><div class="k">👎 点踩</div><div class="v" id="voteDown">—</div></div>
+      <div class="stat"><div class="k">满意度</div><div class="v" id="voteRate">—</div></div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>会话</th><th>消息</th><th>评价</th></tr></thead>
+        <tbody id="votesBody"><tr><td colspan="4" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 </main>
 </div>
 
@@ -798,6 +813,24 @@ async function loadUsers(){
 }
 const loadUsersSafe = safe(loadUsers);
 
+/* ---------- 用户满意度(消息投票,跨库只读) ---------- */
+async function loadVotes(){
+  const d = await api('/api/votes?limit=50');
+  const s = d.summary || {};
+  $('#voteTotal').textContent = s.total ?? '—';
+  $('#voteUp').textContent = s.up ?? '—';
+  $('#voteDown').textContent = s.down ?? '—';
+  $('#voteRate').textContent = s.satisfaction == null ? '—' : s.satisfaction + '%';
+  $('#votesBody').innerHTML = (d.votes || []).map(v => `
+    <tr>
+      <td class="ts">${esc(fmtTime(v.updated_at))}</td>
+      <td class="mono">${esc(String(v.chat_id || '').slice(0, 18))}…</td>
+      <td class="mono">${esc(String(v.message_id || '').slice(0, 18))}…</td>
+      <td>${v.is_upvoted ? '👍 赞' : '👎 踩'}</td>
+    </tr>`).join('') || `<tr><td colspan="4" class="empty">还没有投票——去 webui 对话里点一次赞/踩</td></tr>`;
+}
+const loadVotesSafe = safe(loadVotes);
+
 /* =====================================================
    各页签数据加载器
    ===================================================== */
@@ -1179,6 +1212,7 @@ function backToList(){
   try { localStorage.removeItem(LS_USER_KEY); } catch (e) { /* 忽略 */ }
   showView('users');
   loadUsersSafe();
+  loadVotesSafe();
 }
 
 /* ---------------- 写操作 ---------------- */
@@ -1213,7 +1247,7 @@ $('#withinSeg').addEventListener('click', e => {
   document.querySelectorAll('#withinSeg .seg-btn').forEach(x => x.classList.toggle('active', x === b));
   loadUsersSafe();
 });
-$('#btnUsersRefresh').addEventListener('click', () => loadUsersSafe());
+$('#btnUsersRefresh').addEventListener('click', () => { loadUsersSafe(); loadVotesSafe(); });
 
 // ---- 跨用户调账记录（首页入口 → 第三级视图）----
 $('#btnAdjustLog').addEventListener('click', () => {
@@ -1455,6 +1489,7 @@ $('#adjustForm').addEventListener('submit', async e => {
   } else {
     showView('users');
     loadUsersSafe();
+    loadVotesSafe();
   }
 })();
 </script>

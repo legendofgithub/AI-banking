@@ -162,6 +162,13 @@ class SyncActiveIn(BaseModel):
     thread_id: str = Field(min_length=1, max_length=128)
 
 
+class VoteIn(BaseModel):
+    """消息投票:换票覆盖,同票再点取消(模板语义)。"""
+    chatId: str = Field(min_length=1, max_length=128)
+    messageId: str = Field(min_length=1, max_length=128)
+    type: str = Field(pattern="^(up|down)$")
+
+
 class ValidateKeyRequest(BaseModel):
     api_key: str = Field(min_length=10, max_length=200)
     base_url: str | None = Field(default=None, max_length=300)
@@ -398,6 +405,15 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                  user_id    INTEGER PRIMARY KEY,
                  thread_id  TEXT NOT NULL,
                  updated_at TEXT NOT NULL)""")
+        # 消息投票(点赞/点踩):一行一条投票,换票覆盖、同票再点取消。
+        # 放 threads 库(会话目录同源),管理台跨库读这一份做满意度面板。
+        await tconn.execute(
+            """CREATE TABLE IF NOT EXISTS message_votes (
+                 chat_id     TEXT NOT NULL,
+                 message_id  TEXT NOT NULL,
+                 is_upvoted  INTEGER NOT NULL,
+                 updated_at  TEXT NOT NULL,
+                 PRIMARY KEY (chat_id, message_id))""")
         await tconn.commit()
         # 账号库:auth 表建在 bank.db(注册即 users 行,管理后台天然同步);
         # 演示主用户陈明预置凭证(登录 Demo@12345 / 支付 888888,幂等)。
@@ -858,6 +874,45 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         memory_mod.forget(me["user_id"], module)
         return {"modules": memory_mod.memory_overview(me["user_id"]),
                 "active_task": tasks_mod.get_active_task(me["user_id"])}
+
+    # ------------------------------------------------ 消息投票(满意度反馈)
+    # 模板裁剪版的空壳接口转真实:落 threads 库 message_votes 表。
+    # 投票属于会话数据而非个人配置,访客也允许投(会话本身免登录可建);
+    # PATCH 恒 200(模板前端 toast 依赖此语义),GET 返回该会话全部投票。
+    @app.get("/api/vote")
+    async def get_votes(chatId: str) -> list:
+        """某会话的全部消息投票(刷新后恢复点赞/点踩高亮)。"""
+        cur = await app.state.threads.execute(
+            "SELECT chat_id, message_id, is_upvoted FROM message_votes "
+            "WHERE chat_id=?", (chatId,))
+        rows = await cur.fetchall()
+        return [{"chatId": r[0], "messageId": r[1],
+                 "isUpvoted": bool(r[2])} for r in rows]
+
+    @app.patch("/api/vote")
+    async def patch_vote(req: VoteIn):
+        """投/换/取消一票:同票再点=取消(行删除),换票=覆盖,新票=插入。"""
+        cur = await app.state.threads.execute(
+            "SELECT is_upvoted FROM message_votes "
+            "WHERE chat_id=? AND message_id=?",
+            (req.chatId, req.messageId))
+        row = await cur.fetchone()
+        want = 1 if req.type == "up" else 0
+        if row is not None and bool(row[0]) == bool(want):
+            await app.state.threads.execute(
+                "DELETE FROM message_votes WHERE chat_id=? AND message_id=?",
+                (req.chatId, req.messageId))
+        else:
+            await app.state.threads.execute(
+                """INSERT INTO message_votes (chat_id,message_id,is_upvoted,
+                                              updated_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                     is_upvoted=excluded.is_upvoted,
+                     updated_at=excluded.updated_at""",
+                (req.chatId, req.messageId, want, _now_iso()))
+        await app.state.threads.commit()
+        return Response(status_code=200)
 
     # ------------------------------------------------ Agent 人设(persona)
     # 用户给 Agent 设定的性格/说话方式/温度;只作用于本人。未设置=完全现网行为。

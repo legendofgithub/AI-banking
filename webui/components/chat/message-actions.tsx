@@ -5,6 +5,7 @@ import { useSWRConfig } from "swr";
 import { useCopyToClipboard } from "usehooks-ts";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
+import { bankAgentBase, bankAuthHeaders } from "@/hooks/use-bank-auth";
 import {
   MessageAction as Action,
   MessageActions as Actions,
@@ -44,17 +45,15 @@ export function PureMessageActions({
   }, [copyToClipboard, textFromParts]);
 
   const handleUpvote = useCallback(() => {
-    const upvote = fetch(
-      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/vote`,
-      {
-        body: JSON.stringify({
-          chatId,
-          messageId: message.id,
-          type: "up",
-        }),
-        method: "PATCH",
-      }
-    );
+    const upvote = fetch(`${bankAgentBase()}/api/vote`, {
+      body: JSON.stringify({
+        chatId,
+        messageId: message.id,
+        type: "up",
+      }),
+      headers: { ...bankAuthHeaders(), "Content-Type": "application/json" },
+      method: "PATCH",
+    });
 
     toast.promise(upvote, {
       error: "Failed to upvote response.",
@@ -89,17 +88,15 @@ export function PureMessageActions({
   }, [chatId, message.id, mutate]);
 
   const handleDownvote = useCallback(() => {
-    const downvote = fetch(
-      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/vote`,
-      {
-        body: JSON.stringify({
-          chatId,
-          messageId: message.id,
-          type: "down",
-        }),
-        method: "PATCH",
-      }
-    );
+    const downvote = fetch(`${bankAgentBase()}/api/vote`, {
+      body: JSON.stringify({
+        chatId,
+        messageId: message.id,
+        type: "down",
+      }),
+      headers: { ...bankAuthHeaders(), "Content-Type": "application/json" },
+      method: "PATCH",
+    });
 
     toast.promise(downvote, {
       error: "Failed to downvote response.",
