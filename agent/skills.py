@@ -152,6 +152,13 @@ async def run_skill(tools: Any, skill: str, args: dict | None = None) -> SkillRe
             skill=skill, ok=False,
             reason=(f"技能 {skill} 属于受闸门保护的资金操作，"
                     f"Core 不直接执行，交由既有 {spec.gate} 链路办理"))
+    # 白名单视图（fail-closed，借鉴 Claude Code 角色隔离）：真实 BankTools 会把
+    # 本技能锁死在目录白名单内——分析路径就算日后写错，也物理摸不到动钱工具。
+    # tests 里的最小替身（FakeTools）没有 scoped 能力则跳过，白名单一致性
+    # 由 tests/test_tool_meta.py 在测试层兜住。
+    scoped_factory = getattr(tools, "scoped", None)
+    if scoped_factory is not None:
+        tools = scoped_factory(frozenset(spec.tools), label=f"skill:{skill}")
     if skill == "analyze_bill":
         return await _run_analyze_bill(tools, args)
     return await _run_analyze_wealth(tools, args)
