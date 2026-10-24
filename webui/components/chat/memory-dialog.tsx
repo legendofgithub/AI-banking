@@ -81,6 +81,10 @@ export function MemoryDialog() {
   const [needLogin, setNeedLogin] = useState(false);
   const [forgetTarget, setForgetTarget] = useState<MemoryModule | null>(null);
   const [forgetting, setForgetting] = useState(false);
+  const [forgetAllOpen, setForgetAllOpen] = useState(false);
+  const [forgettingAll, setForgettingAll] = useState(false);
+  const [endTaskOpen, setEndTaskOpen] = useState(false);
+  const [endingTask, setEndingTask] = useState(false);
 
   useEffect(() => {
     const openMemory = () => setOpen(true);
@@ -156,6 +160,54 @@ export function MemoryDialog() {
   const task = data.active_task;
   const hasAnything = modules.length > 0 || task;
 
+  const forgetAll = useCallback(async () => {
+    setForgettingAll(true);
+    try {
+      const res = await fetch(`${bankAgentBase()}/api/memory`, {
+        method: "DELETE",
+        headers: bankAuthHeaders(),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        toast.error(body.error || "忘记失败，请稍后再试");
+        return;
+      }
+      setData({
+        modules: Array.isArray(body.modules) ? body.modules : [],
+        active_task: body.active_task ?? null,
+      });
+      toast.success("已忘记全部记忆档案");
+    } catch {
+      toast.error("忘记失败，请稍后再试");
+    } finally {
+      setForgettingAll(false);
+    }
+  }, []);
+
+  const endTask = useCallback(async () => {
+    setEndingTask(true);
+    try {
+      const res = await fetch(`${bankAgentBase()}/api/memory/active-task`, {
+        method: "DELETE",
+        headers: bankAuthHeaders(),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        toast.error(body.error || "结束失败，请稍后再试");
+        return;
+      }
+      setData({
+        modules: Array.isArray(body.modules) ? body.modules : [],
+        active_task: body.active_task ?? null,
+      });
+      toast.success("长程任务已结束");
+    } catch {
+      toast.error("结束失败，请稍后再试");
+    } finally {
+      setEndingTask(false);
+    }
+  }, []);
+
   return (
     <>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -164,6 +216,19 @@ export function MemoryDialog() {
             <DialogTitle className="flex items-center gap-2 text-base">
               <BrainIcon className="size-4 text-amber-500" />
               Agent 记忆
+              {modules.length > 0 ? (
+                <Button
+                  aria-label="忘记全部记忆"
+                  className="ml-auto h-6 gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:text-red-500"
+                  disabled={forgettingAll}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setForgetAllOpen(true)}
+                >
+                  <TrashIcon className="size-3" />
+                  全部忘记
+                </Button>
+              ) : null}
             </DialogTitle>
             <DialogDescription className="text-xs">
               按主题一档，可看可忘 · 更新时间全程留痕 · 只作用于你的账号
@@ -256,6 +321,17 @@ export function MemoryDialog() {
                         >
                           进行中
                         </Badge>
+                        <Button
+                          aria-label="结束长程任务"
+                          className="ml-auto h-6 gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:text-red-500"
+                          disabled={endingTask}
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEndTaskOpen(true)}
+                        >
+                          <TrashIcon className="size-3" />
+                          结束
+                        </Button>
                       </div>
                       <p className="mt-2 text-[13px] leading-5">
                         {task.goal}
@@ -301,6 +377,69 @@ export function MemoryDialog() {
               }}
             >
               {forgetting ? "正在忘记…" : "忘记"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={forgetAllOpen}
+        onOpenChange={(v) => {
+          if (!v && !forgettingAll) {
+            setForgetAllOpen(false);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>忘记全部记忆档案？</AlertDialogTitle>
+            <AlertDialogDescription>
+              用户画像、账单/理财/生日经验、计划历史全部清空，Agent
+              将回到"不认识你"的初始状态；之后的对话产生了新经验仍会重新记。进行中的长程任务不受影响。此操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={forgettingAll}>
+              先留着
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={forgettingAll}
+              onClick={(e) => {
+                e.preventDefault();
+                void forgetAll();
+              }}
+            >
+              {forgettingAll ? "正在忘记…" : "全部忘记"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={endTaskOpen}
+        onOpenChange={(v) => {
+          if (!v && !endingTask) {
+            setEndTaskOpen(false);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>结束这个长程任务？</AlertDialogTitle>
+            <AlertDialogDescription>
+              任务「{task?.goal ?? ""}」将标记为已取消，进度与提醒停止；档案留痕不删除。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={endingTask}>继续存</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={endingTask}
+              onClick={(e) => {
+                e.preventDefault();
+                void endTask();
+              }}
+            >
+              {endingTask ? "正在结束…" : "结束任务"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
