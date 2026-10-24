@@ -89,6 +89,7 @@ from langgraph.types import interrupt
 
 from agent import core as core_mod
 from agent import memory as memory_mod
+from agent import persona as persona_mod
 from agent import tasks as tasks_mod
 from agent.analysis import build_analysis_card, build_thinking
 from agent.bank import BankTools, load_bank_tools
@@ -897,6 +898,26 @@ def _remember_birthday(user_id: Any, patch: dict) -> None:
         memory_mod.merge(user_id, "birthday", patch)
     except Exception:  # noqa: BLE001 —— 记忆是旁路,不参与资金链路
         pass
+
+
+def _persona_ctx(state: AgentState) -> tuple[str, float | None]:
+    """读当前用户人设 → (system prompt 追加块, temperature)。
+
+    人设只注入**播报(_announce)与闲聊(chat)**两个 LLM 调用点——用户说话
+    方式由它定;router/extract 的 JSON 抽取零扰动(确定性红线)。注入块自带
+    从属规则:人设不得改变/新增/推算任何事实数字,与任务规则冲突以任务规则
+    为准。没有人设时返回 ("", None),与现网行为完全一致。
+    """
+    pers = persona_mod.get_persona(state.get("auth_user_id"))
+    text = str(pers.get("text") or "").strip()
+    temp = pers.get("temperature")
+    if not text:
+        return "", None
+    block = (
+        "\n\n【人设(用户设定,只影响语气/称呼/详略)】" + text +
+        "\n【人设从属规则】人设只决定说话风格;不得改变、新增或推算任何"
+        "事实数字与状态;与上面工作规则冲突时,以工作规则为准。")
+    return block, temp
 
 
 def _birthday_patch(state: AgentState, result: str) -> dict:
@@ -3280,21 +3301,27 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
     # - Guard 拦下的计划不会执行任何一步,资金零变动。
 
     async def a_perceive(state: AgentState) -> dict:
-        """Perceive:读用户目标/约束/长期记忆 → 确定性选中技能(不调 LLM)。"""
+        """Perceive:读用户目标/约束/长期记忆/人设 → 确定性选中技能(不调 LLM)。"""
         text = _latest_human(state)
         skills = _select_analysis_skills(text, state.get("intent"))
         uid = state.get("auth_user_id")
         # 长期记忆只做建议(memory.summarize_for_plan 是纯确定性拼接)
         hints = memory_mod.summarize_for_plan(uid, tuple(skills))
+        # 人设:每次规划开始时读取(用户随时可改,不缓存);写进图状态供
+        # 计划卡展示,并在思维链头部亮出来——用户能看到"我按哪套人设办事"
+        pers = persona_mod.get_persona(uid)
+        persona_text = str(pers.get("text") or "").strip()
         plan = core_mod.new_plan(
             goal=text, intent=str(state.get("intent") or ""),
             constraints=constraints_of(text), memory_used=hints)
         # 把 router 的 LLM 意图分类写进 trace，思维链面板据此告诉用户"我理解成什么"
         plan = core_mod.add_trace(plan, "perceive", note=str(state.get("intent") or ""))
-        # 思维链最早信号:感知完成即把"识别意图"推给用户(比规划更早可见)
+        # 思维链最早信号:感知完成即把"识别意图"推给用户(比规划更早可见);
+        # 人设由 build_thinking 置顶(后续节点重建思维链也会带上,不会覆盖掉)
+        thinking = build_thinking(plan, memory_used=hints, persona=persona_text)
         return {"analysis_skills": skills, "agent_plan": plan, "notice": None,
-                "analysis_view": None,
-                "thinking_view": build_thinking(plan, memory_used=hints)}
+                "analysis_view": None, "persona": persona_text,
+                "thinking_view": thinking}
 
     async def a_plan(state: AgentState) -> dict:
         """Plan + Guard:按技能目录生成步骤,再过一遍静态校验。"""
@@ -3333,14 +3360,16 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
             # 思维链提前到规划阶段下发:被拦也要让用户当场看到"为什么没办成"
             return {"agent_plan": failed,
                     "thinking_view": build_thinking(
-                        failed, memory_used=plan.get("memory_used")),
+                        failed, memory_used=plan.get("memory_used"),
+                        persona=state.get("persona")),
                     "notice": {"kind": "analysis_blocked", "errors": errors}}
         plan = core_mod.add_trace(plan, "guard", status="passed")
         # 思维链提前到规划阶段下发:执行还没开始,用户就能看到
         # "识别意图 → 制定计划 → 安全守卫"的全貌(此前要到 a_reflect 才可见)
         return {"agent_plan": plan,
                 "thinking_view": build_thinking(
-                    plan, memory_used=plan.get("memory_used")),
+                    plan, memory_used=plan.get("memory_used"),
+                    persona=state.get("persona")),
                 "notice": None}
 
     async def a_exec(state: AgentState) -> dict:
@@ -3381,13 +3410,15 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         # 让面板在执行阶段就生长,而非等到复盘才一次性出现。
         update: dict = {"agent_plan": plan, "bank_calls": calls,
                         "thinking_view": build_thinking(
-                            plan, memory_used=plan.get("memory_used"))}
+                            plan, memory_used=plan.get("memory_used"),
+                            persona=state.get("persona"))}
         if any(step.get("status") == core_mod.STEP_DELEGATED
                for step in (plan.get("steps") or [])):
             # 有步骤要交给既有链路:先把已跑完的分析展示给用户,再转交
             card = build_analysis_card(plan, intent=intent,
                                        bill=observations.get("analyze_bill"),
-                                       wealth=observations.get("analyze_wealth"))
+                                       wealth=observations.get("analyze_wealth"),
+                                       persona=state.get("persona"))
             update["analysis_view"] = card
         return update
 
@@ -3488,9 +3519,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         card = build_analysis_card(out, intent=intent,
                                    bill=observations.get("analyze_bill"),
                                    wealth=observations.get("analyze_wealth"),
-                                   reflection=reflection)
-        # 思维链:完整闭环(识别意图→记忆→计划→守卫→执行→复盘)一次暴露
-        thinking = build_thinking(out, memory_used=out.get("memory_used"))
+                                   reflection=reflection,
+                                   persona=state.get("persona"))
+        # 思维链:完整闭环(人设→识别意图→记忆→计划→守卫→执行→复盘)一次暴露
+        thinking = build_thinking(out, memory_used=out.get("memory_used"),
+                                  persona=state.get("persona"))
         return {"agent_plan": out, "analysis_view": card,
                 "thinking_view": thinking,
                 "notice": {"kind": "analysis_report", "analysis": intent,
@@ -3660,7 +3693,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         return {"notice": {"kind": "login_required"}}
 
     async def chat(state: AgentState) -> dict:
-        text = await ask_llm(CHAT_SYS, state["messages"], strong=True)
+        persona_block, persona_temp = _persona_ctx(state)
+        text = await ask_llm(CHAT_SYS + persona_block, state["messages"],
+                             strong=True, temperature=persona_temp)
         return {"messages": [AIMessage(content=text or "我在。")]}
 
     # ---------------------------------------------------------------- 通用播报
@@ -3678,8 +3713,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         # 播报用快模型(不 strong):业务办理要快,播报是对工具事实的转述,
         # 推理模型在这里只会白等十几秒;深度思考保留在闲聊(chat)上——
         # 开放式问题才值得让模型"想",办理类问题要的是立刻办。
-        text = await ask_llm(REPORT_SYS, state["messages"],
-                             "【事实】" + json.dumps(facts, ensure_ascii=False, default=str))
+        # 人设(用户设定)只改语气,从属规则钉死事实数字(见 _persona_ctx)。
+        persona_block, persona_temp = _persona_ctx(state)
+        text = await ask_llm(REPORT_SYS + persona_block, state["messages"],
+                             "【事实】" + json.dumps(facts, ensure_ascii=False, default=str),
+                             temperature=persona_temp)
         if not text or not text.strip():
             text = _fallback_announcement(state.get("notice"))
         text = _with_followup(text, state.get("notice"))

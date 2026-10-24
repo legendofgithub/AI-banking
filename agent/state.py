@@ -194,6 +194,7 @@ class AgentState(TypedDict, total=False):
     analysis_view: dict | None     # 只读分析计划卡视图(api 在 a_exec 节点下发 data-analysis-plan)
     thinking_view: dict | None     # 思维链视图(api 在 a_*/a_report 节点下发 data-thinking)
     analysis_skills: list[str]     # 本轮确定性选中的技能名(可回放:为什么选它)
+    persona: str                   # 当前用户人设文本(a_perceive 每轮刷新;空=未设置)
 
     # ---- 播报与留痕 ----
     notice: dict | None                # 播报依据的事实 {"kind": ..., ...}
