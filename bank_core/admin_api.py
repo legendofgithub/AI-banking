@@ -390,6 +390,26 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
         except LedgerError as e:
             return _err(e)
 
+    # ------------------------------------------------------------ 用户满意度(消息投票)
+    @app.get("/api/votes")
+    def votes(limit: int = 50) -> dict:
+        """最近的消息投票(点赞/点踩):8800 threads 库 message_votes 表。
+
+        跨库只读(表不存在=还没有人投过票,返回空);汇总出满意度供总览。
+        """
+        n = max(1, min(int(limit or 50), 200))
+        thr = Path(os.environ.get("AGENT_THREADS_DB")
+                   or (Path(__file__).resolve().parents[1]
+                       / "data" / "agent_threads.sqlite"))
+        rows = _rec_rows(
+            thr,
+            """SELECT chat_id, message_id, is_upvoted, updated_at
+               FROM message_votes ORDER BY updated_at DESC LIMIT ?""", (n,))
+        ups = sum(1 for r in rows if r["is_upvoted"])
+        return {"votes": [dict(r) for r in rows], "summary": {
+            "total": len(rows), "up": ups, "down": len(rows) - ups,
+            "satisfaction": round(ups * 100.0 / len(rows), 1) if rows else None}}
+
     # 权限边界(2026-10-01 定):管理员对用户联系人=只读+代客录入,不提供
     # 删除——个人数据不容后台销毁,删除权属用户本人(将来经对话工具+闸门)。
     # 原先的 DELETE /api/contacts/{id} 连同 ledger.delete_contact 一并移除。
