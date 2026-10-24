@@ -142,18 +142,23 @@ _PROFILE_NAME_STOP_HEAD = set("个车外菜你他她它这那谁啥的吗呢吧�
 _PROFILE_NAME_TAIL = ("就可以", "就行啦", "谢谢啦", "就行", "即可", "谢谢",
                       "就好", "好了", "好啦", "啦", "呗", "哦", "呀", "哈",
                       "嘛", "吧", "呢", "啊", "了")
+# 疑问闸:捕获串含疑问词即放弃(实测"你还记得我叫什么名字吗"被抓成姓名)
+_PROFILE_NAME_QUEST = ("什么", "怎么", "哪", "谁", "几", "吗", "呢")
 
 
 def extract_self_intro_name(text: str) -> str:
     """从用户消息提取自我介绍的姓名;不是自我介绍返回空串。纯函数,可单测。
 
     只认"我叫X/叫我X/我的名字是X"句式;姓名限 2-12 个汉字(可带·)或英文名,
-    首字命中误报闸(车/外卖/个…)不认,尾部语气词(就行/啦/吧…)剥掉。
-    业务槽位话术("添加收款人,姓名XX")天然不命中,不受影响。
+    首字命中误报闸(车/外卖/个…)不认,含疑问词(什么/吗/…)不认,
+    尾部语气词(就行/啦/吧…)剥掉。业务槽位话术("添加收款人,姓名XX")
+    天然不命中,不受影响。
     """
     for m in _SELF_INTRO_RE.finditer(str(text or "")):
         name = m.group(1).strip()
         if not name or name[0] in _PROFILE_NAME_STOP_HEAD:
+            continue
+        if any(w in name for w in _PROFILE_NAME_QUEST):
             continue
         while True:
             for tail in _PROFILE_NAME_TAIL:

@@ -536,6 +536,9 @@ def test_self_intro_name_extraction():
     assert ex("我叫Tony") == "Tony"
     assert ex("我叫车就不用了") == ""      # 动宾:叫车
     assert ex("我叫外卖送过来") == ""      # 动宾:叫外卖
+    assert ex("你还记得我叫什么名字吗?") == ""  # 疑问句:曾被抓成"什么名字吗"
+    assert ex("你知道我叫什么吗") == ""    # 疑问句
+    assert ex("我叫丁博文,你知道吗") == "丁博文"  # 正常介绍+疑问尾,首个命中优先
     assert ex("今天天气不错") == ""
 
 
