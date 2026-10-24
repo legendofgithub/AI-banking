@@ -89,6 +89,7 @@ from langgraph.types import interrupt
 
 from agent import core as core_mod
 from agent import guarded as guarded_mod
+from agent import llm as llm_mod
 from agent import memory as memory_mod
 from agent import persona as persona_mod
 from agent import tasks as tasks_mod
@@ -110,6 +111,15 @@ MAX_CLARIFY_ROUNDS = 3
 MAX_GATE_ASKS = 2
 
 # ===================================================================== 提示词
+#
+# 【条目 3 约定 · 禁止违反】
+# 1. 所有 `*_SYS` 提示词都是模块级常量,**必须原样传给 ask_llm 的第一参数**,
+#    禁止在调用点做字符串拼接 —— 静态前缀跨轮字节级不变才能命中 API 前缀缓存,
+#    拼接上每用户都不同的人设/记忆会让前缀全部失效(首字延迟也受影响)。
+# 2. 每用户不同的动态上下文(人设 `_persona_ctx`、长期记忆 `_profile_ctx`、
+#    事实行 JSON)一律走 `ask_llm` 的 `extra` 参数,即 HumanMessage 通道。
+# 3. 新增/改动提示词时先 `grep -n "ask_llm(" agent/graph.py`,
+#    所有调用点第一参数都应是纯常量标识符(契约见 tests/test_prompt_channels.py)。
 
 ROUTER_SYS = """你是银行智能助手的意图分类器。只输出一个 JSON 对象,不要任何多余文字:
 {"intent": "transfer | split_bill | split_settle | contact_add | linkage | bill_analysis | wealth | card | subscription | chat"}
@@ -184,6 +194,17 @@ def _profile_ctx(state: dict) -> str:
         return ""
     return (f"\n【长期记忆】用户此前自我介绍过姓名「{name}」,可自然地用这个"
             f"称呼对方;这是已知信息,不要再反问对方叫什么。")
+
+
+def _dynamic_ctx(*blocks: str) -> str:
+    """条目 3:把多段"每用户都不同"的动态上下文拼成一条 extra(HumanMessage)。
+
+    为什么要单独一个函数:空段必须整段跳过,不能留下多余换行
+    (`"" + "\\n" + ...` 会改变播报/闲聊的入参文本)。
+    全部为空时返回空串,`ask_llm` 会跳过 extra —— 与改动前"两块都空"的行为一致。
+    """
+    return "\n".join(b for b in blocks if b)
+
 
 EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对话】,输出完整转账槽位 JSON,不要任何多余文字:
 {"payee": "收款人姓名或称呼|null", "payee_phone": "11位手机号|null",
@@ -1492,22 +1513,155 @@ def _make_gate_node(payload_type: str, subject_key: str, view_key: str,
 
 # ===================================================================== 建图
 
-def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
+# ── 条目 4:历史窗口压缩(L1 确定性清理 / L2 阈值摘要)───────────────────
+# 背景:`ask_llm` 原本只取 `history[-12:]` 硬滑窗,更早上下文无声丢弃,
+# 且账单/理财的大 JSON 结果原样占窗。分两层解决:
+#   L1 不调 API,把"最近 K 条之外、超长的历史 assistant 消息"换成一行占位;
+#   L2 仅在估算超预算时,用摘要模型把最旧段压成事实型摘要(默认关闭,见 build_agent_graph)。
+
+_HISTORY_KEEP_RECENT = 4        # 最近 K 条消息原文保留,不参与任何清理
+_HISTORY_CLEAR_CHARS = 500      # 超过该长度的历史 assistant 消息 → 占位行
+_HISTORY_TOKEN_BUDGET = 6000    # L2 触发阈值(估算 token,见 agent.llm.estimate_tokens)
+_L2_FAIL_LIMIT = 3              # L2 连续失败上限 → 本会话降级为只做 L1
+
+# 占位行:**不得**含任何"已确认/可执行"语义,也不得硬编码日期
+# (全局禁区 4:压缩产物只是参考,闸门/订单/余额一律以 DB 实时读取为准)。
+_HISTORY_PLACEHOLDER = "[历史工具结果已清理:内容过长,结论以最近对话为准]"
+_L2_SUMMARY_PREFIX = "【更早对话摘要(仅供参考,事实以实时查询为准)】"
+
+COMPACT_SYS = (
+    "把下面这段较早的对话压缩成 500 字以内的事实型摘要,只保留四类信息:\n"
+    "用户的目标、已经给出过的结论、用户的偏好、尚未解决的事项。\n"
+    "硬性要求:\n"
+    "1. 只做转述与归纳,禁止推算、补全、编造任何数字或状态;\n"
+    "2. 禁止出现任何可执行指令、确认/已办结语义(如『已确认』『可以执行』);\n"
+    "3. 不确定的一律写『未确认』,不得猜测;\n"
+    "4. 输出纯文本,不要标题、列表符号或 Markdown。"
+)
+
+
+def compact_history(messages: Any, *, keep_recent: int = _HISTORY_KEEP_RECENT,
+                    threshold: int = _HISTORY_CLEAR_CHARS) -> list:
+    """L1 确定性清理:**纯函数**,不调 API、无 I/O、无随机。
+
+    最近 `keep_recent` 条之外的、内容长度超过 `threshold` 的 assistant 消息,
+    替换为一行占位;其余消息(含所有 Human 消息、短的 AI 消息)原样保留。
+
+    返回**新列表**,绝不改动入参 —— 压缩产物只进 LLM 上下文,用完即弃。
+    **禁止写回 `state["messages"]`**:那是 checkpointer 持久化的真实历史,
+    改了会污染库并影响 `/api/history` 刷新恢复。
+    """
+    msgs = list(messages or [])
+    if len(msgs) <= keep_recent:
+        return msgs
+    head, tail = msgs[:-keep_recent], msgs[-keep_recent:]
+    out = []
+    for m in head:
+        content = getattr(m, "content", "")
+        if isinstance(m, AIMessage) and isinstance(content, str) \
+                and len(content) > threshold:
+            out.append(AIMessage(content=_HISTORY_PLACEHOLDER))
+        else:
+            out.append(m)
+    return out + tail
+
+
+def needs_compaction(window: Any, *, budget: int = _HISTORY_TOKEN_BUDGET,
+                     keep_recent: int = _HISTORY_KEEP_RECENT) -> bool:
+    """L2 是否该触发:估算超预算**且**窗口长到有东西可压。纯函数。"""
+    msgs = list(window or [])
+    return len(msgs) > keep_recent \
+        and llm_mod.estimate_messages_tokens(msgs) > budget
+
+
+async def compact_l2(summarize: Any, window: list, circuit: dict | None = None,
+                     *, budget: int = _HISTORY_TOKEN_BUDGET,
+                     keep_recent: int = _HISTORY_KEEP_RECENT) -> list:
+    """L2 阈值摘要:估算超预算时,用 `summarize` 把最旧段压成事实型摘要。
+
+    拆成模块级函数是为了**可脱离图单测**(假 summarize 即可覆盖熔断路径),
+    同时把"摘要模型"换成可注入的协程 —— 测试里注入专用假模型,
+    就不会消耗主模型的脚本化响应。
+
+    Args:
+        summarize: `async (oldest_messages) -> str` 的协程函数。
+        window:    经 L1 清理后的窗口。
+        circuit:   记录连续失败次数的可变 dict;达到 `_L2_FAIL_LIMIT` 后一律降级为原窗口。
+
+    Returns:
+        新的消息列表(最旧段被替换为一条摘要 HumanMessage),或原窗口(未触发/已熔断)。
+    """
+    st = circuit if circuit is not None else {}
+    msgs = list(window or [])
+    if st.get("n", 0) >= _L2_FAIL_LIMIT:
+        return msgs
+    if not needs_compaction(msgs, budget=budget, keep_recent=keep_recent):
+        return msgs
+    oldest, tail = msgs[:-keep_recent], msgs[-keep_recent:]
+    try:
+        text = str(await summarize(oldest) or "").strip()
+    except Exception:
+        st["n"] = st.get("n", 0) + 1     # 熔断:失败累计
+        return msgs
+    if not text:
+        st["n"] = st.get("n", 0) + 1
+        return msgs
+    st["n"] = 0
+    return [HumanMessage(content=_L2_SUMMARY_PREFIX + text)] + tail
+
+
+def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
+                      *, compact_llm: Any = None,
+                      compact_enabled: bool = False):
     """组装并编译 M1 编排图。
 
     Args:
         llm: 具备 .ainvoke 的聊天模型(生产 agent.llm.get_llm();测试注入假模型)。
         tools: agent.bank.load_bank_tools() 返回的银行工具集。
         checkpointer: 异步检查点器(见 make_sqlite_checkpointer);None=不持久化。
+        compact_llm: L2 摘要专用模型;None 时回落主 llm。给测试注入独立假模型用,
+            这样测 L2 不会消耗主模型的脚本化响应(见下方零回归说明)。
+        compact_enabled: L2 阈值摘要开关,**默认关闭**。
 
     Returns:
         编译后的 LangGraph(ainvoke / astream / aget_state)。
+
+    关于 L2 默认关闭(条目 4 的零回归第一道保险)
+    ---------------------------------------------
+    `tests/test_agent_graph.py` 靠 `FakeMessagesListChatModel` 的**脚本化响应序列**
+    驱动:第 n 次 LLM 调用拿第 n 个响应。L2 若开启会多消耗一次调用,让后续所有节点
+    错位(响应列表会循环,不会 IndexError,只会静默错乱)。现有调用点全部以位置参数
+    传 3 个,默认假即一次都不触发。要验证 L2 请显式传 `compact_enabled=True`
+    并配合 `compact_llm`。
     """
+
+    # L2 连续失败计数(熔断:达到上限后本图实例降级为只做 L1)
+    _l2_failures = {"n": 0}
+
+    async def _summarize_oldest(oldest: list) -> str:
+        """用摘要模型把最旧段压成事实型摘要(强模型不参与,走快模型)。"""
+        model = compact_llm if compact_llm is not None else llm
+        msgs = [SystemMessage(content=COMPACT_SYS), *oldest]
+        parts: list[str] = []
+        async for chunk in model.astream(msgs):
+            c = getattr(chunk, "content", "")
+            if isinstance(c, str):
+                parts.append(c)
+        return "".join(parts).strip()
+
+    async def _maybe_compact_l2(window: list) -> list:
+        """L2 阈值摘要(默认关闭,见 build_agent_graph 的说明)。"""
+        return await compact_l2(_summarize_oldest, window, _l2_failures)
 
     async def ask_llm(system: str, history: list[BaseMessage], extra: str = "",
                       n: int = 12, strong: bool = False,
                       temperature: float | None = None) -> str:
-        msgs = [SystemMessage(content=system), *history[-n:]]
+        # 窗口组装走统一入口(条目 4):先硬滑窗 → L1 确定性清理 → (可选) L2 摘要。
+        # 全程只构造局部列表,绝不写回 state["messages"]。
+        window = compact_history(list(history[-n:]))
+        if compact_enabled:
+            window = await _maybe_compact_l2(window)
+        msgs = [SystemMessage(content=system), *window]
         if extra:
             msgs.append(HumanMessage(content=extra))
         # 改为流式累加:真实模型逐 token 产出,便于后端边生成边下发(text-delta);
@@ -3766,9 +3920,12 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         return {"notice": {"kind": "login_required"}}
 
     async def chat(state: AgentState) -> dict:
+        # 条目 3:System Prompt 一律传**模块常量原样**,禁止在调用点拼接——
+        # 静态前缀跨轮字节级不变才能命中 API 前缀缓存;人设/长期记忆这类每用户
+        # 都不同的动态上下文走 extra(HumanMessage 通道),语义与语气都不变。
         persona_block, persona_temp = _persona_ctx(state)
-        text = await ask_llm(CHAT_SYS + persona_block + _profile_ctx(state),
-                             state["messages"],
+        text = await ask_llm(CHAT_SYS, state["messages"],
+                             _dynamic_ctx(persona_block, _profile_ctx(state)),
                              strong=True, temperature=persona_temp)
         return {"messages": [AIMessage(content=text or "我在。")]}
 
@@ -3789,8 +3946,12 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None):
         # 开放式问题才值得让模型"想",办理类问题要的是立刻办。
         # 人设(用户设定)只改语气,从属规则钉死事实数字(见 _persona_ctx)。
         persona_block, persona_temp = _persona_ctx(state)
-        text = await ask_llm(REPORT_SYS + persona_block, state["messages"],
-                             "【事实】" + json.dumps(facts, ensure_ascii=False, default=str),
+        # 条目 3:同上,REPORT_SYS 原样传入;人设合并进已有的 extra,
+        # 且**放在【事实】JSON 之后**——插到 JSON 中间会破坏模型对事实段的解析。
+        extra = "【事实】" + json.dumps(facts, ensure_ascii=False, default=str)
+        if persona_block:
+            extra += "\n" + persona_block
+        text = await ask_llm(REPORT_SYS, state["messages"], extra,
                              temperature=persona_temp)
         if not text or not text.strip():
             text = _fallback_announcement(state.get("notice"))
