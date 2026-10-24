@@ -34,6 +34,9 @@ logs/
 .playwright-mcp/
 nul
 
+# ===== e2e 运行截图(webui/e2e-*.mjs 每次运行重新生成的输出,不入库) =====
+gui-test-*/
+
 # ===== AI 会话产物(ZCode 每会话生成的计划文件,本地留档不入库) =====
 .zcode/plans/
 
