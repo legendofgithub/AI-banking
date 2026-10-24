@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import math
 import os
 import urllib.request
 from datetime import datetime
@@ -42,6 +43,50 @@ def provider_family(provider: str | None) -> str:
     """供应商 → 协议族。Claude/Anthropic 走原生 messages,其余走 OpenAI 兼容。"""
     return ("anthropic" if str(provider or "").lower() in ("anthropic", "claude")
             else "openai")
+
+
+# 估算口径(施工文档条目 2):CJK ≈ 1 token/字符,其余 ≈ 0.25 token/字符(4 字符 ≈ 1 token)。
+# 只覆盖中日韩统一表意文字 + 兼容表意文字 + CJK 标点/全角区,够用即可。
+_CJK_RANGES = ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF),
+               (0x3000, 0x303F), (0xFF00, 0xFFEF))
+
+# 每条消息的角色/分隔开销(tokenizer 实测经验值)
+_MESSAGE_OVERHEAD = 4
+
+
+def estimate_tokens(text: Any) -> int:
+    """字符数 → token 数的**估算**值(端点拿不到 usage 时的回落口径)。
+
+    这是纯函数:无 I/O、无日志、无随机、不读全局状态,相同输入必然相同输出。
+    为什么必须这么干净:全量测试里**所有假模型路径都会走这条分支**
+    (FakeMessagesListChatModel 的 chunk 不带 usage_metadata),任何副作用都会被
+    放大到 413 条用例。
+
+    精度只求量级正确——它只用于"是否超预算"的阈值判断(条目 4 的 L2),
+    不用于计费,真实计量一律以端点回传的 usage 为准。
+    """
+    if text is None:
+        return 0
+    if not isinstance(text, str):
+        text = str(text)
+    if not text:
+        return 0
+    cjk = sum(1 for ch in text
+              if any(lo <= ord(ch) <= hi for lo, hi in _CJK_RANGES))
+    return math.ceil(cjk + (len(text) - cjk) * 0.25)
+
+
+def estimate_messages_tokens(messages: Any) -> int:
+    """估算消息列表的 token 数(逐条 content 累加 + 每条角色开销)。
+
+    同样纯函数:只依赖对象的 `.content` 属性,不 import langchain,
+    因此条目 4 的窗口预算判断可以脱离图做单测。
+    """
+    total = 0
+    for m in messages or ():
+        content = getattr(m, "content", m)
+        total += estimate_tokens(content) + _MESSAGE_OVERHEAD
+    return total
 
 
 # 推理模型识别:命中这些 hint 的模型默认开启原生深度思考(reasoning_content)
