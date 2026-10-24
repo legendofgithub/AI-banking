@@ -24,6 +24,7 @@ import _mcp_inprocess
 @pytest.fixture(autouse=True)
 def _isolate_agent_memory_db(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_MEMORY_DB", str(tmp_path / "agent_memory.sqlite"))
+    monkeypatch.setenv("AGENT_PERSONA_DB", str(tmp_path / "agent_persona.sqlite"))
 
 
 def _make_inprocess_loader():

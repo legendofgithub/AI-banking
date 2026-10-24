@@ -1086,3 +1086,42 @@ def test_memory_view_and_forget_endpoints(tmp_path, monkeypatch):
         assert memory_mod.recall(1, "bill") is None
         assert client.delete("/api/memory/随便写",
                              headers=headers).status_code == 404
+
+
+# ----------------------------------------------------------------- 人设接口(2026-10-24)
+
+def test_persona_get_put_endpoints(tmp_path):
+    """GET/PUT /api/persona:未登录 401;roundtrip;空文本恢复默认;
+    温度越界/超长文本 422(pydantic 校验)。"""
+    from agent import persona as persona_mod
+    client, _db, tok = _client(tmp_path, ['{"intent": "chat"}', "hi"])
+    headers = {"x-bank-token": tok}
+    with client:
+        assert client.get("/api/persona").status_code == 401
+        assert client.put("/api/persona", json={"persona": "x"}
+                          ).status_code == 401
+        # 默认态
+        r = client.get("/api/persona", headers=headers)
+        assert r.status_code == 200
+        assert r.json() == {"persona": "", "temperature": 0.1,
+                            "is_default": True}
+        # 写入 + 回读
+        r = client.put("/api/persona", headers=headers,
+                       json={"persona": "说话像江湖侠客", "temperature": 0.9})
+        assert r.status_code == 200
+        assert r.json() == {"persona": "说话像江湖侠客", "temperature": 0.9,
+                            "is_default": False}
+        assert client.get("/api/persona", headers=headers).json()[
+            "persona"] == "说话像江湖侠客"
+        # 恢复默认
+        r = client.put("/api/persona", headers=headers,
+                       json={"persona": "", "temperature": 0.1})
+        assert r.json()["is_default"] is True
+        assert persona_mod.get_persona(1)["text"] == ""
+        # 校验:温度越界 / 超长文本
+        assert client.put("/api/persona", headers=headers,
+                          json={"persona": "x", "temperature": 1.5}
+                          ).status_code == 422
+        assert client.put("/api/persona", headers=headers,
+                          json={"persona": "长" * 301}
+                          ).status_code == 422
