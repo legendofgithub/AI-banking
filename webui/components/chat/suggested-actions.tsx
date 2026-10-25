@@ -39,18 +39,13 @@ function PureSuggestedActions({ chatId, sendMessage }: SuggestedActionsProps) {
 
   return (
     <div
-      className="flex w-full gap-2.5 overflow-x-auto pb-1 sm:grid sm:grid-cols-2 sm:overflow-visible"
+      className="grid w-full grid-cols-2 gap-2.5 pb-1"
       data-testid="suggested-actions"
-      style={{
-        msOverflowStyle: "none",
-        scrollbarWidth: "none",
-        WebkitOverflowScrolling: "touch",
-      }}
     >
       {suggestedActions.map((suggestedAction, index) => (
         <motion.div
           animate={{ opacity: 1, y: 0 }}
-          className="min-w-[200px] shrink-0 sm:min-w-0 sm:shrink"
+          className="min-w-0"
           exit={{ opacity: 0, y: 16 }}
           initial={{ opacity: 0, y: 16 }}
           key={suggestedAction}
