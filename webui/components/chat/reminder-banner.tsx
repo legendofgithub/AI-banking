@@ -224,7 +224,7 @@ export function ReminderBanner() {
 
   return (
     <div
-      className="mx-auto w-full max-w-4xl px-2 pt-2 md:px-4"
+      className="mx-auto w-full max-w-4xl px-2 pt-1 md:px-4"
       data-testid="reminder-entry"
     >
       <div
@@ -233,9 +233,9 @@ export function ReminderBanner() {
         ref={wrapRef}
         style={panelH ? { maxHeight: `${panelH}px` } : undefined}
       >
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
           <button
-            className="rounded-full border border-border/50 bg-card/60 px-3 py-1 transition hover:bg-card"
+            className="rounded-full border border-border/50 bg-card/60 px-2.5 py-0.5 transition hover:bg-card"
             onClick={handleRefresh}
             type="button"
           >
@@ -243,18 +243,19 @@ export function ReminderBanner() {
           </button>
           <input
             aria-label="演示快进日期"
-            className="rounded-full border border-border/50 bg-card/60 px-3 py-1 text-xs text-foreground"
+            className="rounded-full border border-border/50 bg-card/60 px-2.5 py-0.5 text-[11px] text-foreground"
             onChange={handleDateChange}
             type="datetime-local"
             value={fastForward}
           />
           <button
-            className="rounded-full border border-dashed border-border/60 px-3 py-1 transition hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-full border border-dashed border-border/60 px-2.5 py-0.5 transition hover:bg-card disabled:cursor-not-allowed disabled:opacity-50"
             disabled={!fastForward}
             onClick={handleFastForward}
+            title="演示用:把今天拨到所选时刻再查提醒(先在左侧选日期时间)"
             type="button"
           >
-            ⏩ 演示快进(演示用:把今天拨到所选时刻再查提醒)
+            ⏩ 演示快进
           </button>
           <button
             aria-label="收起提醒面板"
@@ -292,13 +293,13 @@ export function ReminderBanner() {
           拖拽是鼠标/触屏专属交互,键盘用户走上方「收起」按钮,故 aria-hidden */}
       <div
         aria-hidden="true"
-        className="group -my-0.5 flex h-4 cursor-ns-resize items-center justify-center rounded touch-none select-none"
+        className="group -my-0.5 flex h-3 cursor-ns-resize items-center justify-center rounded touch-none select-none"
         data-testid="reminder-resize-handle"
         onDoubleClick={handleCollapse}
         onPointerDown={handleHandleDown}
         title="拖拽调整高度 · 双击收起面板"
       >
-        <span className="h-1 w-10 rounded-full bg-border transition-colors group-hover:bg-muted-foreground/50" />
+        <span className="h-0.5 w-8 rounded-full bg-border transition-colors group-hover:bg-muted-foreground/50" />
       </div>
     </div>
   );
