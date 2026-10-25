@@ -119,10 +119,10 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 413 个用例全绿(2026-10-24 实测)
+.venv/Scripts/python.exe -m pytest tests -q      # 481 个用例全绿(2026-10-25 实测)
 .venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
 
-# 用例数不写固定值,一律以 --collect-only 实测为准(205/245/133 均为过期数字)
+# 用例数不写固定值,一律以 --collect-only 实测为准(历史文档里的 205/245/133/413 均已过期)
 # 全量推荐加 --basetemp=.pytest_tmp/<批次号>(批次号递增、目录全新),
 # 否则 pytest 清理旧临时库触发 safe-delete 守卫 → 用例全过却 rc=1 的假失败。
 
@@ -162,4 +162,12 @@ tests/test_tool_meta.py     16 个 —— 44 工具身份证对账(多/少/风�
 tests/test_votes.py          8 个 —— 消息投票:投/换/取消往返、GET 恢复、管理台汇总
 tests/test_task_store.py     7 个 —— 长程任务存储层(纯 sqlite)
 tests/test_longtask.py       4 个 —— 长程任务图级闭环:建档 → 到期唤醒 → 复盘留痕
+tests/test_token_usage.py   14 个 —— Token 估算纯函数(CJK 1 字符≈1 token / 其余≈0.25):
+                            异形输入、百万字符秒级返回、6000 阈值边界稳定
+tests/test_guarded_call.py  21 个 —— 工具调用咽喉:记账字段与旧 _jr 逐字段等价、
+                            args 快照隔离("我怎么把它弄坏"探测抓到的真 bug 回归)
+tests/test_history_compact.py 25 个 —— 历史三层压缩:L1 占位清理(4 条/500 字符)、
+                            L2 阈值摘要(6000 token/熔断 3 次)、L3 不做
+tests/test_prompt_channels.py 8 个 —— 通道分离:System Prompt 严格等于静态常量、
+                            动态上下文(persona/记忆/事实)一律走 HumanMessage
 ```
