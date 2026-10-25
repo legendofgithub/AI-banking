@@ -554,6 +554,16 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             else:
                 msgs.append({"id": "pending", "role": "assistant",
                              "parts": parts})
+        # 只读分析卡(Agent Core):analysis_view 由 router 每轮入口置 None,
+        # 检查点里非 None 就代表"最后一轮是分析轮"。这里挂回最后一条助手消息
+        # (插在播报文本之前,与直播时的卡片位置一致),否则刷新/换设备(手机
+        # 加入电脑端会话)后只剩文字播报,分析报告卡凭空消失。
+        acard = (values or {}).get("analysis_view")
+        if isinstance(acard, dict) and msgs and msgs[-1]["role"] == "assistant":
+            pos = next((i for i, p in enumerate(msgs[-1]["parts"])
+                        if p.get("type") == "text"), 0)
+            msgs[-1]["parts"].insert(pos, {"type": "data-analysis-plan",
+                                           "data": acard})
         return {"isReadonly": False, "visibility": "private",
                 "userId": None, "messages": msgs}
 

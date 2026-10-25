@@ -432,6 +432,46 @@ def test_history_shows_pending_gate_question(tmp_path):
         assert all(texts2[i] != texts2[i - 1] for i in range(1, len(texts2)))
 
 
+def test_history_restores_analysis_card(tmp_path):
+    """分析轮后刷新/换设备(手机加入电脑端会话):/api/history 挂回
+    data-analysis-plan 报告卡,不再只剩文字播报;下一轮非分析对话后,
+    旧卡不残留(router 每轮入口清空 analysis_view)。"""
+    from test_agent_graph import (_prev_month_ym, _seed_bill_wealth_card,
+                                  _seed_tx_month)
+    client, db, _tok = _client(tmp_path, [
+        '{"intent": "bill_analysis"}',
+        "上个月账单分析完成。",
+        '{"intent": "chat"}',
+        "好的,有需要再找我。",
+    ])
+    _seed_bill_wealth_card(db)
+    y, m = _prev_month_ym()
+    _seed_tx_month(db, y, m)
+    with client:
+        _post_chat(client, "帮我分析上个月的账单", "api-ac", token=_tok)
+        msgs = client.get("/api/history",
+                          params={"thread_id": "api-ac"},
+                          headers={"x-bank-token": _tok}).json()["messages"]
+        last = msgs[-1]
+        assert last["role"] == "assistant"
+        types = [p["type"] for p in last["parts"]]
+        assert "data-analysis-plan" in types
+        # 卡片在播报文本之前(与直播时的卡片位置一致)
+        assert types.index("data-analysis-plan") < types.index("text")
+        card = next(p for p in last["parts"]
+                    if p["type"] == "data-analysis-plan")["data"]
+        assert card["intent"] == "bill"
+        assert card["reflection"]["status"] == "success"
+
+        # 下一轮闲聊:旧分析卡不残留(最后一轮已不是分析轮)
+        _post_chat(client, "谢谢", "api-ac", token=_tok)
+        msgs2 = client.get("/api/history",
+                           params={"thread_id": "api-ac"},
+                           headers={"x-bank-token": _tok}).json()["messages"]
+        assert not any(p.get("type") == "data-analysis-plan"
+                       for m in msgs2 for p in m["parts"])
+
+
 # ----------------------------------------------------------------- 常用收款人选择器
 
 def test_contacts_api_list_create_and_validation(tmp_path):
