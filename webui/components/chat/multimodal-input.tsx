@@ -520,7 +520,7 @@ function PureMultimodalInput({
           </div>
         )}
         <PromptInputTextarea
-          className="min-h-24 text-[13px] leading-relaxed px-4 pt-3.5 pb-1.5 placeholder:text-muted-foreground/35"
+          className="min-h-9 max-h-40 text-[13px] leading-relaxed px-3 py-2 placeholder:text-muted-foreground/35"
           data-testid="multimodal-input"
           onChange={handleInput}
           onKeyDown={handleTextareaKeyDown}
@@ -530,7 +530,7 @@ function PureMultimodalInput({
           ref={textareaRef}
           value={input}
         />
-        <PromptInputFooter className="px-3 pb-3">
+        <PromptInputFooter className="px-3 pb-1.5">
           <PromptInputTools>
             <AttachmentsButton fileInputRef={fileInputRef} status={status} />
             <ConnectedModelInfo />
