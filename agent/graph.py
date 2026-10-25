@@ -183,6 +183,200 @@ def extract_self_intro_name(text: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------- 长期记忆:对话提炼器
+# 2026-10-26:检阅弹窗升级配套——每轮用户输入都留下"提炼后的痕迹"。不是全文
+# 录像,是可回看、可展示的结构化短记忆;与自我介绍捕获同款哲学:**确定性
+# 正则、零 LLM 调用、软失败**,对测试里的假模型路径零扰动。写四档(见
+# memory.MEMORY_MODULES 后四项),条目统一 {kind,text,at,key}:key 是去重键
+# (同 key 不重复记),at 由 memory.append_items 补时间戳。
+
+_TIMELINE_INTENT_LABEL = {
+    "transfer": "转账", "split_bill": "AA记账", "split_settle": "AA结算",
+    "contact_add": "联系人", "linkage": "联动", "bill_analysis": "账单",
+    "wealth": "理财", "card": "卡片", "subscription": "订阅", "chat": "闲聊",
+}
+
+# 提炼对象的通用形状:懒匹配到第一个标点/空白/句尾(偏好/忌讳的宾语)
+_OBJ_TAIL = r"([\u4e00-\u9fa5A-Za-z0-9 +·]{1,20}?)(?=[，。,.!！?？;；、\s]|$)"
+_PREF_LIKE_RE = re.compile(r"我(?:很|特别|超|比较|最)?(?:喜欢|偏爱|偏好)" + _OBJ_TAIL)
+_PREF_DISLIKE_RE = re.compile(
+    r"我(?:不(?:太|怎么)?(?:喜欢|爱|想要)|讨厌|反感|嫌弃)" + _OBJ_TAIL)
+_PREF_NOMORE_RE = re.compile(
+    r"不想再(买|吃|喝|用|订|去|玩|看|办)"
+    r"([\u4e00-\u9fa5A-Za-z0-9 ]{0,16}?)(?=[，。,.!！?？;；\s]|$)")
+_PREF_ATTITUDE_RE = re.compile(
+    r"我(?:是|偏|属于|算|比较)(保守|稳健|激进|平衡)(?:型|派)?")
+_PREF_NORISK_RE = re.compile(
+    r"(?:我)?(?:不想|害怕|怕)(?:再)?(亏钱|亏|冒风险|承担风险|有亏损)")
+
+_FACT_CITIES = ("北京|上海|广州|深圳|杭州|成都|重庆|武汉|南京|西安|苏州|天津"
+                "|长沙|郑州|青岛|大连|厦门|宁波|无锡|合肥|昆明|沈阳|哈尔滨"
+                "|济南|福州|佛山|东莞|石家庄|太原|南昌|贵阳|兰州|南宁|海口")
+# 城市:主语可省("在杭州工作");显式否定组挡掉"不住在北京"("不"与"在"
+# 之间可能隔一个"住"字,单个 lookbehind 挡不住,交给代码跳过被否定的匹配);
+# 城市后必须紧跟语境词/标点,避免"杭州银行App"这类词内误命中
+_FACT_CITY_RE = re.compile(
+    r"(?:我(?:现在|目前)?)?(不|没)?(?:住在?|定居在|老家在|家在|在)("
+    + _FACT_CITIES + r")(?:市)?(?=[的，。,.!！?？;；、\s]|工作|生活|上班|定居"
+    r"|出差|读书|上学|念书|$)")
+_FACT_JOB_RE = re.compile(
+    r"(?:我是(?:一[名个位])?|我(?:做|当)(?:过|了)?|是(?:一[名个位])?)?"
+    r"(程序员|软件工程师|工程师|产品经理|项目经理|设计师|老师|教师|医生"
+    r"|护士|研究生|大学生|博士生|学生|会计师|律师|公务员|警察|司机|厨师"
+    r"|销售|运营|人事|财务|银行职员|上班族|打工人|自由职业者|创业者|个体户"
+    r"|老板|退休)")
+_FACT_WORKPLACE_RE = re.compile(
+    r"(?:我|我(?:现在)?(?:在一家|在一个)|在)([\u4e00-\u9fa5]{2,10}?)"
+    r"(?:公司)?(?:上班|工作|打工|任职)")
+_FACT_AGE_RE = re.compile(r"(?:我(?:今年)?|今年)(\d{2})岁")
+# 收入:主语可省("月薪2万"/"工资8000元"/"每月收入1.5万"),锚定收入词本身
+_FACT_INCOME_RE = re.compile(
+    r"(?:每月|每个月|月|每年|年)?"
+    r"(工资|月薪|月收入|年收入|年薪|收入)(?:大概|大约|约|是|有)?"
+    r"(\d+(?:\.\d+)?)(万|k|K|千|元|块)")
+_FACT_MARRIED_RE = re.compile(r"(?:我(?:已经|早就)?(?:结婚|领了?证)|已婚)")
+_FACT_KID_RE = re.compile(
+    r"(?:我)?有(?:个|一个|两个|俩)?(?:可爱的)?(?:儿子|女儿|孩子|小孩|宝宝)")
+_FACT_PARTNER_RE = re.compile(
+    r"(?:我(?:的)?|家里)?(老婆|老公|媳妇|爱人|对象|女朋友|男朋友|伴侣)")
+_FACT_PET_RE = re.compile(
+    r"(?:我)?(?:养了|养着|家里养了?|家里有)(?:一[只个条]|两[只个条]|三[只个条])?"
+    r"(猫|狗|兔子|仓鼠|乌龟|鹦鹉|金鱼|鱼|鸟)")
+_FACT_BIRTHDAY_RE = re.compile(
+    r"(?:我(?:的)?生日(?:是|在)?|生日)(\d{1,2})月(\d{1,2})[号日]?")
+
+# 目标:主语可省("还想年底去日本旅游");(?<![不别])否定后顾挡掉
+# "不想再订X"这类**反目标**;头部停用词过滤"查询类"请求(我想看账单 ≠ 目标)
+_GOAL_RE = re.compile(
+    r"(?:我|还|也|再)?(?<![不别])(?:想|想要|打算|计划|准备|希望|考虑)要?"
+    r"([\u4e00-\u9fa5A-Za-z0-9 ，、和与到]{2,26}?)(?=[。.!！？?；;，,]|$)")
+_GOAL_STOP_HEAD = ("看", "查", "知道", "了解", "问", "让", "帮", "试",
+                   "说", "要", "知道下")
+# 事实提取的兜底停用词(命中即放弃该条,防"我在公司上班"这类无信息量捕获)
+_FACT_WORKPLACE_STOP = {"公司", "单位", "银行", "家里", "这里", "那边",
+                        "外面", "网上", "手机上", "电脑上"}
+
+
+def _clip_extract(s: Any) -> str:
+    """提炼对象的清理:去空白、去两端的语气助词与标点、截 20 字。纯函数。"""
+    s = re.sub(r"\s+", " ", str(s or "")).strip()
+    return s.strip("，。、！？；：,.!?;: ").rstrip("的了 " )[:20]
+
+
+def extract_turn_extracts(text: str) -> dict[str, list[dict]]:
+    """从单轮用户输入提炼结构化条目(只提取,不落库)。纯函数,可单测。
+
+    返回 {"preferences": [...], "facts": [...], "goals": [...]},每条
+    {kind,text,key};无命中返回空 dict。落库交给 remember_turn_extracts。
+    """
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not t:
+        return {}
+    prefs: list[dict] = []
+    facts: list[dict] = []
+    goals: list[dict] = []
+
+    for m in _PREF_LIKE_RE.finditer(t):
+        obj = _clip_extract(m.group(1))
+        if obj and not any(c in obj for c in "你您他她它"):
+            prefs.append({"kind": "like", "text": obj, "key": f"like:{obj}"})
+    for m in _PREF_DISLIKE_RE.finditer(t):
+        obj = _clip_extract(m.group(1))
+        if obj and not any(c in obj for c in "你您他她它"):
+            prefs.append({"kind": "dislike", "text": obj,
+                          "key": f"dislike:{obj}"})
+    for m in _PREF_NOMORE_RE.finditer(t):
+        verb, obj = m.group(1), _clip_extract(m.group(2))
+        prefs.append({"kind": "dislike", "text": f"不想再{verb}{obj}",
+                      "key": f"nomore:{verb}{obj}"})
+    for m in _PREF_ATTITUDE_RE.finditer(t):
+        prefs.append({"kind": "attitude", "text": f"偏{m.group(1)}",
+                      "key": f"attitude:{m.group(1)}"})
+    for m in _PREF_NORISK_RE.finditer(t):
+        prefs.append({"kind": "attitude", "text": "不想亏本金",
+                      "key": "attitude:norisk"})
+
+    for m in _FACT_CITY_RE.finditer(t):
+        if m.group(1):  # 被否定("不住在/没在北京") → 宁漏勿错,跳过这条
+            continue
+        if m.group(2):
+            facts.append({"kind": "城市", "text": m.group(2),
+                          "key": f"city:{m.group(2)}"})
+            break  # 一轮只记一个城市;第一个肯定表述最可信
+    for m in _FACT_JOB_RE.finditer(t):
+        facts.append({"kind": "职业", "text": m.group(1),
+                      "key": f"job:{m.group(1)}"})
+    for m in _FACT_WORKPLACE_RE.finditer(t):
+        wp = _clip_extract(m.group(1))
+        if wp and wp not in _FACT_WORKPLACE_STOP:
+            facts.append({"kind": "职业", "text": f"在{wp}上班",
+                          "key": f"workplace:{wp}"})
+    m = _FACT_AGE_RE.search(t)
+    if m and 16 <= int(m.group(1)) <= 99:
+        facts.append({"kind": "年龄", "text": f"{m.group(1)}岁",
+                      "key": f"age:{m.group(1)}"})
+    m = _FACT_INCOME_RE.search(t)
+    if m:
+        facts.append({"kind": "收入",
+                      "text": f"{m.group(1)}{m.group(2)}{m.group(3)}",
+                      "key": "income"})
+    if _FACT_MARRIED_RE.search(t):
+        facts.append({"kind": "家庭", "text": "已婚", "key": "family:married"})
+    if _FACT_KID_RE.search(t):
+        facts.append({"kind": "家庭", "text": "有孩子", "key": "family:kid"})
+    m = _FACT_PARTNER_RE.search(t)
+    if m:
+        facts.append({"kind": "家庭", "text": f"提到{m.group(1)}",
+                      "key": f"family:{m.group(1)}"})
+    m = _FACT_PET_RE.search(t)
+    if m:
+        facts.append({"kind": "宠物", "text": f"养{m.group(1)}",
+                      "key": f"pet:{m.group(1)}"})
+    m = _FACT_BIRTHDAY_RE.search(t)
+    if m and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31:
+        facts.append({"kind": "生日", "text": f"{m.group(1)}月{m.group(2)}日",
+                      "key": "birthday"})
+
+    for m in _GOAL_RE.finditer(t):
+        obj = _clip_extract(m.group(1))
+        if len(obj) >= 2 and not any(obj.startswith(w) for w in _GOAL_STOP_HEAD):
+            goals.append({"kind": "goal", "text": obj, "key": f"goal:{obj}"})
+
+    out: dict[str, list[dict]] = {}
+    if prefs:
+        out["preferences"] = prefs
+    if facts:
+        out["facts"] = facts
+    if goals:
+        out["goals"] = goals
+    return out
+
+
+def remember_turn_extracts(user_id: Any, text: str,
+                           intent: str = "chat") -> dict[str, int]:
+    """提炼单轮用户输入并落库(路由器每轮调用一次)。
+
+    除了 preferences/facts/goals 三档,还会把**本轮话题一句话**追加进
+    timeline(带意图标签与时间戳)——"点开记忆能看到聊过什么"。
+    返回 {module: 本轮提炼条数}(不含 timeline 去重信息);软失败返回 {}。
+    """
+    uid = user_id
+    extracted = extract_turn_extracts(text)
+    counts: dict[str, int] = {}
+    for module, items in extracted.items():
+        memory_mod.append_items(uid, module, items)
+        counts[module] = len(items)
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(clean) >= 4:
+        memory_mod.append_items(uid, "timeline", [{
+            "kind": _TIMELINE_INTENT_LABEL.get(str(intent or "chat"),
+                                               str(intent or "闲聊")),
+            "text": clean[:48],
+            "key": f"turn:{clean[:48]}",
+        }])
+    return counts
+
+
 def _profile_ctx(state: dict) -> str:
     """长期记忆注入块:读 profile.name 给闲聊/播报自然称呼;无记忆返回空串。
 
@@ -1719,6 +1913,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             if str(prof.get("name") or "") != intro_name:
                 memory_mod.merge(state.get("auth_user_id"), "profile",
                                  {"name": intro_name})
+        # 长期记忆:每轮对话确定性提炼(偏好/事实/目标/时间线;零 LLM、软失败)
+        try:
+            remember_turn_extracts(state.get("auth_user_id"), turn_text, intent)
+        except Exception:  # noqa: BLE001 —— 记忆是旁路,绝不阻断路由
+            pass
         # 长程任务(轨道通用+剧本注册):触发词是"存/攒"字族,与生日计划(p_*)、
         # Core 分析(省字族)零交集,放在 linkage 改写**之前**——"规划30天存出3000"
         # 这类话虽含 生日/规划,但语义是储蓄目标,不是预算锁定。
@@ -3676,35 +3875,66 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                 if isinstance(obs, dict):
                     observations[str(step.get("skill"))] = obs
 
-        # --- 写技能经验(只存"下次有用"的短摘要,不存流水、不存完整报告)
+        # --- 写技能经验(只存"下次有用"的短摘要,不存流水、不存完整报告;
+        # 2026-10-26 起附 Top 明细列表,记忆检阅弹窗据此画消费结构/持仓分布图)
         bill = observations.get("analyze_bill") or {}
         if bill:
             cats = ((bill.get("categories") or {}).get("items") or [])
             # 金额一律换算成"分"再比(禁止按字符串字典序选最大分类)
-            top = max(cats, key=lambda c: _cents(c.get("amount_yuan")) or 0) if cats else {}
+            ranked = sorted(cats, key=lambda c: _cents(c.get("amount_yuan")) or 0,
+                            reverse=True)
+            top = ranked[0] if ranked else {}
+            top_categories = [
+                {"category": str(c.get("category") or ""),
+                 "amount_yuan": str(c.get("amount_yuan") or "")}
+                for c in ranked[:6] if str(c.get("category") or "")]
+            subs_raw = bill.get("subscriptions")
+            if isinstance(subs_raw, dict):
+                subs_raw = subs_raw.get("items") or []
+            subs_raw = [s for s in (subs_raw or []) if isinstance(s, dict)]
+            subscription_names = [
+                str(s.get("merchant") or s.get("name") or s.get("title") or "")
+                for s in subs_raw[:8]]
+            anom = bill.get("anomalies")
+            if isinstance(anom, dict):
+                anom = anom.get("items") or []
+            anomaly_notes = [
+                str(a.get("desc") or a.get("note") or a.get("merchant") or "")
+                for a in (anom or [])[:5] if isinstance(a, dict)]
             memory_mod.merge(uid, "bill", {
                 "top_category": str(top.get("category") or ""),
                 "period": str((bill.get("report") or {}).get("month") or ""),
-                "anomaly_count": len(bill.get("anomalies") or []),
-                "subscription_count": len(bill.get("subscriptions") or []),
+                "anomaly_count": len(anom or []),
+                "subscription_count": len(subs_raw),
+                "top_categories": top_categories,
+                "subscription_names": [n for n in subscription_names if n],
+                "anomaly_notes": [n for n in anomaly_notes if n],
                 "at": datetime.now().isoformat(timespec="seconds"),
             })
         wealth = observations.get("analyze_wealth") or {}
         if wealth:
             profile = wealth.get("profile") or {}
             holdings = wealth.get("holdings") or []
+            # 同"分"级排序取最大持仓;Top6 明细给记忆弹窗的持仓分布环图
+            holdings_ranked = sorted(
+                holdings,
+                key=lambda h: _cents(h.get("est_value_yuan")) or 0,
+                reverse=True)
             top_holding = ""
-            if holdings:
-                top_holding = str(max(
-                    holdings,
-                    key=lambda h: _cents(h.get("est_value_yuan")) or 0
-                ).get("product") or "")
+            if holdings_ranked:
+                top_holding = str(holdings_ranked[0].get("product") or "")
+            holdings_brief = [
+                {"product": str(h.get("product") or ""),
+                 "est_value_yuan": str(h.get("est_value_yuan") or "")}
+                for h in holdings_ranked[:6]
+                if str(h.get("product") or "")]
             memory_mod.merge(uid, "wealth", {
                 "risk_level": str(profile.get("level") or ""),
                 "max_risk_level": wealth.get("max_risk_level"),
                 "holding_count": len(holdings),
                 "preferred_type": top_holding,
                 "needs_assessment": bool(wealth.get("needs_assessment")),
+                "holdings_brief": holdings_brief,
                 "at": datetime.now().isoformat(timespec="seconds"),
             })
         # 用户画像(profile):跨技能聚合的"关于这个人"短摘要——检阅入口的置顶

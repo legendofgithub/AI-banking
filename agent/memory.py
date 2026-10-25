@@ -8,11 +8,15 @@
 （默认 ``data/agent_memory.sqlite``，可用环境变量 ``AGENT_MEMORY_DB`` 覆盖），
 **不改 bank.db 表结构、不新增 MCP 工具、不改工具计数**。
 
-记住的不是聊天记录，是三类"下次有用"的短摘要：
+记住的不是聊天记录，是"下次有用"的提炼摘要：
 - ``profile``      用户画像：预算偏好、风险等级、偏好的产品类型、不能动的固定支出；
 - ``bill``/``wealth``/``birthday``  技能经验：上次关注什么、给了什么方案、
   结果是成功还是失败、**被用户拒绝的方案**（不要再默认推荐）；
-- ``plan_history`` 最近 N 条计划：plan_id/目标/用了哪些技能/结果/失败原因/计划 diff。
+- ``plan_history`` 最近 N 条计划：plan_id/目标/用了哪些技能/结果/失败原因/计划 diff；
+- ``facts``/``preferences``/``goals``/``timeline``  对话提炼(2026-10-26)：
+  每轮用户输入经路由器**确定性正则提炼**(零 LLM 调用)后追加——
+  关于你的事实、偏好忌讳、目标意向、每轮一句话时间线。
+  是提炼不是录像：条目带时间戳、按 key 去重、截顶限量。
 
 三条硬约束（迭代计划 §6.3、§14）
 --------------------------------
@@ -37,29 +41,53 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _log = logging.getLogger("agent.memory")
 
-# 记忆模块枚举：写库前做白名单校验，防止把任意字符串当成 module 污染库
+# 记忆模块枚举：写库前做白名单校验，防止把任意字符串当成 module 污染库。
+# 前五档是"技能/计划"经验(由图节点在收尾时写);后四档是"对话提炼"记忆
+# (由路由器的每轮确定性提炼器写,见 graph.remember_turn_extracts):
+#   facts        关于你:职业/城市/年龄/收入/家庭/宠物/生日等自述事实;
+#   preferences  偏好与忌讳:喜欢/不喜欢/习惯/风险态度;
+#   goals        想做的事:用户表达的目标与意向;
+#   timeline     对话记忆:每轮一句话时间线(提炼,不是全文录像)。
 MEMORY_MODULES: frozenset[str] = frozenset({
     "profile",        # 用户画像
     "bill",           # 账单分析经验
     "wealth",         # 理财分析经验
     "birthday",       # 生日预算计划经验
     "plan_history",   # 最近计划历史（短摘要队列）
+    "facts",          # 关于你(对话提炼)
+    "preferences",    # 偏好与忌讳(对话提炼)
+    "goals",          # 想做的事(对话提炼)
+    "timeline",       # 对话记忆时间线(对话提炼)
 })
 
 # plan_history 只留最近几条计划，避免库无限增长
 PLAN_HISTORY_LIMIT = 5
 
+# 条目型模块({"items":[...]})的默认截顶:新在前、按 key/text 去重后最多留这么多
+ITEM_LIMITS: dict[str, int] = {
+    "facts": 16,
+    "preferences": 24,
+    "goals": 12,
+    "timeline": 20,
+}
+
 # 检阅视图(参考 Anthropic memory tool 的文件式记忆):每个模块 = 一个
-# "记忆文件",label 是它的展示名,渲染顺序 profile 画像置顶。
+# "记忆文件",label 是它的展示名,渲染顺序 profile 画像置顶、
+# 对话提炼模块紧随其后(它们是"认识你"最快的一层),技能经验殿后。
 _MODULE_LABELS: dict[str, str] = {
     "profile": "用户画像",
     "bill": "账单经验",
     "wealth": "理财经验",
     "birthday": "生日计划经验",
     "plan_history": "计划历史",
+    "facts": "关于你",
+    "preferences": "偏好与忌讳",
+    "goals": "想做的事",
+    "timeline": "对话记忆",
 }
 _MODULE_ORDER: tuple[str, ...] = (
-    "profile", "bill", "wealth", "birthday", "plan_history")
+    "profile", "facts", "preferences", "goals",
+    "bill", "wealth", "birthday", "timeline", "plan_history")
 
 # 两份定义必须一致:只往 MEMORY_MODULES 加模块、忘了 _MODULE_ORDER,
 # 记忆会"写进去但检阅视图看不到"——import 即校验,别等现场才发现
@@ -334,6 +362,72 @@ def push_plan_history(user_id: Any, entry: dict) -> list[dict]:
             pass
 
 
+def append_items(user_id: Any, module: str, new_items: Iterable[dict],
+                 limit: int | None = None) -> list[dict]:
+    """向 ``{"items":[...]}`` 型记忆模块追加条目(对话提炼四模块的主入口)。
+
+    - 条目形如 ``{"kind":…, "text":…, "at":…, "key":…}``;
+      **去重键**取 ``key``(缺省回落 ``text``)——同 key 已在库就不重复记;
+    - 新条目插最前;``limit`` 截顶(缺省查 ``ITEM_LIMITS``,再缺省 20);
+    - 读+合并+写在同一事务(BEGIN IMMEDIATE),与 push_plan_history 同款;
+    - 三条硬约束同前:失败软处理、未登录不写、异常绝不冒到调用方。
+      异常分支返回**本轮入参**(只是"没记上",不是库内真状态)。
+    """
+    uid = _valid_user_id(user_id)
+    if uid is None or module not in MEMORY_MODULES:
+        return []
+    fresh = [dict(i) for i in (new_items or [])
+             if isinstance(i, dict)
+             and str(i.get("text") or "").strip()]
+    if not fresh:
+        return []
+    cap = limit if limit is not None else ITEM_LIMITS.get(module, 20)
+    conn = _connect(create=True)
+    if conn is None:
+        return fresh
+    items: list[dict] = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT content_json FROM agent_memory WHERE user_id=? AND module=?",
+            (uid, module)).fetchone()
+        if row is not None:
+            try:
+                prev = json.loads(row[0])
+                if isinstance(prev, dict):
+                    items = [i for i in (prev.get("items") or [])
+                             if isinstance(i, dict)]
+            except Exception:  # noqa: BLE001 —— 旧数据损坏按空底处理
+                items = []
+        seen = {str(i.get("key") or i.get("text") or "") for i in items}
+        added: list[dict] = []
+        for it in fresh:
+            key = str(it.get("key") or it.get("text") or "")
+            if not key or key in seen:
+                continue
+            it.setdefault("at", _now_iso())
+            added.append(it)
+            seen.add(key)
+        items = added + items
+        items = items[:max(1, int(cap))]
+        _upsert(conn, uid, module, {"items": items})
+        conn.commit()
+        return items
+    except Exception:  # noqa: BLE001
+        _log.warning("条目记忆追加失败 uid=%s module=%s", uid, module,
+                     exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return fresh
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def forget(user_id: Any, module: str | None = None) -> bool:
     """删除某用户某个模块的记忆；module 为空则清空该用户全部记忆（管理用）。"""
     uid = _valid_user_id(user_id)
@@ -422,6 +516,12 @@ def summarize_for_plan(user_id: Any, modules: Iterable[str]) -> list[str]:
             cat = str(prof.get("top_category") or "")
             if cat:
                 out.append(f"常在「{cat}」上消费")
+    # 目标意向(对话提炼):最新一条"想做的事"进计划卡——计划天生该围绕目标
+    goals_mem = memory.get("goals") or {}
+    g_items = [i for i in (goals_mem.get("items") or [])
+               if isinstance(i, dict) and str(i.get("text") or "").strip()]
+    if g_items:
+        out.append(f"用户提过想「{str(g_items[0].get('text'))[:16]}」")
     return out
 
 
@@ -494,6 +594,49 @@ def render_module(module: str, content: dict) -> list[str]:
             if when:
                 line += f"（{when}）"
             out.append(line)
+    elif module == "facts":
+        # 关于你:每条 = {kind:职业/城市/…, text, at};kind 就是展示标签
+        for it in (content.get("items") or [])[:12]:
+            if not isinstance(it, dict):
+                continue
+            text = str(it.get("text") or "").strip()
+            if not text:
+                continue
+            kind = str(it.get("kind") or "").strip()
+            out.append(f"{kind}：{text}" if kind else text)
+    elif module == "preferences":
+        # 偏好与忌讳:kind → 展示词(喜欢/不喜欢/习惯/风险态度)
+        pref_labels = {"like": "喜欢", "dislike": "不喜欢",
+                       "habit": "习惯", "attitude": "风险态度"}
+        for it in (content.get("items") or [])[:12]:
+            if not isinstance(it, dict):
+                continue
+            text = str(it.get("text") or "").strip()
+            if not text:
+                continue
+            label = pref_labels.get(str(it.get("kind") or ""), "")
+            out.append(f"{label}：{text}" if label else text)
+    elif module == "goals":
+        for it in (content.get("items") or [])[:12]:
+            if not isinstance(it, dict):
+                continue
+            text = str(it.get("text") or "").strip()
+            if text:
+                out.append(text[:40])
+    elif module == "timeline":
+        # 对话记忆:每轮一句话;kind 存的是意图标签(转账/账单/闲聊…)
+        for it in (content.get("items") or [])[:12]:
+            if not isinstance(it, dict):
+                continue
+            text = str(it.get("text") or "").strip()
+            if not text:
+                continue
+            kind = str(it.get("kind") or "").strip()
+            when = _day_of(it.get("at"))
+            line = f"[{kind}] {text[:48]}" if kind else text[:48]
+            if when:
+                line += f"（{when}）"
+            out.append(line)
     if not out and module not in _MODULE_LABELS:
         for k, v in content.items():
             if v not in (None, "", [], {}):
@@ -550,7 +693,9 @@ def memory_overview(user_id: Any) -> list[dict]:
 
 __all__ = [
     "MEMORY_MODULES",
+    "ITEM_LIMITS",
     "PLAN_HISTORY_LIMIT",
+    "append_items",
     "db_path",
     "forget",
     "merge",
