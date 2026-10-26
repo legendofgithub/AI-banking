@@ -66,7 +66,7 @@
   --card-foreground: oklch(0.12 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.12 0 0);
-  --primary: #0F2B46;
+  --primary: #3E60CE;
   --primary-foreground: #FFFFFF;
   --secondary: oklch(0.965 0 0);
   --secondary-foreground: oklch(0.38 0 0);
@@ -74,7 +74,7 @@
   --muted-foreground: oklch(0.58 0 0);
   --accent: oklch(0.965 0 0);
   --accent-foreground: oklch(0.12 0 0);
-  --destructive: #D94141;
+  --destructive: #D60C1A;
   --border: oklch(0.9 0 0);
   --input: oklch(0.9 0 0);
   --ring: oklch(0.5 0 0);
@@ -83,28 +83,29 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.97 0 0);
-  --sidebar-foreground: oklch(0.38 0 0);
-  --sidebar-primary: oklch(0.12 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.12 0 0 / 0.06);
-  --sidebar-accent-foreground: oklch(0.12 0 0);
-  --sidebar-border: oklch(0.88 0 0);
-  --sidebar-ring: oklch(0.5 0 0);
+  --sidebar: #F8FAFE;
+  --sidebar-foreground: #3C4658;
+  --sidebar-primary: #1E52A5;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: rgb(30 82 165 / 0.07);
+  --sidebar-accent-foreground: #1E52A5;
+  --sidebar-border: #E2E9F6;
+  --sidebar-ring: #3E60CE;
 
-  /* —— 墨蓝 / 品牌金 系统(对齐 前端/assets/theme.css)—— */
-  --ink: #0F2B46;
-  --ink-2: #16324F;
-  --ink-3: #22456B;
-  --gold: #C8A45C;
-  --gold-ink: #A67C2E;
-  --gold-bg: #FBF6EC;
-  --gold-line: #E4CF9F;
-  --gold-card-dark: #16233A;
+  /* —— 品牌色系统：深蓝主色 / 交互蓝 / 语义红绿 ——
+     legacy name: gold-* now maps to brand blue; rename later in a dedicated refactor */
+  --ink: #1E52A5;
+  --ink-2: #24397A;
+  --ink-3: #3E60CE;
+  --gold: #3E60CE;
+  --gold-ink: #1E52A5;
+  --gold-bg: #EEF3FF;
+  --gold-line: #C9D8F5;
+  --gold-card-dark: #1B2540;
   --success: #2E9E5B;
   --success-bg: #EEF8F1;
-  --warning: #D94141;
-  --warning-bg: #FEF5F5;
+  --warning: #D60C1A;
+  --warning-bg: #FEF2F2;
 
   --shadow-card: 0 1px 3px oklch(0 0 0 / 0.05), 0 1px 1px oklch(0 0 0 / 0.03);
   --shadow-float:
@@ -127,8 +128,8 @@
   --card-foreground: oklch(0.94 0 0);
   --popover: oklch(0.225 0 0);
   --popover-foreground: oklch(0.94 0 0);
-  --primary: #C8A45C;
-  --primary-foreground: #0F2B46;
+  --primary: #8FB0FF;
+  --primary-foreground: #0B1530;
   --secondary: oklch(0.26 0 0);
   --secondary-foreground: oklch(0.75 0 0);
   --muted: oklch(0.165 0 0);
@@ -152,6 +153,13 @@
   --sidebar-accent-foreground: oklch(0.94 0 0);
   --sidebar-border: oklch(0.25 0 0);
   --sidebar-ring: oklch(0.45 0 0);
+
+  /* 深色下品牌色改用浅蓝，避免 #3E60CE 在深底上对比不足 */
+  --gold: #8FB0FF;
+  --gold-ink: #C7D6FF;
+  --gold-bg: #1B2540;
+  --gold-line: #3A4E7A;
+  --gold-card-dark: #141C2E;
 
   --shadow-card:
     inset 0 1px 0 oklch(1 0 0 / 0.04), 0 1px 2px oklch(0 0 0 / 0.2),

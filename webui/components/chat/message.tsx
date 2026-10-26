@@ -394,7 +394,7 @@ const PurePreviewMessage = ({
       >
         {isAssistant && (
           <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-            <div className="flex size-7 items-center justify-center rounded-lg bg-ink text-gold ring-1 ring-gold/30">
+            <div className="flex size-7 items-center justify-center rounded-lg bg-ink text-white ring-1 ring-gold/30">
               <Landmark size={13} />
             </div>
           </div>
@@ -419,7 +419,7 @@ export const ThinkingMessage = () => (
   >
     <div className="flex items-start gap-3">
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-        <div className="flex size-7 items-center justify-center rounded-lg bg-ink text-gold ring-1 ring-gold/30">
+        <div className="flex size-7 items-center justify-center rounded-lg bg-ink text-white ring-1 ring-gold/30">
           <Landmark size={13} />
         </div>
       </div>

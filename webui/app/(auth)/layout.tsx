@@ -20,7 +20,7 @@ export default function AuthLayout({
         </Link>
         <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-10">
           <div className="flex flex-col gap-2">
-              <div className="mb-2 flex size-9 items-center justify-center rounded-lg bg-ink text-gold ring-1 ring-gold/30">
+              <div className="mb-2 flex size-9 items-center justify-center rounded-lg bg-ink text-white ring-1 ring-gold/30">
               <Landmark size={14} />
             </div>
             {children}

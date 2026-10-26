@@ -45,7 +45,7 @@ export function Preview() {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-tl-2xl bg-background">
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/20 px-5">
-        <div className="flex size-5 items-center justify-center rounded bg-ink text-gold ring-1 ring-gold/30">
+        <div className="flex size-5 items-center justify-center rounded bg-ink text-white ring-1 ring-gold/30">
           <Landmark size={10} />
         </div>
         <span className="text-[13px] text-muted-foreground">AI 银行助手</span>
