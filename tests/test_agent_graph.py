@@ -927,6 +927,131 @@ def test_bill_monthly_report_readonly(tmp_path):
     run(scenario())
 
 
+# ----------------------------------------------------------------- 年度账单报告(2026-10-26)
+
+def _seed_year_flow(db: Path, year: int) -> None:
+    """往年 3 个月各一笔工资/消费(固定金额),供年报汇总与逐月走势断言。"""
+    conn = sqlite3.connect(db)
+    try:
+        rows = [
+            (f"{year}-01-10T09:00:00", "in", 800_000, "示例公司", "工资"),
+            (f"{year}-01-20T12:00:00", "out", 100_000, "示例超市", "生活"),
+            (f"{year}-02-10T09:00:00", "in", 800_000, "示例公司", "工资"),
+            (f"{year}-02-20T12:00:00", "out", 200_000, "示例超市", "生活"),
+            (f"{year}-03-10T09:00:00", "in", 800_000, "示例公司", "工资"),
+            (f"{year}-03-20T12:00:00", "out", 300_000, "示例餐厅", "餐饮"),
+        ]
+        for ts, direction, cents, cp, cat in rows:
+            conn.execute(
+                """INSERT INTO transactions
+                   (account_id, ts, direction, amount_cents, balance_after_cents,
+                    tx_type, counterparty, category, memo)
+                   VALUES (1, ?, ?, ?, 0, 'pos', ?, ?, '')""",
+                (ts, direction, cents, cp, cat))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_bill_annual_report_flow(tmp_path):
+    """年度账单报告:年度词 → annual_report(往年整年)被调,产出逐月走势/
+    分类/商户的 bill_view(api 据此下发 data-bill-report),只读零动钱。"""
+    db = _mk_db(tmp_path)
+    year = date.today().year - 1
+    _seed_year_flow(db, year)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "bill_analysis"}',
+            json.dumps({"ask": "annual_report", "period": f"{year}年",
+                        "category": None}, ensure_ascii=False),
+            f"{year} 年度账单报告已生成。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "b-annual"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage(f"{year}年度账单报告")]}, cfg)
+            assert not r1.get("__interrupt__")  # 只读报告,无闸门
+            snap = await graph.aget_state(cfg)
+            calls = _traced(snap.values, "annual_report")
+            assert calls and calls[0]["args"]["year"] == year
+            view = snap.values.get("bill_view") or {}
+            assert view.get("kind") == "annual"
+            assert view.get("title") == f"年度账单报告 {year}"
+            assert view.get("income_yuan") == "24000.00"   # 3 × 8000
+            assert view.get("expense_yuan") == "6000.00"   # 1000+2000+3000
+            assert view.get("net_yuan") == "18000.00"
+            assert view.get("savings_rate_pct") == 75.0
+            # 往年整年:12 个月刻度齐全,有数据的月份按月份落位
+            months = {m["month"]: m for m in view.get("monthly") or []}
+            assert len(months) == 12
+            assert months[f"{year}-02"]["expense_yuan"] == "2000.00"
+            assert months[f"{year}-12"]["expense_yuan"] == "0.00"
+            # 分类/商户形状即卡片契约(前端零算术)
+            cats = {c["category"] for c in view.get("categories") or []}
+            assert cats == {"生活", "餐饮"}
+            merchants = {m["merchant"] for m in view.get("merchants") or []}
+            assert merchants == {"示例超市", "示例餐厅"}
+            assert any("支出最高月" in h for h in view.get("highlights") or [])
+            assert "annual_report" in _audited_tools(db)
+            assert _balance(db) == DEFAULT_BALANCE  # 只读零变化
+
+    run(scenario())
+
+
+def test_bill_report_one_shot_from_casual_phrase(tmp_path):
+    """用户口径(2026-10-26):输入「月度/年度账单报告。」时——即便 LLM 连意图
+    都抽不准(误判 chat)、也抽不出时间范围(NULL)——也必须一次出报告卡:
+    router 确定性改道 bill_analysis,b_extract 定 annual_report + 今年缺省,
+    不反问、零动钱。这是演示主路径,任何一环依赖 LLM 都会现场翻车。"""
+    db = _mk_db(tmp_path)
+    cur = date.today().year
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "chat"}',  # 模拟实测:LLM 误判成闲聊
+            json.dumps({"ask": None, "period": None, "category": None},
+                       ensure_ascii=False),
+            "年度账单报告已生成。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "b-oneshot"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("月度/年度账单报告。")]}, cfg)
+            assert not r1.get("__interrupt__"), "报告类请求不应反问时间范围"
+            snap = await graph.aget_state(cfg)
+            assert snap.values.get("intent") == "bill_analysis"  # 路由改道生效
+            calls = _traced(snap.values, "annual_report")
+            assert calls and calls[0]["args"]["year"] == cur
+            view = snap.values.get("bill_view") or {}
+            assert view.get("kind") == "annual"
+            assert str(cur) in (view.get("title") or "")
+            assert _balance(db) == DEFAULT_BALANCE
+
+    run(scenario())
+
+
+def test_parse_period_year_forms():
+    """年度口径的确定性时间解析(纯函数):今年/去年/前年/显式年份;
+    月度与区间语义不受影响。"""
+    from agent.graph import parse_period
+    ref = date(2026, 10, 26)
+    this_year = parse_period("今年", ref)
+    assert (this_year["start"], this_year["end"], this_year["year"]) == \
+        ("2026-01-01", "2026-10-26", 2026)
+    last = parse_period("去年", ref)
+    assert (last["start"], last["end"], last["year"]) == \
+        ("2025-01-01", "2025-12-31", 2025)
+    assert parse_period("前年", ref)["year"] == 2024
+    assert parse_period("2024年", ref)["start"] == "2024-01-01"
+    assert parse_period("2024年度报告", ref)["end"] == "2024-12-31"
+    assert parse_period("年度", ref)["start"] == "2026-01-01"
+    # 月度语义不变:显式月份仍回到该月(年报解析不能抢走月报)
+    mon = parse_period("2025-08", ref)
+    assert (mon["month"], mon["start"], mon["end"]) == \
+        ("2025-08", "2025-08-01", "2025-08-31")
+
+
 def test_wealth_query_filters_by_risk_level(tmp_path):
     """理财推荐:有测评(C3)→ list_wealth_products 带 max_risk_level=3,
     R4 产品被排除,全程零动钱。"""
@@ -953,6 +1078,15 @@ def test_wealth_query_filters_by_risk_level(tmp_path):
             assert notice.get("kind") == "wealth_products"
             names = {p.get("name") for p in notice.get("products") or []}
             assert names == {"余额+货币基金", "稳健纯债基金"}  # R4 的科技股基被排除
+            # 产品列表卡(2026-10-26 图一用户口径):问"有哪些产品"必须随播报
+            # 弹出表单卡,不能只回一段文字——api 在本节点下发 data-wealth-products
+            view = snap.values.get("wealth_view") or {}
+            assert view.get("level") == "C3"
+            assert view.get("need_assess") is False
+            view_products = {p["name"]: p for p in view.get("products") or []}
+            assert set(view_products) == {"余额+货币基金", "稳健纯债基金"}
+            assert all(p["purchasable"] is True for p in view_products.values())
+            assert view_products["余额+货币基金"]["min_subscribe_yuan"] == "1.00"
             # 零动钱:没有任何申购/赎回轨迹,余额不变
             tools_traced = {c["tool"] for c in snap.values.get("bank_calls", [])}
             assert "subscribe_product" not in tools_traced
@@ -964,7 +1098,9 @@ def test_wealth_query_filters_by_risk_level(tmp_path):
 
 def test_wealth_clarify_cancel_stops_asking(tmp_path):
     """补槽反问中用户明确说"不办了" → 立即按"本次不办理"收尾,
-    不再回环重问同一问题;全程零资金变动(2026-10-22 评审修复)。"""
+    不再回环重问同一问题;全程零资金变动(2026-10-22 评审修复)。
+    2026-10-26 起,泛入口(action 缺失)的"反问"是理财中心入口卡
+    (wealth_entry:产品清单+目的选项),取消语义与普通缺槽反问一致。"""
     db = _mk_db(tmp_path)
     _seed_bill_wealth_card(db)
 
@@ -980,7 +1116,7 @@ def test_wealth_clarify_cancel_stops_asking(tmp_path):
             r1 = await graph.ainvoke(
                 {"auth_user_id": 1, "messages": [HumanMessage("帮我弄下理财")]}, cfg)
             payload = _interrupt_payload(r1)
-            assert payload["type"] == "ask_slot"
+            assert payload["type"] == "wealth_entry"
             r2 = await graph.ainvoke(Command(resume="我不办了"), cfg)
             # 关键断言:不再反问(没有新 interrupt),直接兜底收尾
             assert not r2.get("__interrupt__")
@@ -990,6 +1126,113 @@ def test_wealth_clarify_cancel_stops_asking(tmp_path):
             assert notice.get("kind") == "clarify_cancel"
             assert _balance(db) == DEFAULT_BALANCE
             assert _count(db, "transfer_orders") == 0
+
+    run(scenario())
+
+
+def test_wealth_entry_card_misroute_fixed_and_purpose_flow(tmp_path):
+    """理财中心入口全流程(2026-10-26 用户口径):「理财操作」被 LLM 误判成
+    linkage(实测截图:进"事件日期"反问循环)→ 确定性改道 wealth;泛入口
+    直接弹理财中心卡(等级+在售产品+目的选项);答目的后按目的+等级
+    个性化推荐(确定性 purpose 捕获,不依赖 LLM 二次理解)。零动钱。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "linkage"}',  # 模拟实测误判:LLM 把"理财操作"归联动
+            json.dumps({"action": None, "keyword": None, "product_id": None,
+                        "amount_yuan": None, "holding_id": None, "p_type": None,
+                        "assess_answer": None}, ensure_ascii=False),
+            json.dumps({"action": None, "keyword": None, "product_id": None,
+                        "amount_yuan": None, "holding_id": None, "p_type": None,
+                        "assess_answer": None}, ensure_ascii=False),
+            "已按你的理财目的筛出可购产品。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "w-entry"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("理财操作")]}, cfg)
+            # 误判被确定性改写:这一轮走的是理财,不是联动
+            assert r1.get("intent") == "wealth", "强理财词必须改道 wealth"
+            entry = _interrupt_payload(r1)
+            assert entry["type"] == "wealth_entry"
+            assert entry["level"] == "C3"
+            assert entry["max_risk_level"] == 3
+            assert entry["assess_required"] is False
+            by_code = {p["code"]: p for p in entry["products"]}
+            # 全量在售清单,可购标注按等级算好(C3:R1/R2 可购,R4 受限)
+            assert set(by_code) == {"MF001", "BD003", "MX006"}
+            assert by_code["MF001"]["purchasable"] is True
+            assert by_code["MX006"]["purchasable"] is False
+            # 目的选项:四类目的 + 测评入口
+            assert entry["options"][-1] == "先做风险测评"
+            assert any("灵活" in o for o in entry["options"])
+
+            # 答"灵活闲钱" → 确定性映射 purpose=flexible → query 推荐
+            r2 = await graph.ainvoke(
+                Command(resume="闲钱要灵活,随用随取"), cfg)
+            assert not r2.get("__interrupt__")
+            snap = await graph.aget_state(cfg)
+            notice = snap.values.get("notice") or {}
+            assert notice.get("kind") == "wealth_products"
+            assert notice.get("purpose") == "flexible"
+            # 目的排序:货基(money_fund)排到债基前面(产品库默认按基准收益
+            # 降序是债基在前,排序生效才可能货基第一)
+            names = [p["name"] for p in notice.get("products") or []]
+            assert names and names[0] == "余额+货币基金"
+            # 推荐仍受适当性约束:R4 科技股基不在结果里
+            assert "科技创新股票基金" not in names
+            # 零动钱
+            tools_traced = {c["tool"] for c in snap.values.get("bank_calls", [])}
+            assert "subscribe_product" not in tools_traced
+            assert "redeem_product" not in tools_traced
+            assert _balance(db) == DEFAULT_BALANCE
+
+    run(scenario())
+
+
+def test_wealth_query_without_profile_lists_r1(tmp_path):
+    """未测评用户的推荐:不再空手劝退(no_risk_profile),照常列出可购 R1
+    产品并带 need_assess 提示(2026-10-26 口径:让用户先看到能买什么)。"""
+    db = _mk_db(tmp_path)  # 不调 _seed_bill_wealth_card → 无风险测评
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        """INSERT INTO wealth_products
+           (id,code,name,p_type,risk_level,expected_return_bps,
+            min_subscribe_cents,lock_days,subscription_fee_bps,
+            redemption_fee_bps,intro)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""", _W_SEED_PRODUCTS)
+    conn.commit()
+    conn.close()
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "wealth"}',
+            json.dumps({"action": "query", "keyword": None, "product_id": None,
+                        "amount_yuan": None, "holding_id": None, "p_type": None,
+                        "assess_answer": None}, ensure_ascii=False),
+            "",  # 播报空 → 兜底文案(need_assess 专用)
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "w-r1"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("推荐几款理财产品")]}, cfg)
+            assert not r1.get("__interrupt__")
+            snap = await graph.aget_state(cfg)
+            notice = snap.values.get("notice") or {}
+            assert notice.get("kind") == "wealth_products"
+            assert notice.get("need_assess") is True
+            names = {p["name"] for p in notice.get("products") or []}
+            assert names == {"余额+货币基金"}  # 只有 R1 可购
+            assert "R1" in _ai_text(r1)  # 兜底文案提到低风险与测评入口
+            # 产品列表卡:未测评也要弹(need_assess=True 由前端渲染成
+            # "仅可购 R1"的提示条,而不是把用户拦在门外)
+            view = snap.values.get("wealth_view") or {}
+            assert view.get("need_assess") is True
+            assert view.get("level") is None
+            assert view.get("max_risk_level") == 1
+            assert {p["name"] for p in view.get("products") or []} == \
+                {"余额+货币基金"}
 
     run(scenario())
 
@@ -1196,6 +1439,86 @@ def test_card_lost_requires_double_gate(tmp_path):
             assert "set_card_status" in _audited_tools(db)
 
     run(scenario_confirm())
+
+
+# ------------------------------------------- 卡号线索解析(2026-10-26 图二用户口径)
+
+_DEMO_CARDS = [
+    {"id": 1, "card_no_masked": "6222 **** **** 8821", "card_type": "debit"},
+    {"id": 2, "card_no_masked": "6222 **** **** 6673", "card_type": "debit"},
+    {"id": 3, "card_no_masked": "6225 **** **** 0231", "card_type": "credit"},
+]
+
+
+def test_resolve_card_matches_visible_digits():
+    """_resolve_card 纯函数:用户照卡片念出可见两段"62228821"必须唯一命中,
+    不能因为不是 4 位尾号就退回反问(实测截图:说了卡号还被问"哪一张")。
+    既有口径(4 位尾号/类型/序号)零回归;跨掩码边界的拼接不猜。"""
+    r = graph_mod._resolve_card
+    assert r("62228821", _DEMO_CARDS) == 1     # 可见两段连打(头6222+尾8821)
+    assert r("挂失借记卡 62228821", _DEMO_CARDS) == 1  # 线索混在原话里
+    assert r("尾号8821", _DEMO_CARDS) == 1     # 4 位尾号(既有口径)
+    assert r("8821", _DEMO_CARDS) == 1
+    assert r("62228822", _DEMO_CARDS) is None  # 连打对不上任何卡 → 反问
+    assert r("62226673", _DEMO_CARDS) == 2     # 第二张借记卡同样可定位
+    assert r("借记卡", _DEMO_CARDS) is None    # 两张借记卡,类型无法消歧 → 反问
+    assert r("信用卡", _DEMO_CARDS) == 3       # 唯一信用卡仍按类型命中
+    assert r("第2张", _DEMO_CARDS) == 2        # 序号口径零回归
+    assert r("6222021500058821", _DEMO_CARDS) == 1  # 完整卡号形态(头尾可见段对上)
+    assert r("28821", _DEMO_CARDS) is None     # 跨掩码边界(第5位起是掩码)不猜
+    assert r("", _DEMO_CARDS) is None
+    assert r("8821", []) is None               # 无卡 → None(调用层判 no_card)
+
+
+def test_card_lost_with_visible_digits_skips_clarify(tmp_path):
+    """图二实测场景:名下两张借记卡,用户说"挂失借记卡62228821"(可见两段连打)
+    → 不再反问"哪一张",直接定位尾号8821那张过双闸;另一张借记卡(6673)
+    状态零变化。抽取器即使没把数字摘进 card_hint(脚本回 None),也用
+    本轮原话回退解析。"""
+    db = _mk_db(tmp_path)
+    _seed_bill_wealth_card(db)
+    conn = sqlite3.connect(db)  # 补第二张借记卡(与 bank_core.seed 演示库同款)
+    conn.execute(
+        """INSERT INTO cards (id,user_id,account_id,card_no_masked,card_type,
+           status,daily_limit_cents,per_tx_limit_cents,created_at)
+           VALUES (2,1,1,'6222 **** **** 6673','debit','locked',500000,100000,
+                   '2026-01-01T00:00:00')""")
+    conn.commit()
+    conn.close()
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "card"}',
+            # card_hint=None:故意让抽取器"漏摘"数字,验证原话回退解析
+            json.dumps({"action": "status", "card_id": None, "card_hint": None,
+                        "card_type": None, "daily_limit_yuan": None,
+                        "per_tx_limit_yuan": None,
+                        "status_target": "lost"}, ensure_ascii=False),
+            "挂失已完成。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "k-visible"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("挂失借记卡 62228821")]}, cfg)
+            g1 = _interrupt_payload(r1)
+            # 关键断言:直接进确认闸,而不是 ask_slot 反问"哪一张"
+            assert g1["type"] == "confirm_card", \
+                f"说了卡号还被反问:{g1.get('type')}"
+            assert g1["card"]["kind"] == "status"
+            assert g1["card"]["card_id"] == 1  # 8821 那张,不是 6673
+            assert g1["card"]["tail"] == "8821"
+            assert g1["card"]["target"] == "lost"
+            r2 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert "不可逆" in _interrupt_payload(r2)["question"]  # 第二道闸
+            r3 = await graph.ainvoke(Command(resume="确认"), cfg)
+            assert not r3.get("__interrupt__")
+            assert _card_row(db, 1)["status"] == "lost"
+            assert _card_row(db, 2)["status"] == "locked"  # 另一张卡零变化
+            snap = await graph.aget_state(cfg)
+            calls = _traced(snap.values, "set_card_status")
+            assert calls and calls[0]["args"] == {"card_id": 1, "status": "lost"}
+
+    run(scenario())
 
 
 # ------------------------------------------------- 评审修复(2026-10-03):理财三缺口

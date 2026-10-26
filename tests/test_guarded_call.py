@@ -25,7 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # B3 已迁 5 处(b_ 1 + s_ 4)→ graph.py 48
 # 注意 api.py 走的是 `app.state.bank.call(...)`,所以它的匹配式与另两个文件不同
 EXPECTED_DIRECT_CALLS = {
-    "agent/graph.py": (r"tools\.call\(", 48),
+    # graph.py 48→51(2026-10-26 理财中心入口:w_entry 拉等级+全量产品 2 处,
+    # w_query 未测评分支列 R1 产品 1 处;与周边 w_* 节点同款直接调用)
+    "agent/graph.py": (r"tools\.call\(", 51),
     "agent/skills.py": (r"tools\.call\(", 8),
     "agent/api.py": (r"\.call\(", 4),
 }

@@ -252,6 +252,30 @@ PART_FIELD_CONTRACT: list[dict] = [
         "risk_level"}, "frontend_only": set()},
     {"interface": "WealthCardData", "required": {"kind", "order", "pay_required"},
      "frontend_only": {"confirm_hint"}},
+    # ---- 理财中心入口卡(2026-10-26 新增 data-wealth-entry) ----
+    # products 元素原样引用产品库字段,purchasable 由 w_entry 按等级算好下发
+    {"interface": "WealthEntryData", "required": {
+        "assess_required", "level", "level_meaning", "max_risk_level",
+        "options", "products"}, "frontend_only": set()},
+    {"interface": "WealthProductView", "required": {
+        "code", "expected_return_pct", "id", "intro", "lock_days",
+        "min_subscribe_yuan", "name", "p_type", "purchasable", "risk_level"},
+     "frontend_only": set()},
+    # ---- 账单报告卡(2026-10-26 新增 data-bill-report) ----
+    # 视图由 graph.py::_bill_report_view 显式归一化(逐月/分类/商户三个 helper
+    # 各自写出显式键),金额原样透传 bank_core/analysis.py 的返回。
+    {"interface": "BillReportData", "required": {
+        "categories", "compare_expense_pct", "compare_income_pct",
+        "compare_label", "expense_yuan", "highlights", "income_yuan", "kind",
+        "merchants", "monthly", "net_yuan", "period_text", "savings_rate_pct",
+        "title"}, "frontend_only": set()},
+    {"interface": "BillReportMonth", "required": {
+        "expense_yuan", "income_yuan", "month", "net_yuan"},
+     "frontend_only": set()},
+    {"interface": "BillReportCategory", "required": {
+        "amount_yuan", "category", "count", "pct"}, "frontend_only": set()},
+    {"interface": "BillReportMerchant", "required": {
+        "amount_yuan", "count", "merchant"}, "frontend_only": set()},
     {"interface": "CardInfoView", "required": {
         "card_id", "card_type", "current_daily_limit_yuan",
         "current_per_tx_limit_yuan", "current_status", "kind",

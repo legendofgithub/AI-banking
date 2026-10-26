@@ -84,7 +84,7 @@ def test_health_and_validation(tmp_path):
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok"
-        assert body["bank_tools"] == 44  # +4 联动 +1 verify_pay_password +2 代扣预审(2026-10-20)
+        assert body["bank_tools"] == 45  # +1 annual_report(2026-10-26 年度账单报告)
         assert "model" in body
 
         # 没有 user 消息 → 400,绝不进入流式
@@ -1201,3 +1201,143 @@ def test_gate_new_transfer_predicate():
     assert _gate_new_transfer(snap("confirm_transfer"), "") is False
     assert _gate_new_transfer(NS(tasks=[NS(interrupts=[])]),
                               "给老王转500元") is False
+
+
+# --------------------------------------------------------- 理财中心入口卡(2026-10-26)
+
+def test_wealth_entry_card_frame(tmp_path):
+    """「理财操作」泛入口 → SSE 下发 data-wealth-entry(等级+在售产品可购标注+
+    目的选项),前端 WealthEntryCard 渲染;LLM 误判 linkage 时由 router 确定性改道。"""
+    client, db, tok = _client(tmp_path, [
+        '{"intent": "linkage"}',  # 模拟实测误判:LLM 把「理财操作」归联动
+        json.dumps({"action": None, "keyword": None, "product_id": None,
+                    "amount_yuan": None, "holding_id": None, "p_type": None,
+                    "assess_answer": None}, ensure_ascii=False),
+    ])
+    import sqlite3 as _s
+    ac = _s.connect(db)
+    ac.executemany(
+        """INSERT INTO wealth_products
+           (id,code,name,p_type,risk_level,expected_return_bps,
+            min_subscribe_cents,lock_days,subscription_fee_bps,
+            redemption_fee_bps,intro)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        [(1, "MF001", "余额+货币基金", "money_fund", 1, 185, 100, 0, 0, 0,
+          "随存随取，七日年化约1.85%"),
+         (3, "MX006", "科技创新股票基金", "mixed", 4, 850, 10000, 0, 15, 50,
+          "高波动，追求长期增值")])
+    ac.execute(
+        "INSERT INTO risk_profiles (user_id,answers_json,score,level,updated_at) "
+        "VALUES (1,'{\"稳健偏好\":3,\"投资经验\":3,\"亏损容忍\":3,"
+        "\"投资期限\":3,\"收入稳定\":3}',15,'C3','2026-01-01T00:00:00')")
+    ac.commit()
+    ac.close()
+    with client:
+        r = _post_chat(client, "理财操作", "api-w-entry", token=tok)
+        assert r.status_code == 200
+        frames = _frames(r.text)
+        card = _find_data(frames, "data-wealth-entry")
+        assert card is not None, f"应下发理财中心入口卡: {[f['type'] for f in frames]}"
+        data = card["data"]
+        assert data["level"] == "C3"
+        assert data["max_risk_level"] == 3
+        purch = {p["code"]: p["purchasable"] for p in data["products"]}
+        assert purch == {"MF001": True, "MX006": False}  # 可购标注按等级算好
+        assert data["options"][-1] == "先做风险测评"
+        # 问题文本照常以 text 帧播报(卡片之外还有一句引导语)
+        assert "理财" in _joined_text(frames)
+
+
+# --------------------------------------------------------- 可购产品列表卡(2026-10-26)
+
+def test_wealth_products_card_frame(tmp_path):
+    """图一用户口径:「现在有哪些产品」不能只回一段文字——w_query 更新时 SSE
+    下发 data-wealth-products(等级+可购产品清单),前端 WealthProductsCard
+    渲染成表单卡;帧随节点更新下发,不占 interrupt。"""
+    client, db, tok = _client(tmp_path, [
+        '{"intent": "wealth"}',
+        json.dumps({"action": "query", "keyword": None, "product_id": None,
+                    "amount_yuan": None, "holding_id": None, "p_type": None,
+                    "assess_answer": None}, ensure_ascii=False),
+        "已按你的风险等级筛出可购产品。",
+    ])
+    import sqlite3 as _s
+    ac = _s.connect(db)
+    ac.executemany(
+        """INSERT INTO wealth_products
+           (id,code,name,p_type,risk_level,expected_return_bps,
+            min_subscribe_cents,lock_days,subscription_fee_bps,
+            redemption_fee_bps,intro)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        [(1, "MF001", "余额+货币基金", "money_fund", 1, 185, 100, 0, 0, 0,
+          "随存随取，七日年化约1.85%"),
+         (2, "BD003", "稳健纯债基金", "bond", 2, 320, 10000, 0, 0, 15,
+          "中低风险，历史年化约3.2%"),
+         (3, "MX006", "科技创新股票基金", "mixed", 4, 850, 10000, 0, 15, 50,
+          "高波动，追求长期增值")])
+    ac.execute(
+        "INSERT INTO risk_profiles (user_id,answers_json,score,level,updated_at) "
+        "VALUES (1,'{\"稳健偏好\":3,\"投资经验\":3,\"亏损容忍\":3,"
+        "\"投资期限\":3,\"收入稳定\":3}',15,'C3','2026-01-01T00:00:00')")
+    ac.commit()
+    ac.close()
+    with client:
+        r = _post_chat(client, "现在有哪些产品", "api-w-products", token=tok)
+        assert r.status_code == 200
+        frames = _frames(r.text)
+        card = _find_data(frames, "data-wealth-products")
+        assert card is not None, \
+            f"应下发可购产品列表卡: {[f['type'] for f in frames]}"
+        data = card["data"]
+        assert data["level"] == "C3"
+        assert data["max_risk_level"] == 3
+        assert data["need_assess"] is False
+        # 适当性过滤后的可购清单(R1/R2),逐行 purchasable 标注
+        purch = {p["code"]: p["purchasable"] for p in data["products"]}
+        assert purch == {"MF001": True, "BD003": True}  # R4 被 max_risk_level 滤掉
+        # 播报文本照常流出(卡片是补充,不是替代)
+        assert "产品" in _joined_text(frames)
+
+
+# --------------------------------------------------------- 年度账单报告卡(2026-10-26)
+
+def test_bill_report_card_frame(tmp_path):
+    """「月度/年度账单报告」→ SSE 下发 data-bill-report(年度口径):
+    KPI 总览 + 逐月走势 + 分类/商户,前端 BillReportCard 渲染;零动钱。"""
+    client, db, tok = _client(tmp_path, [
+        '{"intent": "chat"}',  # 模拟 LLM 误判闲聊:router 确定性改道 bill_analysis
+        json.dumps({"ask": None, "period": None, "category": None},
+                   ensure_ascii=False),
+        "年度账单报告已生成。",
+    ])
+    import sqlite3 as _s
+    from datetime import date as _date
+    ac = _s.connect(db)
+    year = _date.today().year
+    ts = f"{year}-01-15T10:00:00"
+    ac.executemany(
+        """INSERT INTO transactions
+           (account_id, ts, direction, amount_cents, balance_after_cents,
+            tx_type, counterparty, category, memo)
+           VALUES (1, ?, ?, ?, 0, 'pos', ?, ?, '')""",
+        [(ts, "in", 800_000, "示例公司", "工资"),
+         (ts, "out", 120_000, "示例超市", "生活")])
+    ac.commit()
+    ac.close()
+    with client:
+        r = _post_chat(client, "月度/年度账单报告。", "api-bill-report", token=tok)
+        assert r.status_code == 200
+        frames = _frames(r.text)
+        card = _find_data(frames, "data-bill-report")
+        assert card is not None, f"应下发账单报告卡: {[f['type'] for f in frames]}"
+        data = card["data"]
+        assert data["kind"] == "annual"
+        assert str(year) in data["title"]
+        assert data["income_yuan"] == "8000.00"
+        assert data["expense_yuan"] == "1200.00"
+        assert len(data["monthly"]) == _date.today().month
+        cats = {c["category"] for c in data["categories"]}
+        assert cats == {"生活"}
+        assert data["merchants"][0]["merchant"] == "示例超市"
+        # 只读:没有确认卡 / 闸门
+        assert _find_data(frames, "data-gate-pending") is None
