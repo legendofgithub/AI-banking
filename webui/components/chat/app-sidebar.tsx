@@ -27,6 +27,7 @@ import {
   SidebarHistory,
 } from "@/components/chat/sidebar-history";
 import { SidebarSettings } from "@/components/chat/sidebar-settings";
+import { SidebarScrollbar } from "@/components/chat/sidebar-scrollbar";
 import {
   Sidebar,
   SidebarContent,
@@ -328,6 +329,8 @@ export function AppSidebar({ user }: { user: User | undefined }) {
             </SidebarGroupContent>
           </SidebarGroup>
           <SidebarHistory searchQuery={query} user={user} />
+          {/* 会话多了超出可视高度时的常驻自绘滚动条(原生条是悬浮式,静止不可见) */}
+          <SidebarScrollbar />
         </SidebarContent>
         <SidebarFooter className="sticky bottom-0 z-10 border-t border-sidebar-border bg-sidebar pt-2 pb-3 shadow-[0_-8px_18px_-14px_rgba(0,0,0,0.35)]">
           {user ? <SidebarSettings /> : null}
