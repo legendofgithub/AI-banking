@@ -289,7 +289,7 @@ export function DepositDialog() {
       <DialogContent className="sm:max-w-md" data-testid="deposit-dialog">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <BanknoteIcon className="size-4 text-amber-600 dark:text-amber-400" />
+            <BanknoteIcon className="size-4 text-gold-ink dark:text-gold" />
             充钱/入金
           </DialogTitle>
           <DialogDescription>
@@ -339,7 +339,7 @@ export function DepositDialog() {
                 <p className="text-[11px] text-muted-foreground">
                   还没有绑定银行卡?
                   <button
-                    className="ml-1 text-amber-600 underline-offset-2 hover:underline dark:text-amber-400"
+                    className="ml-1 text-gold-ink underline-offset-2 hover:underline dark:text-gold"
                     onClick={handleGoBind}
                     type="button"
                   >
@@ -411,7 +411,7 @@ export function DepositDialog() {
             ) : null}
 
             <Button
-              className="rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+              className="rounded-lg bg-gold text-white hover:bg-[#3352b8] disabled:opacity-50"
               data-testid="deposit-submit"
               disabled={loading || accounts.length === 0}
               onClick={handleSubmit}

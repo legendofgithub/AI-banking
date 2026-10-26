@@ -176,7 +176,7 @@ export function SidebarSettings() {
             {/* 账号区:登录/登出全站唯一入口(右上角胶囊已移除) */}
             <div className="flex items-center gap-2.5 px-3 py-2.5">
               {user ? (
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-400/90 to-amber-600/90 text-[13px] font-semibold text-white">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#3E60CE]/90 to-[#1E52A5]/90 text-[13px] font-semibold text-white">
                   {nickname ? nickname[0] : "客"}
                 </div>
               ) : (
@@ -235,7 +235,7 @@ export function SidebarSettings() {
             ) : (
               <div className="flex gap-2 px-3 pb-2">
                 <Button
-                  className="h-7 flex-1 rounded-lg bg-amber-500/90 text-white hover:bg-amber-500"
+                  className="h-7 flex-1 rounded-lg bg-gold text-white hover:bg-[#3352b8]"
                   data-testid="settings-login"
                   onClick={handleLogin}
                   size="sm"

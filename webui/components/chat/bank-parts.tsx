@@ -15,13 +15,13 @@ import { useActiveChat } from "@/hooks/use-active-chat";
 
 /*
  * 银行 generative UI 部件 —— 与 agent/api.py 的 data-* 帧契约一一对应:
- *   data-transfer-confirmation  转账确认卡(金色)
+ *   data-transfer-confirmation  转账确认卡(确认闸门)
  *   data-split-confirmation     AA 收款确认卡
  *   data-settle-confirmation    AA 成员结算确认卡
  *   data-contact-confirmation   收款人录入确认卡(姓名/手机号/备注)
  *   data-contact-choices        同名联系人选择(卡片式消歧)
- *   data-linkage-plan           跨场景联动计划确认卡(预算锁定闸门,金色系)
- *   data-linkage-action         联动到期动作确认卡(逐项购买闸门,金色系)
+ *   data-linkage-plan           跨场景联动计划确认卡(预算锁定闸门,确认卡)
+ *   data-linkage-action         联动到期动作确认卡(逐项购买闸门,确认卡)
  *   data-plan                   生日预算计划确认卡(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
  *   data-analysis-plan          Agent Core 只读分析计划卡(目标/事实行/步骤/复盘/上次记忆,无按钮)
  *   data-thinking               Agent Core 思维链(识别意图→调取记忆→计划→守卫→执行→复盘,可折叠面板)
@@ -37,7 +37,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *                               尾号/类型/当前限额或状态/目标值;挂失加红字警示)
  *   data-subscription-list      订阅/代扣总览卡(逐项金额/下次扣费/年化+取消入口;
  *                               配套后台接入中,先经 /preview/subscriptions 演示)
- *   data-subscription-cancel    取消代扣确认卡(金色闸门,支付密码核验)
+ *   data-subscription-cancel    取消代扣确认卡(确认闸门,支付密码核验)
  *   data-ask-slot               缺槽提示
  *   data-gate-pending           本轮停在人工闸门(后端仍下发;前端不渲染提示胶囊)
  * 闸门答复 = 把「确认/取消」作为下一条用户消息发出(后端自动作为 resume 值恢复执行)。
@@ -152,7 +152,7 @@ interface ContactCandidate {
 
 /*
  * Agent Core 只读分析计划卡(agent/analysis.py → data-analysis-plan)。
- * 与金色闸门卡的区别:它**没有任何按钮**——分析结论只做展示,动钱仍走各自闸门。
+ * 与确认闸门卡的区别:它**没有任何按钮**——分析结论只做展示,动钱仍走各自闸门。
  * facts 是后端算好的事实行(label/value/hint),前端不做任何金额运算。
  */
 interface AnalysisFactRow {
@@ -1612,7 +1612,7 @@ function SplitCard({ data }: { data: SplitCardData }) {
  * 订阅/代扣场景部件(赛题六场景最后一个;前端先行,配套后台接入前用
  * /preview/subscriptions 假数据演示,字段结构与将来编排层输出对齐):
  *   data-subscription-list   订阅总览卡:逐项金额/下次扣费/年化 + 一键取消入口
- *   data-subscription-cancel 取消代扣确认卡:金色闸门,需支付密码
+ *   data-subscription-cancel 取消代扣确认卡:确认闸门,需支付密码
  */
 export interface SubscriptionItem {
   amount_yuan?: string;

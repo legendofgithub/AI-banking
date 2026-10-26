@@ -63,7 +63,7 @@ function BoundCardRow({
       className="flex flex-wrap items-center gap-2 rounded-lg border border-border/40 bg-background/50 px-2.5 py-2"
       data-testid="bound-card-item"
     >
-      <CreditCardIcon className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+      <CreditCardIcon className="size-4 shrink-0 text-gold-ink dark:text-gold" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[13px] font-medium">{card.bank_name}</span>
@@ -253,7 +253,7 @@ export function BoundCardsDialog() {
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <CreditCardIcon className="size-4 text-amber-600 dark:text-amber-400" />
+            <CreditCardIcon className="size-4 text-gold-ink dark:text-gold" />
             绑定银行卡
           </DialogTitle>
           <DialogDescription>
@@ -338,7 +338,7 @@ export function BoundCardsDialog() {
                 </p>
               ) : null}
               <Button
-                className="rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+                className="rounded-lg bg-gold text-white hover:bg-[#3352b8] disabled:opacity-50"
                 data-testid="bound-card-submit"
                 disabled={loading}
                 onClick={handleBind}
