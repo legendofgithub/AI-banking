@@ -25,7 +25,6 @@ import {
 } from "@/components/chat/payee-picker";
 import { getChatHistoryPaginationKey } from "@/components/chat/sidebar-history";
 import { toast } from "@/components/chat/toast";
-import { useAutoResume } from "@/hooks/use-auto-resume";
 import { bankAuthHeaders, getStoredToken } from "@/hooks/use-bank-auth";
 import { useChatModel } from "@/hooks/use-chat-model";
 import { useDeviceSync } from "@/hooks/use-device-sync";
@@ -115,7 +114,6 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     status,
     stop,
     regenerate,
-    resumeStream,
     addToolApprovalResponse,
   } = useChat<ChatMessage>({
     generateId: generateUUID,
@@ -129,6 +127,10 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       setDataStream((ds) => (ds ? [...ds, dataPart] : []));
     },
     onError: (error) => {
+      // SDK 透传的原始错误打回控制台:toast 只显示 message,没有栈没法定位
+      if (!(error instanceof ChatbotError) && error?.stack) {
+        console.error("[chat onError]", error.stack);
+      }
       if (error instanceof ChatbotError) {
         toast({ description: error.message, type: "error" });
       } else {
@@ -261,12 +263,10 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
     }
   }, [sendMessage, chatId]);
 
-  useAutoResume({
-    autoResume: !isNewChat && !!chatData,
-    initialMessages,
-    resumeStream,
-    setMessages,
-  });
+  // 不做模板的"自动恢复流"(resumeStream → GET /api/chat/{id}/stream):银行 agent
+  // 后端没有这个路由,恢复请求只会 404,SDK 解析 404 响应时抛
+  // "Cannot read properties of undefined (reading 'includes')" 并弹 toast(2026-10-26)。
+  // 本项目的恢复语义由后端闸门承担:停在人工闸门的会话,下一条消息自动作为 resume 值。
 
   const isReadonly = isNewChat ? false : (chatData?.isReadonly ?? false);
 
