@@ -13,6 +13,14 @@ export const Greeting = () => (
     </motion.div>
     <motion.div
       animate={{ opacity: 1, y: 0 }}
+      className="mt-2 text-center text-[13px] font-medium tracking-wide text-ink/70"
+      initial={{ opacity: 0, y: 10 }}
+      transition={{ delay: 0.45, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+    >
+      你的银行数字员工 · AI 处理常规，人负责例外
+    </motion.div>
+    <motion.div
+      animate={{ opacity: 1, y: 0 }}
       className="mt-3 text-center text-muted-foreground/80 text-sm"
       initial={{ opacity: 0, y: 10 }}
       transition={{ delay: 0.5, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}

@@ -151,7 +151,7 @@ export function MobileLoginButton() {
   return (
     <>
       <button
-        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border/60 bg-card/60 px-2.5 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:inline-flex"
+        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-white/25 bg-white/10 px-2.5 text-[12px] text-white/90 transition-colors hover:bg-white/20 hover:text-white md:inline-flex"
         data-testid="mobile-login-button"
         onClick={openDialog}
         title="生成二维码,手机扫码直接登录手机端"

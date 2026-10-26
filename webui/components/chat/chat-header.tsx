@@ -25,7 +25,7 @@ function HeaderActions() {
       <MobileLoginButton />
       <a
         aria-label="后台入口"
-        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-border/60 bg-card/60 px-2.5 text-[12px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:inline-flex"
+        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-white/25 bg-white/10 px-2.5 text-[12px] text-white/90 transition-colors hover:bg-white/20 hover:text-white md:inline-flex"
         data-testid="admin-console-link"
         href="http://127.0.0.1:8789/"
         rel="noopener noreferrer"
@@ -46,17 +46,17 @@ function PureChatHeader() {
     // 折叠侧栏时原实现整条顶栏不渲染;后台入口是测试刚需,
     // 保留一条极简顶栏(只有右上角动作区,不挤占内容)。
     return (
-      <header className="sticky top-0 flex h-12 items-center bg-sidebar px-3">
+      <header className="sticky top-0 flex h-12 items-center bg-gradient-to-r from-ink to-ink-3 px-3 shadow-[var(--shadow-card)]">
         <HeaderActions />
       </header>
     );
   }
 
   return (
-    <header className="sticky top-0 flex h-14 items-center gap-2 bg-sidebar px-3">
+    <header className="sticky top-0 flex h-14 items-center gap-2 bg-gradient-to-r from-ink to-ink-3 px-3 shadow-[var(--shadow-card)]">
       <Button
         aria-label="会话总览"
-        className="md:hidden"
+        className="text-white hover:bg-white/15 hover:text-white md:hidden"
         data-testid="mobile-session-button"
         onClick={toggleSidebar}
         size="icon-sm"
