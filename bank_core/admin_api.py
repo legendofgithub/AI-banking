@@ -39,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import recorder
-from .auth_core import mask_identifier, mask_id_card
+from .auth_core import mask_identifier, mask_id_card, verify_password
 from .analysis import AnalysisService
 from .db import audit, connect, migrate_cards_bound, migrate_users_kyc, now_iso
 from .events import EventService
@@ -52,6 +52,12 @@ from .wealth import WealthError, WealthService
 
 def _err(exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=400, content={"error": str(exc)})
+
+
+# 演示口令(管理台凭证直显用):库里只存加盐哈希,明文不可找回;此处只把
+# "哈希能通过该口令验证"的账号明文回显,其余账号回显空串(前端显示"—")。
+# scripts/grant_demo_logins.py 播种的就是这个口令,两边常量必须一致。
+DEMO_LOGIN_PASSWORD = "Demo@12345"
 
 
 # ---------------------------------------------------------------- 请求模型(模块级)
@@ -213,10 +219,13 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             args = (cutoff,)
         sql += " ORDER BY u.created_at ASC"
         rows = conn.execute(sql, args).fetchall()
-        # 注册信息(auth 行):脱敏展示 JR/T 0171 C2 级;老演示用户无 auth 为 None
+        # 注册信息(auth 行):对外字段脱敏展示 JR/T 0171 C2 级;老演示用户无
+        # auth 为 None。演示凭证(登录账号全量 + 登录密码)仅当哈希能通过
+        # DEMO_LOGIN_PASSWORD 验证才明文回显——哈希不可逆,验证不过就只能显示"—",
+        # 绝不瞎编;scripts/grant_demo_logins.py 可把全库统一成该演示口令。
         auth_by_uid = {r["user_id"]: r for r in conn.execute(
-            "SELECT user_id, identifier, identifier_type, last_login_at "
-            "FROM auth_users")}
+            "SELECT user_id, identifier, identifier_type, password_hash, "
+            "last_login_at FROM auth_users")}
         # 双库以昵称为键，按昵称计数
         money_n: dict[str, int] = {}
         for r in _rec_rows(recorder.money_db_path(conn),
@@ -232,8 +241,11 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
             a = auth_by_uid.get(uid)
             if not a:
                 return None
+            demo_ok = verify_password(DEMO_LOGIN_PASSWORD, a["password_hash"])
             return {"identifier_masked": mask_identifier(a["identifier"]),
                     "identifier_type": a["identifier_type"],
+                    "identifier": a["identifier"],
+                    "login_password": DEMO_LOGIN_PASSWORD if demo_ok else "",
                     "last_login_at": a["last_login_at"]}
 
         out = [{
@@ -493,18 +505,24 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/api/orders")
     def orders(status: str | None = None, user_id: int | None = None) -> dict:
         uid = _uid(user_id)
+        # 行查询 LIMIT 100（最新在前），total 同口径计数返回给前端做
+        # 截断提示（>100 笔时旧单不在本列表，用状态筛选可看全某一状态）
+        where = "WHERE user_id=?"
+        args: tuple = (uid,)
         if status:
-            rows = conn.execute(
-                """SELECT * FROM transfer_orders WHERE user_id=? AND status=?
-                   ORDER BY id DESC LIMIT 100""", (uid, status)).fetchall()
-        else:
-            rows = conn.execute(
-                """SELECT * FROM transfer_orders WHERE user_id=?
-                   ORDER BY id DESC LIMIT 100""", (uid,)).fetchall()
+            where += " AND status=?"
+            args = (uid, status)
+        rows = conn.execute(
+            f"SELECT * FROM transfer_orders {where} "
+            "ORDER BY id DESC LIMIT 100", args).fetchall()
+        total = conn.execute(
+            f"SELECT COUNT(*) n FROM transfer_orders {where}",
+            args).fetchone()["n"]
         return {"orders": [{"id": r["id"], "to_name": r["to_name"],
                             "amount_yuan": cents_to_yuan(r["amount_cents"]),
                             "status": r["status"], "created_at": r["created_at"],
-                            "memo": r["memo"]} for r in rows]}
+                            "memo": r["memo"]} for r in rows],
+                "total": total}
 
     @app.post("/api/orders/{order_id}/cancel")
     def cancel_order(order_id: int, user_id: int | None = None):

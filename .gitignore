@@ -3,7 +3,9 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.pytest_tmp/          # pytest --basetemp 的临时目录(批次号递增,不复用);复用会触发 safe-delete 守卫导致 rc=1 假失败
+# pytest --basetemp 的临时目录(批次号递增,不复用);复用会触发 safe-delete 守卫导致 rc=1 假失败
+# (注意:gitignore 不支持行内注释,注释必须单独成行,否则整行都成了模式)
+.pytest_tmp/
 
 # ===== 前端 =====
 webui/node_modules/
@@ -38,8 +40,9 @@ nul
 # ===== e2e 运行截图(webui/e2e-*.mjs 每次运行重新生成的输出,不入库) =====
 gui-test-*/
 
-# ===== AI 会话产物(ZCode 每会话生成的计划文件,本地留档不入库) =====
-.zcode/plans/
+# ===== AI 会话产物(各 AI 工具的会话目录,本地留档不入库) =====
+.zcode/
+.workbuddy/
 
 # ===== 系统 =====
 Thumbs.db

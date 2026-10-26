@@ -68,6 +68,14 @@ main{padding:20px 28px 70px;max-width:1560px;margin:0 auto}
 .seg-btn:hover{color:var(--text);border-color:#465064}
 .seg-btn.active{color:var(--gold-soft);border-color:rgba(216,180,90,.55);background:rgba(216,180,90,.10);font-weight:600}
 
+/* 首页：用户搜索框（页头右侧胶囊样式，按姓名/手机号即时过滤当前列表） */
+.search-box{position:relative;margin-left:auto;display:inline-flex;align-items:center;max-width:100%}
+.search-box>svg{position:absolute;left:12px;color:var(--faint);pointer-events:none}
+.search-box input{width:240px;max-width:100%;padding:6px 30px 6px 33px;border-radius:999px;font-size:13px}
+.search-box input::placeholder{color:var(--faint)}
+.search-clear{position:absolute;right:6px;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border:none;border-radius:50%;background:#2b3140;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0}
+.search-clear:hover{color:var(--text);background:#3a4254}
+
 /* 个人台：面包屑栏（位于页签区上方） */
 .crumbs{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:10px 28px;background:#12151c;border-bottom:1px solid var(--line2);font-size:13px}
 .crumbs .path{color:var(--muted)}
@@ -213,6 +221,11 @@ input.mono{font-family:var(--mono)}
   <div class="page-head">
     <h2 class="page-title">用户总览</h2>
     <p class="page-sub" id="usersTotal">共 — 位注册用户</p>
+    <div class="search-box" title="按姓名或手机号筛选下方用户列表">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.3" y2="16.3"/></svg>
+      <input id="userSearch" type="text" placeholder="搜索姓名 / 手机号" autocomplete="off">
+      <button type="button" class="search-clear" id="userSearchClear" hidden title="清空搜索">×</button>
+    </div>
   </div>
   <div class="card">
     <div class="toolbar">
@@ -237,7 +250,7 @@ input.mono{font-family:var(--mono)}
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>用户ID</th><th>姓名</th><th>手机号</th><th>注册时间</th>
+          <th>用户ID</th><th>姓名</th><th>手机号</th><th>登录账号</th><th>登录密码</th><th>注册时间</th>
           <th class="num">账户数</th><th class="num">总余额(元)</th><th class="num">联系人数</th>
           <th class="num">订单数</th><th class="num">流水笔数(业务库)</th>
           <th class="num">双库记录数(资金流水+功能修改)</th><th>最近活跃时间</th><th>操作</th>
@@ -289,11 +302,11 @@ input.mono{font-family:var(--mono)}
 <!-- ================= 1. 总览 ================= -->
 <section id="tab-overview" class="panel active">
   <div class="card">
-    <h3>注册信息<span class="head-note">账号脱敏展示（JR/T 0171 C2 级）</span></h3>
+    <h3>注册信息<span class="head-note">对外字段脱敏（JR/T 0171）；登录凭证为演示库明文直显</span></h3>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>注册方式</th><th>账号</th><th>真实姓名</th><th>身份证（脱敏）</th><th>邮箱（脱敏）</th><th>注册时间</th><th>最近登录</th></tr></thead>
-        <tbody id="regBody"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+        <thead><tr><th>注册方式</th><th>登录账号</th><th>登录密码</th><th>真实姓名</th><th>身份证（脱敏）</th><th>邮箱（脱敏）</th><th>注册时间</th><th>最近登录</th></tr></thead>
+        <tbody id="regBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -480,6 +493,7 @@ input.mono{font-family:var(--mono)}
           <option value="failed">failed（失败）</option>
         </select>
       </label>
+      <span class="hint" id="ordersCount">—</span>
       <span class="hint">仅待确认 / 已排程状态的订单可撤销</span>
     </div>
     <div class="tbl-wrap">
@@ -490,10 +504,10 @@ input.mono{font-family:var(--mono)}
     </div>
   </div>
   <div class="card">
-    <h3>订阅自动扣款</h3>
+    <h3>订阅自动扣款<span class="head-note">用户端「订阅代扣管理」的数据底座（subscriptions 表）；「订阅#」为协议编号，与转账单号相互独立；管理台只读</span></h3>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>商户</th><th class="num">金额(元)</th><th class="num">周期(天)</th><th>下次扣款日</th><th>状态</th></tr></thead>
+        <thead><tr><th>订阅#</th><th>商户</th><th>分类</th><th class="num">金额(元)</th><th class="num">周期</th><th class="num">年化成本(元)</th><th>下次扣款日</th><th>状态</th></tr></thead>
         <tbody id="subsBody"></tbody>
       </table>
     </div>
@@ -714,7 +728,7 @@ function operatorBadge(op){
 }
 
 /* change_log 类别 → 中文标签（未知类别显示原始值 + 中性徽标） */
-const CAT_LABEL = { contact: '联系人', card: '卡片', wealth: '理财', linkage: '联动', aa: 'AA', transfer: '转账', admin: '管理' };
+const CAT_LABEL = { contact: '联系人', card: '卡片', wealth: '理财', linkage: '联动', aa: 'AA', transfer: '转账', admin: '管理', subscription: '订阅' };
 function catBadge(c){
   if (c === null || c === undefined || c === '') return '<span class="muted">—</span>';
   const slug = String(c).trim().replace(/[^a-zA-Z0-9_-]/g, '');
@@ -736,6 +750,13 @@ function planBadge(s){
 const ORDER_STATUS = { pending_confirm: ['待确认', 'os-pending'], scheduled: ['已排程', 'os-sched'], executed: ['已执行', 'os-exec'], cancelled: ['已撤销', 'st-cancel'], failed: ['失败', 'st-lost'] };
 function orderBadge(s){
   const m = ORDER_STATUS[s];
+  return m ? `<span class="badge ${m[1]}">${m[0]}</span>` : `<span class="badge">${esc(s ?? '—')}</span>`;
+}
+
+/* 订阅状态徽标：与分析层枚举一致，仅 active / cancelled 两种 */
+const SUB_STATUS = { active: ['扣款中', 'st-ok'], cancelled: ['已取消', 'st-cancel'] };
+function subBadge(s){
+  const m = SUB_STATUS[s];
   return m ? `<span class="badge ${m[1]}">${m[0]}</span>` : `<span class="badge">${esc(s ?? '—')}</span>`;
 }
 
@@ -781,15 +802,55 @@ function syncCatOptions(records){
    首页（第一级）：用户总览
    ===================================================== */
 let withinFilter = 'all'; // 注册时间筛选：week | month | quarter | year | all（默认全部）
+let allUsers = [];        // 最近一次拉取的用户列表（已按注册时间筛选，搜索在渲染时叠加过滤）
+let userTotal = 0;        // 后端口径的注册用户总数（不受搜索影响）
+
+/** 按姓名/手机号匹配（大小写不敏感；手机号比较时忽略空格与连字符，命中任一即保留） */
+function matchUser(u, q, qPhone){
+  if (q && String(u.nickname ?? '').toLowerCase().includes(q)) return true;
+  if (qPhone && String(u.phone ?? '').replace(/[\s-]/g, '').includes(qPhone)) return true;
+  return false;
+}
+
+/** 渲染用户表：搜索词为空显示全量，否则只显示匹配行并同步计数文案 */
+function renderUsers(){
+  const raw = $('#userSearch').value.trim();
+  const q = raw.toLowerCase();
+  const qPhone = q.replace(/[\s-]/g, '');
+  const users = (q || qPhone) ? allUsers.filter(u => matchUser(u, q, qPhone)) : allUsers;
+  $('#usersTotal').textContent = raw
+    ? `共 ${userTotal} 位注册用户 · 匹配 ${users.length} 位`
+    : `共 ${userTotal} 位注册用户`;
+  $('#usersBody').innerHTML = users.map(userRow).join('')
+    || `<tr><td colspan="14" class="empty">${raw ? `没有匹配「${esc(raw)}」的用户` : '暂无符合条件的用户'}</td></tr>`;
+  $('#userSearchClear').hidden = !raw;
+}
+
+/** 拉取用户汇总列表（按当前注册时间筛选；搜索词保留，渲染时叠加过滤） */
+async function loadUsers(){
+  $('#usersBody').innerHTML = loadingRow(14);
+  const d = await api('/api/users?within=' + encodeURIComponent(withinFilter));
+  allUsers = d.users || [];
+  // 用户数优先取后端 total_users（含被筛选掉的口径以后端为准）
+  userTotal = d.total_users ?? allUsers.length;
+  renderUsers();
+}
+const loadUsersSafe = safe(loadUsers);
 
 /** 用户行：双击整行或点击行内「进入管理」按钮进入该用户管理台 */
 function userRow(u){
   // 双库记录数展示为 "资金流水+功能修改"，如 "2+3"；缺失按 0 计
   const dual = `${u.money_records ?? 0}+${u.change_records ?? 0}`;
+  // 演示凭证直显:登录账号=auth.identifier 全量;登录密码仅演示口令可回显,
+  // 非演示口令/未注册显示"—"(明文不可找回,绝不瞎编)
+  const loginId = u.auth && u.auth.identifier ? esc(u.auth.identifier) : '<span class="muted">—</span>';
+  const loginPwd = u.auth && u.auth.login_password ? esc(u.auth.login_password) : '<span class="muted">—</span>';
   return `<tr class="usr" data-id="${esc(u.user_id)}" data-nick="${esc(u.nickname ?? '')}" title="双击进入该用户的管理台">
     <td class="mono">${esc(u.user_id)}</td>
     <td>${u.nickname ? esc(u.nickname) : '<span class="muted">—</span>'}</td>
     <td class="mono">${u.phone ? esc(maskId(u.phone)) : '<span class="muted">—</span>'}</td>
+    <td class="mono">${loginId}</td>
+    <td class="mono">${loginPwd}</td>
     <td class="ts">${esc(fmtTime(u.created_at))}</td>
     <td class="num">${u.accounts ?? '—'}</td>
     <td class="num">${money(u.total_balance_yuan)}</td>
@@ -801,17 +862,6 @@ function userRow(u){
     <td><button type="button" class="btn mini js-enter">进入管理</button></td>
   </tr>`;
 }
-
-/** 拉取用户汇总列表（按当前注册时间筛选） */
-async function loadUsers(){
-  $('#usersBody').innerHTML = loadingRow(12);
-  const d = await api('/api/users?within=' + encodeURIComponent(withinFilter));
-  const users = d.users || [];
-  // 用户数优先取后端 total_users（含被筛选掉的口径以后端为准）
-  $('#usersTotal').textContent = `共 ${d.total_users ?? users.length} 位注册用户`;
-  $('#usersBody').innerHTML = users.map(userRow).join('') || `<tr><td colspan="12" class="empty">暂无符合条件的用户</td></tr>`;
-}
-const loadUsersSafe = safe(loadUsers);
 
 /* ---------- 用户满意度(消息投票,跨库只读) ---------- */
 async function loadVotes(){
@@ -836,10 +886,11 @@ const loadVotesSafe = safe(loadVotes);
    ===================================================== */
 
 /* ---------- 1. 总览 ---------- */
-/** 总览「注册信息」卡：users[].auth 有值 → 展示脱敏账号/注册方式/最近登录；
+/** 总览「注册信息」卡：users[].auth 有值 → 展示登录账号（全量）/登录密码/
+    注册方式/最近登录；登录密码仅当后端验证过演示口令才回显，否则"—"；
     真实姓名/身份证（脱敏）/邮箱（脱敏）来自 users 行（实名注册同步写入）；
-    老演示用户无注册（auth=null）→ 注册方式与最近登录显示"—"，账号回退显示
-    该 users 行的 phone（前端脱敏）；users 接口暂缺 auth 字段时同样回退。 */
+    老演示用户无注册（auth=null）→ 注册方式与最近登录显示"—"，登录账号
+    回退显示该 users 行的 phone（前端脱敏）；users 接口暂缺 auth 字段时同样回退。 */
 function renderRegInfo(ud){
   const body = $('#regBody');
   if (!body) return;
@@ -849,13 +900,16 @@ function renderRegInfo(ud){
     : null;
   const a = urow && urow.auth ? urow.auth : null;
   const how = a ? (a.identifier_type === 'email' ? '邮箱' : '手机号') : '—';
-  const idShown = a ? a.identifier_masked : (urow && urow.phone ? maskId(urow.phone) : '');
+  const idShown = a && a.identifier ? a.identifier
+    : (urow && urow.phone ? maskId(urow.phone) : '');
+  const loginPwd = a && a.login_password ? a.login_password : '';
   const lastLogin = a && a.last_login_at ? fmtTime(a.last_login_at) : '—';
   const idCard = urow && urow.id_card_masked ? urow.id_card_masked : '';
   const email = urow && urow.email_masked ? urow.email_masked : '';
   body.innerHTML = `<tr>
     <td>${esc(how)}</td>
     <td class="mono">${idShown ? esc(idShown) : '<span class="muted">—</span>'}</td>
+    <td class="mono">${loginPwd ? esc(loginPwd) : '<span class="muted">—</span>'}</td>
     <td>${urow && urow.nickname ? esc(urow.nickname) : '<span class="muted">—</span>'}</td>
     <td class="mono">${idCard ? esc(idCard) : '<span class="muted">—</span>'}</td>
     <td class="mono">${email ? esc(email) : '<span class="muted">—</span>'}</td>
@@ -1066,22 +1120,44 @@ $('#btnUnlock')?.addEventListener('click', async () => {
 });
 async function loadOrders(){
   $('#ordersBody').innerHTML = loadingRow(7);
-  $('#subsBody').innerHTML = loadingRow(5);
+  $('#subsBody').innerHTML = loadingRow(8);
   refreshLockBanner();
   const st = $('#orderStatus').value;
-  const [od, sd] = await Promise.all([
-    api(withUser(st ? `/api/orders?status=${encodeURIComponent(st)}` : '/api/orders')),
-    api(withUser('/api/subscriptions')),
-  ]);
-  $('#ordersBody').innerHTML = (od.orders || []).map(orderRow).join('') || emptyRow(7);
+  const jobs = [api(withUser(st ? `/api/orders?status=${encodeURIComponent(st)}` : '/api/orders'))];
+  // 「全部」视图后端只返回最新 100 笔，最老的单（如挂起的待确认单）会被截掉；
+  // 并入待确认/已排程两个全量小集合保证挂单永远可见（拉取失败降级为空，不阻断主列表）
+  if (!st){
+    jobs.push(api(withUser('/api/orders?status=pending_confirm')).catch(() => ({ orders: [] })));
+    jobs.push(api(withUser('/api/orders?status=scheduled')).catch(() => ({ orders: [] })));
+  }
+  jobs.push(api(withUser('/api/subscriptions')));
+  const results = await Promise.all(jobs);
+  const od = results[0];
+  let orders = od.orders || [];
+  const total = od.total ?? orders.length;
+  if (!st){
+    const seen = new Set(orders.map(o => o.id));
+    results.slice(1, 3).forEach(r => (r.orders || []).forEach(o => {
+      if (!seen.has(o.id)){ seen.add(o.id); orders.push(o); }
+    }));
+    orders.sort((a, b) => b.id - a.id);
+  }
+  $('#ordersCount').textContent = orders.length < total
+    ? `共 ${total} 笔 · 当前显示 ${orders.length} 笔（已并入全部待确认/已排程单，更早历史单请用状态筛选）`
+    : `共 ${total} 笔`;
+  $('#ordersBody').innerHTML = orders.map(orderRow).join('') || emptyRow(7);
+  const sd = results[results.length - 1];
   $('#subsBody').innerHTML = (sd.subscriptions || []).map(s => `
     <tr>
+      <td class="mono">#${esc(s.id)}</td>
       <td>${esc(s.merchant)}</td>
+      <td>${s.category ? `<span class="badge">${esc(s.category)}</span>` : '<span class="muted">—</span>'}</td>
       <td class="num">${money(s.amount_yuan)}</td>
-      <td class="num">${esc(s.period_days)}</td>
+      <td class="num">${esc(s.period_days)} 天</td>
+      <td class="num">${money(s.annual_cost_yuan)}</td>
       <td class="ts">${esc(s.next_charge_date)}</td>
-      <td>${esc(s.status)}</td>
-    </tr>`).join('') || emptyRow(5);
+      <td>${subBadge(s.status)}</td>
+    </tr>`).join('') || emptyRow(8);
 }
 
 /* ---------- 9. 调账 ---------- */
@@ -1248,6 +1324,18 @@ $('#withinSeg').addEventListener('click', e => {
   loadUsersSafe();
 });
 $('#btnUsersRefresh').addEventListener('click', () => { loadUsersSafe(); loadVotesSafe(); });
+
+// 用户搜索框：输入即过滤（姓名/手机号），Esc 或右侧 × 一键清空
+function clearUserSearch(){
+  $('#userSearch').value = '';
+  renderUsers();
+  $('#userSearch').focus();
+}
+$('#userSearch').addEventListener('input', renderUsers);
+$('#userSearchClear').addEventListener('click', clearUserSearch);
+$('#userSearch').addEventListener('keydown', e => {
+  if (e.key === 'Escape') clearUserSearch();
+});
 
 // ---- 跨用户调账记录（首页入口 → 第三级视图）----
 $('#btnAdjustLog').addEventListener('click', () => {

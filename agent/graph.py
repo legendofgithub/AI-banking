@@ -206,7 +206,7 @@ _PREF_NOMORE_RE = re.compile(
     r"不想再(买|吃|喝|用|订|去|玩|看|办)"
     r"([\u4e00-\u9fa5A-Za-z0-9 ]{0,16}?)(?=[，。,.!！?？;；\s]|$)")
 _PREF_ATTITUDE_RE = re.compile(
-    r"我(?:是|偏|属于|算|比较)(保守|稳健|激进|平衡)(?:型|派)?")
+    r"我(?:是|偏|属于|算|比较)(?:偏|更|比较)?(保守|稳健|激进|平衡)(?:型|派)?")
 _PREF_NORISK_RE = re.compile(
     r"(?:我)?(?:不想|害怕|怕)(?:再)?(亏钱|亏|冒风险|承担风险|有亏损)")
 
@@ -409,7 +409,10 @@ EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对
 规则:
 - 中文数字换算成阿拉伯数字:"五百"→"500","五千五"→"5500";金额只允许纯数字(可带小数点);
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null;
-- 用户要求"明天/下周三/几点"等定时转时 when="scheduled" 并给出具体 scheduled_at;立即转 when="now"。"""
+- 用户要求"明天/下周三/几点"等定时转时 when="scheduled",scheduled_at 结合
+  上下文【今天】换算成具体时刻(如今天 2026-10-25,"明天上午9点"→"2026-10-26T09:00:00");
+  立即转 when="now";
+- 仅当上下文没有【今天】锚点时,相对定时日期才允许填 null(绝不凭空猜日期)。"""
 
 SB_EXTRACT_SYS = """你是 AA 收款信息抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
 {"title": "账单标题|null", "total_yuan": "总金额,纯数字字符串,单位元|null",
@@ -809,6 +812,19 @@ def _valid_date(s: Any) -> bool:
         return True
     except (ValueError, TypeError):
         return False
+
+
+def _today_anchor() -> str:
+    """抽取上下文的"今天"锚点:相对日期换算的唯一基准。
+
+    提示词要求 LLM 把"明天/后天/下周X"换算成具体日期,而模型本身不知道
+    运行时的今天——不给锚点它只能填 null(退化为反问日期,2026-10-25 现场
+    "我后天要过生日"被追问"生日是哪一天"即此因)或凭训练语料瞎编。换算
+    结果仍由 _valid_date 与到期窗口等确定性代码把关,锚点只解决"无从换算"。
+    """
+    t = date.today()
+    return (f"【今天】{t.isoformat()}(星期{'一二三四五六日'[t.weekday()]};"
+            "相对日期如'明天/后天/下周X/N天后'一律以今天为基准换算成具体日期)")
 
 
 # ===================================================================== 反问文案(确定性,同一问题在 interrupt 与消息里保持一致)
@@ -1249,6 +1265,30 @@ def _remember_birthday(user_id: Any, patch: dict) -> None:
         return
     try:
         memory_mod.merge(user_id, "birthday", patch)
+    except Exception:  # noqa: BLE001 —— 记忆是旁路,不参与资金链路
+        pass
+
+
+def _remember_assessment(user_id: Any, level: str) -> None:
+    """测评完成写记忆(软处理):wealth 档刷新等级/清掉待测评,profile 同步等级。
+
+    风险测评是 agent"认识你"的关键时刻,但 w_assess 原本只落银行事实库
+    (risk_profiles),记忆里毫无痕迹——检阅弹窗与下次理财建议只能等下一次
+    完整理财分析才看到新等级(2026-10-26 现场缺口)。这里补两笔浅合并:
+    只写测评能确定的键(risk_level/needs_assessment),其余键留给分析快照。
+    """
+    level = str(level or "").strip()
+    if not level:
+        return
+    at = datetime.now().isoformat(timespec="seconds")
+    patch: dict = {"risk_level": level, "needs_assessment": False, "at": at}
+    if (m := re.fullmatch(r"C([1-5])", level)):
+        patch["max_risk_level"] = int(m.group(1))
+    try:
+        memory_mod.merge(user_id, "wealth", patch)
+        memory_mod.merge(user_id, "profile",
+                         {"risk_level": level, "needs_assessment": False,
+                          "at": at})
     except Exception:  # noqa: BLE001 —— 记忆是旁路,不参与资金链路
         pass
 
@@ -2057,7 +2097,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
 
     async def t_extract(state: AgentState) -> dict:
         history = state["messages"]
-        extra = ("【已有槽位】" + json.dumps(state.get("slots") or {}, ensure_ascii=False)
+        extra = (_today_anchor()
+                 + "\n【已有槽位】" + json.dumps(state.get("slots") or {}, ensure_ascii=False)
                  + "\n请输出抽取结果。")
         parsed = json_from_content(await ask_llm(EXTRACT_SYS, history, extra)) or {}
         slots: dict = dict(state.get("slots") or {})
@@ -2414,8 +2455,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
 
     async def l_extract(state: AgentState) -> dict:
         history = state["messages"]
-        extra = ("【已有槽位】" + json.dumps(state.get("linkage") or {},
-                                            ensure_ascii=False)
+        extra = (_today_anchor()
+                 + "\n【已有槽位】" + json.dumps(state.get("linkage") or {},
+                                                ensure_ascii=False)
                  + "\n请输出抽取结果。")
         parsed = json_from_content(
             await ask_llm(LINKAGE_EXTRACT_SYS, history, extra)) or {}
@@ -2874,6 +2916,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             return {"bank_calls": calls,
                     "notice": {"kind": "bank_error", "where": "set_risk_profile",
                                "error": err}}
+        # 测评成功 → 记忆同步(wealth 等级/待测评清零 + profile 等级;软失败)
+        _remember_assessment(state.get("auth_user_id"),
+                             str(res.get("level") or ""))
         return {"bank_calls": calls,
                 "notice": {"kind": "wealth_assessed", "result": res,
                            "meaning": _LEVEL_MEANING.get(str(res.get("level")), "")}}
@@ -3484,8 +3529,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
 
     async def p_extract(state: AgentState) -> dict:
         history = state["messages"]
-        extra = ("【已有槽位】" + json.dumps(state.get("plan_slots") or {},
-                                            ensure_ascii=False)
+        extra = (_today_anchor()
+                 + "\n【已有槽位】" + json.dumps(state.get("plan_slots") or {},
+                                                ensure_ascii=False)
                  + "\n请输出抽取结果。")
         parsed = json_from_content(
             await ask_llm(LINKAGE_EXTRACT_SYS, history, extra)) or {}
@@ -4042,8 +4088,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                 "at": datetime.now().isoformat(timespec="seconds")}
             if bill:
                 profile_patch["top_category"] = str(top.get("category") or "")
-                profile_patch["subscription_count"] = len(
-                    bill.get("subscriptions") or [])
+                profile_patch["subscription_count"] = len(subs_raw)
             if wealth:
                 profile_patch["risk_level"] = str(profile.get("level") or "")
                 profile_patch["preferred_type"] = top_holding

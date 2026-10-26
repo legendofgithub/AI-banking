@@ -165,6 +165,28 @@ def _fake_llm(*responses: str) -> FakeMessagesListChatModel:
     return FakeMessagesListChatModel(responses=[AIMessage(content=r) for r in responses])
 
 
+class _RecordingLLM(FakeMessagesListChatModel):
+    """捕获每次调用收到的完整消息列表(断言抽取上下文携带【今天】锚点)。
+
+    基类是 pydantic 模型,属性必须声明为字段(_CountingLLM.calls 同理)。"""
+
+    calls: list = []
+
+    def __init__(self, responses: list[str]):
+        super().__init__(responses=[AIMessage(content=r) for r in responses])
+
+    async def astream(self, input, **kwargs):  # noqa: A002 —— 与基类形参同名
+        self.calls.append(list(input))
+        async for chunk in super().astream(input, **kwargs):
+            yield chunk
+
+
+def _calls_with_sys(llm: _RecordingLLM, sys_prefix: str) -> list[list]:
+    """筛出系统提示以指定前缀开头的那些调用(一条调用 = 一组消息)。"""
+    return [msgs for msgs in llm.calls
+            if msgs and str(getattr(msgs[0], "content", "")).startswith(sys_prefix)]
+
+
 def _slots_json(**kv) -> str:
     return json.dumps(kv, ensure_ascii=False)
 
@@ -176,8 +198,10 @@ class _AgentSession:
     否则残留的工作线程可能让 pytest 进程退不出去(Windows 实测)。
     """
 
-    def __init__(self, db: Path, tmp_path: Path, responses: list[str]):
+    def __init__(self, db: Path, tmp_path: Path, responses: list[str],
+                 llm=None):
         self._db, self._tmp, self._resp = db, tmp_path, responses
+        self._llm = llm
         self.graph = None
         self._conn = None
 
@@ -185,7 +209,9 @@ class _AgentSession:
         tools = await load_bank_tools(self._db)
         saver, self._conn = await make_sqlite_checkpointer(
             self._tmp / "agent_ckpt.sqlite")
-        self.graph = build_agent_graph(_fake_llm(*self._resp), tools, saver)
+        self.graph = build_agent_graph(
+            self._llm if self._llm is not None else _fake_llm(*self._resp),
+            tools, saver)
         return self.graph
 
     async def __aexit__(self, *exc):
@@ -2409,6 +2435,70 @@ def test_core_persona_loaded_into_state_thinking_and_card(tmp_path):
             assert view.get("persona") == "说话像江湖侠客,先结论后细节"
 
     run(scenario())
+
+
+# ----------------------------------------------------------------- 抽取上下文"今天"锚点(2026-10-25)
+# 现场缺陷:"我后天要过生日"被反问"生日是哪一天"——LINKAGE_EXTRACT_SYS 要求相对日期
+# "以今天为基准"换算,t/l/p 三处抽取上下文却从未注入今天,模型无从换算只能按
+# "确实未知填 null"退化为反问。回归口径:凡带日期槽的抽取调用,发给模型的上下文
+# 必须携带【今天】锚点(graph._today_anchor);换算正确性属真实模型行为,由脚本化
+# 假 LLM 无法覆盖,靠锚点注入 + 提示词规则咬合来钉死接线。
+
+def test_today_anchor_format():
+    """锚点格式:'【今天】YYYY-MM-DD(星期X;…)'——与提示词规则引用的名字一致。"""
+    a = graph_mod._today_anchor()
+    assert a.startswith(f"【今天】{date.today().isoformat()}")
+    assert "星期" in a and "相对日期" in a
+
+
+def test_transfer_extract_context_carries_today_anchor(tmp_path):
+    """t_extract:scheduled_at 是相对日期槽,上下文必须带【今天】。"""
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        llm = _RecordingLLM([
+            '{"intent": "transfer"}',
+            _slots_json(payee="张三", amount_yuan="500", when="now"),
+            "已向张三转账 500.00 元。",
+        ])
+        async with _AgentSession(db, tmp_path, ["-"], llm=llm) as graph:
+            cfg = {"configurable": {"thread_id": "anchor-t"}}
+            await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("给张三转 500 元")]}, cfg)
+        calls = _calls_with_sys(llm, "你是转账信息抽取器")
+        assert calls, "转账抽取器未被调用"
+        extra = str(calls[0][-1].content)  # ask_llm 把 extra 作为最后一条 HumanMessage
+        assert f"【今天】{date.today().isoformat()}" in extra
+        assert extra.index("【今天】") < extra.index("【已有槽位】")
+
+    run(scenario())
+
+
+def test_linkage_extract_context_carries_today_anchor(tmp_path):
+    """l_extract:event_date/days_before 是相对日期槽,上下文必须带【今天】。"""
+    db = _mk_linkage_db(tmp_path)
+
+    async def scenario():
+        llm = _RecordingLLM([
+            '{"intent": "linkage"}',
+            _LINK_ACTIONS_JSON,
+            "预算已预留,联动计划生效。",
+        ])
+        async with _AgentSession(db, tmp_path, ["-"], llm=llm) as graph:
+            cfg = {"configurable": {"thread_id": "anchor-l"}}
+            await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("我后天要过生日,给我一个生日的计划")]}, cfg)
+        calls = _calls_with_sys(llm, "你是跨场景联动计划抽取器")
+        assert calls, "联动抽取器未被调用"
+        extra = str(calls[0][-1].content)
+        assert f"【今天】{date.today().isoformat()}" in extra
+        assert extra.index("【今天】") < extra.index("【已有槽位】")
+
+    run(scenario())
+
+
 # ------------------------------------------- "计划"关键词路由(2026-10-26 用户口径)
 
 def test_plan_word_rescues_chat_into_linkage(tmp_path):

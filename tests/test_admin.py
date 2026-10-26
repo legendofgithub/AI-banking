@@ -387,3 +387,41 @@ def test_admin_transfer_unlock(client):
     u = client.get("/api/users").json()["users"][0]
     assert u["transfer_locked"] is False
     assert "pay_fail_count" in u
+
+
+def test_users_expose_demo_credentials(rec_env, tmp_path):
+    """用户列表凭证直显:演示口令账号回显明文,非演示口令回显空串,无 auth 为 None。
+
+    管理台"登录账号/登录密码"两列的数据源契约(2026-10-25):
+    - identifier 全量返回(演示要能照着登录),identifier_masked 脱敏字段保留;
+    - login_password 只在哈希能通过 DEMO_LOGIN_PASSWORD 验证时回显明文——
+      哈希不可逆,验证不过绝不瞎编;grant_demo_logins.py 负责把库统一成演示口令。
+    """
+    from agent.auth import ensure_demo_auth, hash_password
+    from bank_core.admin_api import DEMO_LOGIN_PASSWORD
+
+    conn = rec_env
+    # 用户 2:演示口令;用户 3:自定义口令(模拟历史注册账号)
+    conn.execute("INSERT INTO users (id,name,phone,created_at) "
+                 "VALUES (2,'林晓芸','13911110001','2026-01-02T00:00:00')")
+    ensure_demo_auth(conn, 2, login_password=DEMO_LOGIN_PASSWORD,
+                     pay_password="888888")
+    conn.execute("INSERT INTO users (id,name,phone,created_at) "
+                 "VALUES (3,'赵敏','13900007777','2026-01-03T00:00:00')")
+    conn.execute(
+        "INSERT INTO auth_users (user_id, identifier, identifier_type, "
+        "password_hash, pay_hash, created_at) VALUES (3,'13900007777','phone',?,?,'2026-01-03T00:00:00')",
+        (hash_password("Other@9999"), hash_password("123456")))
+    conn.commit()
+
+    app = create_admin_app(tmp_path / "bank.db")
+    rows = {u["user_id"]: u for u in TestClient(app).get("/api/users").json()["users"]}
+
+    demo = rows[2]["auth"]
+    assert demo["identifier"] == "13911110001"          # 登录账号全量
+    assert demo["identifier_masked"] != demo["identifier"]  # 脱敏字段并存
+    assert demo["login_password"] == DEMO_LOGIN_PASSWORD    # 演示口令明文回显
+    custom = rows[3]["auth"]
+    assert custom["identifier"] == "13900007777"
+    assert custom["login_password"] == ""               # 非演示口令:空串,前端显示"—"
+    assert rows[1]["auth"] is None                      # 纯档案用户:无 auth 行

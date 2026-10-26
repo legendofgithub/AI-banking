@@ -371,3 +371,40 @@ def test_render_module_profile_includes_name():
     ) == ["姓名：丁博文", "风险偏好：稳健"]
     assert memory.render_module("profile", {"risk_level": "稳健"}) == [
         "风险偏好：稳健"]
+
+
+# --------------------------------------------------------------- 测评写记忆(2026-10-26)
+
+def test_remember_assessment_writes_wealth_and_profile():
+    """测评完成 → wealth 刷新等级/待测评清零、profile 同步等级;未登录软跳过。
+
+    (w_assess 原本只落银行事实库 risk_profiles,记忆里毫无痕迹——
+    检阅弹窗与下次理财建议只能等下一次完整理财分析才看到新等级。)
+    """
+    from agent.graph import _remember_assessment
+
+    _remember_assessment(11, "C4")
+    wealth = memory.recall(11, "wealth")
+    assert wealth["risk_level"] == "C4"
+    assert wealth["max_risk_level"] == 4
+    assert wealth["needs_assessment"] is False
+    assert memory.recall(11, "profile")["risk_level"] == "C4"
+
+    # 未登录(user_id 非法):不写不抛(三条硬约束之二)
+    _remember_assessment(None, "C3")
+    assert memory.recall(None, "wealth") is None
+
+
+def test_remember_assessment_merges_without_wiping_analysis_snapshot():
+    """浅合并语义:已有分析快照(偏好/持仓)不被测评覆盖,只更新测评确定的键。"""
+    from agent.graph import _remember_assessment
+
+    memory.remember(11, "wealth", {"preferred_type": "纯债基金",
+                                   "holding_count": 7,
+                                   "needs_assessment": True})
+    _remember_assessment(11, "C3")
+    w = memory.recall(11, "wealth")
+    assert w["preferred_type"] == "纯债基金"   # 分析快照保留
+    assert w["holding_count"] == 7
+    assert w["needs_assessment"] is False      # 待测评清零
+    assert w["risk_level"] == "C3"

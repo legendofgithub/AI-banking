@@ -52,6 +52,14 @@ def test_extract_risk_attitude():
     assert ("attitude", "不想亏本金") in kinds
 
 
+def test_extract_risk_attitude_with_infix():
+    """插字说法也要命中:"我是偏激进派"(2026-10-26 现场漏网:timeline 记了、
+    preferences 却没记——态度正则原先不容"是/偏"之后再插一个"偏/更")。"""
+    got = extract_turn_extracts("我是偏激进派,能接受大起大落")
+    kinds = {(i["kind"], i["text"]) for i in got["preferences"]}
+    assert ("attitude", "偏激进") in kinds
+
+
 def test_extract_facts_rich_sentence():
     got = extract_turn_extracts("我叫faker,在杭州工作,我是一名程序员,今年28岁")
     facts = {(i["kind"], i["text"]) for i in got["facts"]}
