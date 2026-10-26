@@ -969,6 +969,19 @@ def _linkage_slot_question(missing: list[str]) -> str:
     return "请补充事件日期、预算和要准备的东西。"
 
 
+# 反问选项(与 _bill_options 同款契约:点击即以该文本回话,经 LINKAGE_EXTRACT_SYS
+# 解析回槽位——措辞必须落在抽取器规则内:预算纯数字、日期相对说法靠【今天】
+# 锚点换算、动作列举"名+金额"每样一条)
+def _linkage_slot_options(missing: list[str]) -> list[str]:
+    if "budget_yuan" in missing:
+        return ["预留1000元", "预留2000元", "预留5000元", "预留10000元"]
+    if "event_date" in missing:
+        return ["明天", "后天", "这周六", "下周六"]
+    if "actions" in missing:
+        return ["鲜花300元,蛋糕200元", "礼物500元", "门票600元"]
+    return []
+
+
 def _linkage_confirm_question(plan: dict) -> str:
     # 照 _confirm_question 风格:复述要素 + 确认句式;金额全部来自建计划回执
     ev = plan.get("event") or {}
@@ -1007,6 +1020,15 @@ def _plan_slot_question(missing: list[str]) -> str:
     if "budget_yuan" in missing:
         return "这次生日准备花多少预算?请用数字说明(如:3000)。"
     return "请补充生日日期和预算。"
+
+
+def _plan_slot_options(missing: list[str]) -> list[str]:
+    """生日规划缺槽选项(与 _linkage_slot_options 同款契约)。"""
+    if "event_date" in missing:
+        return ["明天", "后天", "这周六", "下周六"]
+    if "budget_yuan" in missing:
+        return ["预算1000元", "预算3000元", "预算5000元"]
+    return []
 
 
 def _plan_confirm_question(card: dict) -> str:
@@ -2420,7 +2442,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             missing.append("actions")
         return {"linkage": draft, "linkage_missing": missing}
 
-    l_clarify = _make_clarify_node("linkage_missing", _linkage_slot_question)
+    l_clarify = _make_clarify_node("linkage_missing", _linkage_slot_question,
+                                   _linkage_slot_options)
 
     async def l_plan(state: AgentState) -> dict:
         draft = state.get("linkage") or {}
@@ -3512,7 +3535,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                 }
         return update
 
-    p_clarify = _make_clarify_node("plan_missing", _plan_slot_question)
+    p_clarify = _make_clarify_node("plan_missing", _plan_slot_question,
+                                   _plan_slot_options)
 
     async def p_snapshot(state: AgentState) -> dict:
         """只读事实快照:事件/账户/月报/订阅/生日前扣费 → 可支配额度。
