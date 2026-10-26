@@ -35,7 +35,9 @@ scripts_eval_*.stderr
 logs/
 .tmp_notes/
 # 调试残留:调接口时把 body/sse/登录 token 写到仓库根,一旦 add -A 即泄露凭证
+# (.tmp_* 下划线与 .tmp-* 连字符两种命名都拦,2026-10-26 探针文件曾漏网)
 .tmp_*
+.tmp-*
 .playwright-mcp/
 nul
 
@@ -52,6 +54,29 @@ gui-test-*/
 AI-Banking-Agent-答辩演示-*.pptx
 # 微众化改造相关文档及其衍生文件一律不入库(对外只讲"对齐公开设计 DNA")
 *微众化*
+# 答辩材料/ 为安全自评、演示脚本等一切提交给评委但不入仓库的产出
+答辩材料/
+# 指导性文件/ 为指导 AI agent 施工的内部文档,仅本地留存
+指导性文件/
+# AGENTS.md 同为 AI agent 工作指导,仅本地留存(测试注释里的"铁律"出处即此文件)
+AGENTS.md
+# 前端/ 为设计期高保真原型(墨刀施工图),产品本体是 webui/,原型仅本地留存
+前端/
+# ZCode 本地工具配置(非项目本体)
+.zcodeignore
+# Vercel 模板残留(本项目不做 Vercel 部署)
+webui/vercel-template.json
+webui/vercel.json
+# docs/ 内部过程文档(准备过程类,出库仅本地留存;README/产品功能说明/
+# 功能技术实现/协作契约仍入库,它们是作品本身的一部分)
+docs/AI-Banking-Agent-产品研发计划.md
+docs/market-data-plan.md
+docs/production-readiness.md
+docs/前端冗余组件扫描报告-*.md
+docs/墨刀原型提示词.md
+docs/自主规划能力升级计划.md
+docs/项目交接文档-*.md
+docs/项目扫描报告-*.md
 
 # ===== 演示材料构建中间产物(.cache 为渲染图片缓存 / .slidep 为生成器工作目录,均可重建) =====
 演示材料/**/.cache/
