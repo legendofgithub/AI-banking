@@ -85,6 +85,8 @@ import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import uuid4
@@ -109,6 +111,7 @@ from bank_core.money import cents_to_yuan, yuan_to_cents
 from agent.llm import (RequestLLM, fetch_models_json, get_llm,
                        normalize_base_url, pick_default_model,
                        reset_request_llm, set_request_llm)
+from agent.insights_api import router as insights_router  # HACK-CX 洞察 API(M5,默认关闭)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -882,6 +885,79 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             "created_at": r["created_at"],
             "scheduled_at": r["scheduled_at"] or "",
         } for r in rows]}
+
+    @app.get("/api/home")
+    async def home_overview(x_bank_token: str | None = Header(default=None)) -> dict:
+        """银行首页聚合数据(范式改造:第一屏从对话流改为"你的银行")。
+
+        只读聚合:账户余额 / 待确认转账单 / 3 天内将扣费订阅 / 进行中联动计划 /
+        最近 5 笔交易。不动钱、不触发到期任务(run_due_tasks 仍只在提醒入口触发,
+        这里保持纯读)。数据源与 pending-orders 同一套 SQL 口径。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后查看"})
+        uid = me["user_id"]
+        conn = app.state.auth_conn
+
+        accounts = [{"name": a["name"], "balance_yuan": a["balance_yuan"]}
+                    for a in LedgerService(conn, user_id=uid).list_accounts()]
+        total_yuan = f"{sum((Decimal(str(a['balance_yuan'])) for a in accounts),
+                            Decimal('0')):.2f}"
+
+        pending = conn.execute(
+            """SELECT id, to_name, amount_cents, status FROM transfer_orders
+               WHERE user_id=? AND status IN ('pending_confirm','scheduled')
+               ORDER BY id DESC LIMIT 10""", (uid,)).fetchall()
+
+        today = datetime.now().date()
+        upcoming_subs: list[dict] = []
+        for r in conn.execute(
+                """SELECT merchant_name, amount_cents, next_charge_date
+                   FROM subscriptions
+                   WHERE user_id=? AND status='active'
+                   ORDER BY next_charge_date LIMIT 20""", (uid,)).fetchall():
+            try:
+                due = datetime.fromisoformat(
+                    str(r["next_charge_date"])[:10] + "T00:00:00").date()
+            except ValueError:
+                continue
+            days_left = (due - today).days
+            if 0 <= days_left <= 3:
+                upcoming_subs.append({
+                    "merchant": r["merchant_name"],
+                    "amount_yuan": cents_to_yuan(r["amount_cents"]),
+                    "days_left": days_left})
+
+        plans = conn.execute(
+            """SELECT id, title FROM linkage_plans
+               WHERE user_id=? AND status='active'
+               ORDER BY id DESC LIMIT 5""", (uid,)).fetchall()
+
+        recent = conn.execute(
+            """SELECT t.ts, t.direction, t.amount_cents, t.counterparty, t.tx_type
+               FROM transactions t JOIN accounts a ON t.account_id = a.id
+               WHERE a.user_id=? ORDER BY t.id DESC LIMIT 5""",
+            (uid,)).fetchall()
+
+        return {
+            "nickname": me.get("nickname") or "",
+            "accounts": accounts,
+            "total_yuan": total_yuan,
+            "pending_orders": [{
+                "order_id": r["id"], "to_name": r["to_name"],
+                "amount_yuan": cents_to_yuan(r["amount_cents"]),
+                "status": r["status"]} for r in pending],
+            "upcoming_subscriptions": upcoming_subs,
+            "active_plans": [{"plan_id": r["id"], "title": r["title"]}
+                             for r in plans],
+            "recent_transactions": [{
+                "ts": r["ts"], "direction": r["direction"],
+                "amount_yuan": cents_to_yuan(r["amount_cents"]),
+                "counterparty": r["counterparty"],
+                "tx_type": r["tx_type"]} for r in recent],
+        }
 
     # ------------------------------------------------ Agent 记忆检阅(view/delete)
     # 参考 Anthropic memory tool:按主题"一档一文件"、人类可读、可看可删。
@@ -1866,6 +1942,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
     async def _interrupt_frames(payload: dict, app: FastAPI) -> list[str]:
         """SSE 帧封装；历史恢复复用同一套 data-* 映射（_interrupt_parts）。"""
         return [_frame(part) for part in await _interrupt_parts(payload, app)]
+
+    # HACK-CX 客户洞察 API(M5):AGENT_INSIGHTS_ENABLED 打开才注册,默认关闭
+    # (关闭时路由不存在,现有行为与测试完全不变;见 docs/HACK-CX迁移方案.md 第四节)
+    if os.getenv("AGENT_INSIGHTS_ENABLED", "").strip().lower() \
+            in ("1", "true", "yes", "on"):
+        app.include_router(insights_router)
 
     return app
 

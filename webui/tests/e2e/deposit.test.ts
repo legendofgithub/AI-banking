@@ -4,7 +4,8 @@ async function loginDemo(page: Page) {
   await page.goto("/login");
   await page.getByTestId("demo-fill-13800002233").click();
   await page.locator('button[type="submit"]').click();
-  await page.waitForURL("http://localhost:3000/", { timeout: 15_000 });
+  await page.waitForURL("http://localhost:3000/home", { timeout: 15_000 });
+  await page.goto("/chat");
 }
 
 test.describe("Simulated deposit", () => {

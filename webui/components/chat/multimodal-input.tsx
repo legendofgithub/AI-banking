@@ -107,6 +107,15 @@ function PureMultimodalInput({
     setLocalStorageInput(input);
   }, [input, setLocalStorageInput]);
 
+  // 银行首页快捷入口带话进来:一次性预填,消费即清(不自动发送,用户过目后回车)
+  useEffect(() => {
+    const prefill = sessionStorage.getItem("bank-prefill");
+    if (prefill) {
+      sessionStorage.removeItem("bank-prefill");
+      setInput(prefill);
+    }
+  }, [setInput]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
   const [slashOpen, setSlashOpen] = useState(false);

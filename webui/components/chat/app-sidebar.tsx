@@ -4,6 +4,7 @@ import {
   ChevronLeftIcon,
   MessageSquareIcon,
   PanelLeftIcon,
+  LandmarkIcon,
   PenSquareIcon,
   PlusIcon,
   SearchIcon,
@@ -301,6 +302,20 @@ export function AppSidebar({ user }: { user: User | undefined }) {
           <SidebarGroup className="pt-1">
             <SidebarGroupContent>
               <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    className="h-8 rounded-lg border border-sidebar-border text-[13px] text-sidebar-foreground/70 transition-colors duration-150 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                    data-testid="sidebar-home"
+                    onClick={() => {
+                      setOpenMobile(false);
+                      router.push("/home");
+                    }}
+                    tooltip="银行首页"
+                  >
+                    <LandmarkIcon className="size-4" />
+                    <span className="font-medium">银行首页</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
                 {isMobile ? null : (
                   <SidebarMenuItem>
                     <SidebarMenuButton

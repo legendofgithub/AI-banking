@@ -8,7 +8,7 @@ async function openModelSettings(page: Page) {
 
 test.describe("Model Settings", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/chat");
   });
 
   test("bottom only shows the connected model info", async ({ page }) => {

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -1341,3 +1342,27 @@ def test_bill_report_card_frame(tmp_path):
         assert data["merchants"][0]["merchant"] == "示例超市"
         # 只读:没有确认卡 / 闸门
         assert _find_data(frames, "data-gate-pending") is None
+
+
+def test_home_overview_aggregates_readonly(tmp_path):
+    """银行首页聚合端点:登录可读五块数据,未登录 401,纯读不动账。"""
+    client, db, tok = _client(tmp_path, ["好的"])
+    with client:
+        r = client.get("/api/home", headers={"x-bank-token": tok})
+        assert r.status_code == 200
+        data = r.json()
+        assert Decimal(str(data["total_yuan"])) > 0
+        assert data["accounts"], "种子库应有账户"
+        assert data["recent_transactions"] == []  # 最小夹具库无流水
+        # 入金产生一笔流水 -> 首页立刻可见(读的是同一张表)
+        rd = client.post("/api/deposit", headers={"x-bank-token": tok},
+                         json={"amount_yuan": "1000"})
+        assert rd.status_code == 200, rd.text
+        data2 = client.get("/api/home",
+                           headers={"x-bank-token": tok}).json()
+        assert data2["recent_transactions"], "入金后应有最近交易"
+        top = data2["recent_transactions"][0]
+        assert top["direction"] == "in" and top["amount_yuan"] == "1000.00"
+        # 未登录 401
+        r401 = client.get("/api/home")
+        assert r401.status_code == 401
