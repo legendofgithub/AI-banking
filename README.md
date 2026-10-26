@@ -9,19 +9,27 @@
 ## 快速开始
 
 ```bash
-# Windows(Git Bash)—— 装依赖(一次性)
+# —— macOS —— 装依赖(一次性)
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cd webui && npm install && cd ..      # 或 pnpm install
+
+# 一键路线(Windows/macOS 同一口径):首次运行会自动生成 webui/.env.local
+# (全程只差粘贴一个 LLM API Key,AUTH_SECRET 本机随机)并自动播种演示库;
+# 之后每次运行都是全量重启当前代码。
+# (Windows: 启动演示-Windows.bat 需在 cmd/资源管理器里运行,Git Bash 下用 cmd //c 启动演示-Windows.bat)
+启动演示-Windows.bat                # Windows
+./启动演示-Mac.command          # macOS(双击亦可;首次使用需 chmod +x,见下)
+# 启动后只保留一个进度窗口,四个服务在后台无窗口运行;日志在 logs/ 下。
+# 关掉进度窗口/终端都不影响服务:
+#   Windows 停止: 停止演示-Windows.bat        macOS 停止: ./停止演示-Mac.command
+
+# —— Windows —— 装依赖(一次性)
 py -3.12 -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
 cd webui && pnpm install --registry=https://registry.npmmirror.com && cd ..
 
-# 一键路线:首次运行会自动生成 webui/.env.local(全程只差粘贴一个 LLM API Key,
-# AUTH_SECRET 本机随机)并自动播种演示库;之后每次运行都是全量重启当前代码。
-# (启动演示.bat 需在 cmd/资源管理器里运行;Git Bash 下用 cmd //c 启动演示.bat)
-启动演示.bat
-# 启动后只保留一个进度窗口,四个服务在后台无窗口运行;日志在 logs/ 下。
-# 关掉进度窗口不影响服务,停止服务请运行 停止演示.bat。
-
-# —— 或手动分步 ——
+# —— 或手动分步(路径以 Windows 为例,macOS 把 .venv/Scripts/* 换成 .venv/bin/*) ——
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 
@@ -38,6 +46,9 @@ python -m venv .venv
 # 跑测试
 .venv/Scripts/python -m pytest tests -q
 ```
+
+> macOS 首次使用 `.command` 脚本：若从压缩包/git archive 解出来的文件没有执行权限，
+> 在终端里执行一次 `chmod +x 启动演示-Mac.command 停止演示-Mac.command` 即可；之后双击就能启动/停止。
 
 ## 试用界面（demo/index.html）
 

@@ -1,22 +1,22 @@
 #!/usr/bin/env python
-"""AI Banking 一键启动器(全量重启 + 后台静默)。
+"""AI Banking 一键启动器(全量重启 + 后台静默;Windows / macOS 双平台)。
 
-旧版 启动演示.bat 用 `start /min` 起四个服务,任务栏会长期挂四个 cmd 窗口。
+旧版 启动演示-Windows.bat 用 `start /min` 起四个服务,任务栏会长期挂四个 cmd 窗口。
 本启动器只保留一个前台窗口显示启动进度,四个服务改为无窗口后台进程,
 标准输出/错误落到 logs/<服务>.log 与 logs/<服务>.err.log。关闭启动器窗口
-不会杀掉后台服务,停止仍用 停止演示.bat。
+不会杀掉后台服务,停止用 停止演示-Windows.bat(Windows)/ 停止演示-Mac.command(macOS)。
 
 保留的既有语义(AGENTS.md):
 - 全量重启:先按端口 PID 停旧进程再起新的(Python / next 都不热加载);
 - 只按 PID 杀,绝不 taskkill /IM node.exe 全杀;
-- 后端一律 .venv\\Scripts\\python.exe;
+- 后端一律 .venv 里的 python(Windows: Scripts\\python.exe;macOS: bin/python);
 - ZAI_* 从 webui/.env.local 回填(Key / 端点 / 模型必须同源);
 - 先 next build 再 next start,不走 next dev。
 
 用法:
-    启动演示.bat                    # 全量构建 + 启动
-    启动演示.bat --skip-build       # 跳过前端构建(仅重启服务)
-    启动演示.bat --no-open          # 不自动打开浏览器(调试/自动化用)
+    Windows:  启动演示-Windows.bat          macOS:  启动演示-Mac.command(双击)
+    ... --skip-build                        # 跳过前端构建(仅重启服务)
+    ... --no-open                           # 不自动打开浏览器(调试/自动化用)
 """
 
 from __future__ import annotations
@@ -33,8 +33,13 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+IS_WINDOWS = os.name == "nt"
 ROOT = Path(__file__).resolve().parent.parent
-PY = ROOT / ".venv" / "Scripts" / "python.exe"
+PY = (
+    ROOT / ".venv" / "Scripts" / "python.exe"
+    if IS_WINDOWS
+    else ROOT / ".venv" / "bin" / "python"
+)
 WEBUI = ROOT / "webui"
 LOG_DIR = ROOT / "logs"
 PORTS = (8800, 8789, 8788, 3000)
@@ -75,29 +80,50 @@ def parse_listener_pids(netstat_text: str) -> dict[int, list[int]]:
     return found
 
 
+def listener_pids_by_port() -> dict[int, list[int]]:
+    """按平台探测演示端口上的监听进程:Windows 走 netstat -ano,POSIX 走 lsof。"""
+    if IS_WINDOWS:
+        raw = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=30,
+        ).stdout
+        return parse_listener_pids(raw)
+    found: dict[int, list[int]] = {}
+    for port in PORTS:
+        out = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=15,
+        ).stdout
+        pids = sorted({int(x) for x in out.split() if x.isdigit()})
+        if pids:
+            found[port] = pids
+    return found
+
+
 def stop_old_services(rounds: int = 2) -> None:
     """按端口 PID 停旧进程。两轮是旧脚本的既有设计:防止 next dev 的父进程重拉。"""
     print("[停止] 清理旧进程...")
+    kill_cmd = (["taskkill", "/F", "/PID"]) if IS_WINDOWS else ["kill", "-9"]
     for index in range(rounds):
         try:
-            raw = subprocess.run(
-                ["netstat", "-ano"],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=30,
-            ).stdout
+            listeners = listener_pids_by_port()
         except (OSError, subprocess.SubprocessError) as exc:
-            print(f"  [警告] netstat 执行失败: {exc}")
+            tool = "netstat" if IS_WINDOWS else "lsof"
+            print(f"  [警告] {tool} 执行失败: {exc}")
             return
-        listeners = parse_listener_pids(raw)
         if not listeners:
             print("  (没有发现占用演示端口的进程)")
         for port in PORTS:
             for pid in listeners.get(port, []):
                 print(f"  端口 {port} -> 停止 PID {pid}")
                 subprocess.run(
-                    ["taskkill", "/F", "/PID", str(pid)],
+                    [*kill_cmd, str(pid)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=15,
@@ -162,9 +188,11 @@ def build_frontend() -> bool:
     print("[构建] 前端生产包(约 1-2 分钟请勿关闭本窗口)...")
     env = os.environ.copy()
     env["NODE_OPTIONS"] = "--max-old-space-size=2048"
-    rc = subprocess.run(
-        ["cmd.exe", "/c", "npx next build"], cwd=str(WEBUI), env=env
-    ).returncode
+    # Windows 上 npx 是 npx.cmd,必须经 cmd.exe;POSIX 直接 exec npx 即可
+    npx_cmd = (
+        ["cmd.exe", "/c", "npx next build"] if IS_WINDOWS else ["npx", "next", "build"]
+    )
+    rc = subprocess.run(npx_cmd, cwd=str(WEBUI), env=env).returncode
     if rc != 0:
         print("[警告] 前端构建失败,将尝试用上一次的产物启动。")
         return False
@@ -172,10 +200,19 @@ def build_frontend() -> bool:
 
 
 def start_hidden(name: str, args: list[str], cwd: Path) -> subprocess.Popen:
-    """无窗口启动一个服务,stdout/stderr 追加到 logs/<name>.{log,err.log}。"""
+    """无窗口启动一个服务,stdout/stderr 追加到 logs/<name>.{log,err.log}。
+
+    POSIX 侧 start_new_session 让服务脱离终端会话:双击 .command 起的服务,
+    关掉 Terminal 窗口不会被 SIGHUP 连带杀掉(与 Windows 隐藏窗口语义对齐)。
+    """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     header = f"\n===== {stamp} 启动 {name} =====\n".encode()
+    platform_kwargs = (
+        {"creationflags": CREATE_NO_WINDOW}
+        if IS_WINDOWS
+        else {"start_new_session": True}
+    )
     with open(LOG_DIR / f"{name}.log", "ab") as out, open(
         LOG_DIR / f"{name}.err.log", "ab"
     ) as err:
@@ -187,7 +224,7 @@ def start_hidden(name: str, args: list[str], cwd: Path) -> subprocess.Popen:
             stdin=subprocess.DEVNULL,
             stdout=out,
             stderr=err,
-            creationflags=CREATE_NO_WINDOW,
+            **platform_kwargs,
         )
     print(f"[启动] {name} (隐藏窗口,日志 logs/{name}.log)")
     return proc
@@ -238,7 +275,7 @@ def print_summary(ok: bool) -> None:
     print("=" * 44)
     if not ok:
         print("  启动未完全成功:有服务没监听端口")
-        print(f"  请查看 {LOG_DIR} 下的 .err.log,或运行 停止演示.bat 后重试")
+        print(f"  请查看 {LOG_DIR} 下的 .err.log,或运行停止脚本后重试")
         print("=" * 44)
         return
     print("  全部服务已就绪")
@@ -259,7 +296,8 @@ def print_summary(ok: bool) -> None:
         if model:
             print(f"  当前模型:   {model}")
     print(f"  后台日志:   {LOG_DIR}")
-    print("  本窗口可以关闭,不影响后台;停止服务请运行 停止演示.bat")
+    stop_hint = "停止演示-Windows.bat" if IS_WINDOWS else "停止演示-Mac.command"
+    print(f"  本窗口可以关闭,不影响后台;停止服务请运行 {stop_hint}")
     print("=" * 44)
 
 
@@ -281,8 +319,12 @@ def main(argv: list[str] | None = None) -> int:
     if not PY.exists():
         print(f"[错误] 找不到 {PY}")
         print("       请先创建虚拟环境并装依赖:")
-        print("       py -3.12 -m venv .venv")
-        print("       .venv\\Scripts\\python.exe -m pip install -r requirements.txt")
+        if IS_WINDOWS:
+            print("       py -3.12 -m venv .venv")
+            print("       .venv\\Scripts\\python.exe -m pip install -r requirements.txt")
+        else:
+            print("       python3.12 -m venv .venv")
+            print("       .venv/bin/python -m pip install -r requirements.txt")
         return 1
 
     stop_old_services()
@@ -301,7 +343,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.skip_build:
         build_frontend()
 
-    start_hidden("webui", ["cmd.exe", "/c", "npx next start"], WEBUI)
+    start_hidden(
+        "webui",
+        ["cmd.exe", "/c", "npx next start"] if IS_WINDOWS else ["npx", "next", "start"],
+        WEBUI,
+    )
 
     print()
     print("等待服务就绪...")

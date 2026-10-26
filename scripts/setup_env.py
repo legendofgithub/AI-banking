@@ -12,7 +12,7 @@
     .venv/Scripts/python.exe scripts/setup_env.py --api-key sk-xxx --non-interactive
     .venv/Scripts/python.exe scripts/setup_env.py --force       # 重生成(旧会话全部失效)
 
-    `启动演示.bat` 在检测到 webui/.env.local 缺失时会自动调用本脚本。
+    `启动演示-Windows.bat` 在检测到 webui/.env.local 缺失时会自动调用本脚本。
 
     --template/--out 仅测试用(tests/test_env_template.py 指到临时目录),平时不传。
 

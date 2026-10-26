@@ -1,0 +1,7 @@
+# shell 类脚本必须保持 LF:macOS 的 bash 遇到 CRLF 行尾会报
+# `'/r: command not found`,一键启停脚本直接跑不起来。
+*.command text eol=lf
+*.sh text eol=lf
+
+# Windows 批处理规范上要求 CRLF(LF 在带标签/多行语法时可能出错)
+*.bat text eol=crlf
