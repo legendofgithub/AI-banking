@@ -2409,3 +2409,46 @@ def test_core_persona_loaded_into_state_thinking_and_card(tmp_path):
             assert view.get("persona") == "说话像江湖侠客,先结论后细节"
 
     run(scenario())
+# ------------------------------------------- "计划"关键词路由(2026-10-26 用户口径)
+
+def test_plan_word_rescues_chat_into_linkage(tmp_path):
+    """用户口径:消息出现"计划"即进联动。LLM 把"帮我做个计划"落进 chat 兜底时,
+    确定性改写送进 linkage,l_extract 抽槽不全 → ask_slot 追问;零动钱、零订单。"""
+    db = _mk_linkage_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "chat"}',   # 路由 LLM 没认出"计划" → chat 兜底
+            '{}',                    # 联动抽取空槽 → 缺 event_date/budget/actions
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "kw-plan"}}
+            r1 = await graph.ainvoke({"auth_user_id": 1, "messages": [
+                HumanMessage("帮我做个计划")]}, cfg)
+            payload = _interrupt_payload(r1)
+            # 不是闲聊播报,而是联动补槽反问(改写生效的可观察证据)
+            assert payload["type"] == "ask_slot"
+            assert "event_date" in payload["missing"]
+            assert _balance(db) == DEFAULT_BALANCE
+            assert _count(db, "transfer_orders") == 0
+
+    run(scenario())
+
+
+def test_plan_word_never_hijacks_transfer(tmp_path):
+    """硬闸①:LLM 已判转账的,"计划"二字不改写——"计划明天转账"仍走转账闸门。"""
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "transfer"}',
+            _slots_json(payee="张三", amount_yuan="500", when="now"),
+            "已向张三转账 500.00 元。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "kw-tr"}}
+            r1 = await graph.ainvoke({"auth_user_id": 1, "messages": [
+                HumanMessage("计划先给张三转500")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "confirm_transfer"
+            assert payload["order"]["amount_yuan"] == "500.00"
+
+    run(scenario())

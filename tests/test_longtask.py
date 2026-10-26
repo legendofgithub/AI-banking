@@ -238,3 +238,29 @@ def test_duplicate_active_rows_are_collapsed(tmp_path, monkeypatch):
     finally:
         conn.close()
     assert n == 1
+
+
+def test_plan_word_does_not_steal_longtask(tmp_path, monkeypatch):
+    """硬闸②(2026-10-26 "计划"关键词路由):"存钱计划"里的"计划"不得把它
+    劫去联动——存/攒字族的任务轨道改写在关键词改写之前,仍进 task_new。"""
+    bank_db = _mk_db(tmp_path)
+    tasks_db = _tasks_db(tmp_path, monkeypatch)
+
+    async def scenario():
+        async with _AgentSession(bank_db, tmp_path, [
+            '{"intent": "chat"}',   # 路由落 chat;存钱字族应改写为 task_new
+            "任务已建档,复盘提醒已排好。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "kw-lt"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("帮我做个存钱计划,30天存3000")]}, cfg)
+            # 任务建档成功 = 走的是任务轨道,不是联动(联动会 ask_slot 反问)
+            from agent import tasks as tasks_mod
+            task = tasks_mod.get_active_task(1)
+            assert task is not None, "存钱计划应进长程任务轨道建档"
+            assert task["target_yuan"] == "3000"
+            assert not any(t.interrupts for t in
+                           (await graph.aget_state(cfg)).tasks)
+
+    run(scenario())
