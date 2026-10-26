@@ -2452,6 +2452,8 @@ def test_plan_word_never_hijacks_transfer(tmp_path):
             assert payload["order"]["amount_yuan"] == "500.00"
 
     run(scenario())
+
+
 # ----------------------------- 联动动作容错规整(2026-10-26 迪士尼实测反馈)
 
 def test_normalize_linkage_actions_shapes():
@@ -2508,6 +2510,8 @@ def test_linkage_malformed_actions_no_reask(tmp_path):
             assert plan["budget_yuan"] == "10000.00"
 
     run(scenario())
+
+
 # ----------------------------- 缺槽反问选项化:选择题式补槽(2026-10-26)
 
 def test_linkage_clarify_offers_clickable_options(tmp_path):
@@ -2524,8 +2528,10 @@ def test_linkage_clarify_offers_clickable_options(tmp_path):
             json.dumps({"event_date": next_sat.isoformat()},   # 点了「这周六」
                        ensure_ascii=False),
             json.dumps({"actions": [{"what": "门票", "merchant": None,
+                                     "days_before": 2, "amount_yuan": "600"},
+                                    {"what": "快速通行", "merchant": None,
                                      "days_before": 2,
-                                     "amount_yuan": "600"}]},    # 点了「门票600元」
+                                     "amount_yuan": "1000"}]},  # 自由输入物料清单
                        ensure_ascii=False),
             "预算已预留,联动计划生效。",
         ]) as graph:
@@ -2543,20 +2549,20 @@ def test_linkage_clarify_offers_clickable_options(tmp_path):
             assert p2["options"] == ["明天", "后天", "这周六", "下周六"]
             assert "event_date" in p2["missing"]
 
-            # 第 3 轮:点击「这周六」
+            # 第 3 轮:点击「这周六」→ 动作槽**无选项**(物料千人千面,
+            # 硬编码模板是死选项,2026-10-26 用户反馈),卡片只有自由输入
             r3 = await graph.ainvoke(Command(resume="这周六"), cfg)
             p3 = _interrupt_payload(r3)
-            assert p3["options"] == ["鲜花300元,蛋糕200元", "礼物500元",
-                                     "门票600元"]
+            assert "options" not in p3
             assert "actions" in p3["missing"]
 
-            # 第 4 轮:点击「门票600元」→ 槽齐,直出闸门确认卡
-            r4 = await graph.ainvoke(Command(resume="门票600元"), cfg)
+            # 第 4 轮:自由输入物料清单 → 槽齐,直出闸门确认卡
+            r4 = await graph.ainvoke(Command(resume="门票600元,快速通行1000元"), cfg)
             p4 = _interrupt_payload(r4)
             assert p4["type"] == "confirm_linkage"
             plan = p4["plan"]
             assert plan["budget_yuan"] == "1000.00"
-            assert [a["what"] for a in plan["actions"]] == ["门票"]
+            assert [a["what"] for a in plan["actions"]] == ["门票", "快速通行"]
             assert plan["event"]["date"] == next_sat.isoformat()
 
     run(scenario())

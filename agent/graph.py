@@ -958,27 +958,27 @@ def _normalize_linkage_actions(acts: Any) -> list[dict] | None:
 
 def _linkage_slot_question(missing: list[str]) -> str:
     # 联动缺槽反问:预算 → 日期 → 动作(与任务书文案顺序一致);
-    # 动作示例兼顾生日(鲜花/蛋糕)与出行(门票/快速通行)两类场景
+    # 动作是千人千面的物料清单,引导自由列举,不给死选项(2026-10-26 用户反馈)
     if "budget_yuan" in missing:
         return "这次准备预留多少预算?请用数字说明(如:1000)。"
     if "event_date" in missing:
         return "是哪一天?请说明具体日期(如:10月1日 或 2026-10-01)。"
     if "actions" in missing:
-        return ("想准备些什么?请说明每样东西和金额"
-                "(如:鲜花 300、蛋糕 200,或:门票 600、快速通行 1000)。")
+        return ("想准备些什么?请直接列出每样东西和金额,"
+                "每样一句或用逗号隔开(如:鲜花 300、蛋糕 200;"
+                "或:门票 600、快速通行 1000)。")
     return "请补充事件日期、预算和要准备的东西。"
 
 
 # 反问选项(与 _bill_options 同款契约:点击即以该文本回话,经 LINKAGE_EXTRACT_SYS
 # 解析回槽位——措辞必须落在抽取器规则内:预算纯数字、日期相对说法靠【今天】
-# 锚点换算、动作列举"名+金额"每样一条)
+# 锚点换算)。预算/日期适合枚举;**动作不设选项**——物料清单千人千面,
+# 硬编码模板是"死选项"(用户聊过迪士尼却还弹鲜花/蛋糕),一律自由输入。
 def _linkage_slot_options(missing: list[str]) -> list[str]:
     if "budget_yuan" in missing:
         return ["预留1000元", "预留2000元", "预留5000元", "预留10000元"]
     if "event_date" in missing:
         return ["明天", "后天", "这周六", "下周六"]
-    if "actions" in missing:
-        return ["鲜花300元,蛋糕200元", "礼物500元", "门票600元"]
     return []
 
 
