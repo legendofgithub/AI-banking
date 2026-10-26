@@ -52,6 +52,8 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
                                                     与模型是否推理无关)
     data-wealth-confirmation    理财确认卡片(kind=subscribe|redeem;order=产品/金额/费率/锁定期/风险/账户)
     data-wealth-entry           理财中心入口卡(level/在售产品含 purchasable 标注/目的选项)
+    data-bill-report            账单报告卡(年度/月度:KPI 总览 + 逐月走势 + 分类占比 + 商户 Top)
+    data-wealth-products        可购产品列表卡(w_query 查询结果;含逐行申购入口,回话走既有闸门链路)
     data-card-confirmation      卡片确认卡片(kind=apply|limits|status;card=card_id/尾号/类型/当前值/目标值)
     data-contact-choices        同名联系人选项(卡片式消歧,而非开放反问)
     data-ask-slot               缺槽反问(附缺失字段清单)
@@ -585,6 +587,15 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                         if p.get("type") == "text"), 0)
             msgs[-1]["parts"].insert(pos, {"type": "data-analysis-plan",
                                            "data": acard})
+        # 账单报告卡(年度/月度,2026-10-26):bill_view 同样由 router 每轮置 None,
+        # 非 None 即"最后一轮是报告轮"。刷新后把卡挂回(与 analysis_view 同款),
+        # 否则演示时刷新一下就只剩一句播报、报告卡凭空消失。
+        bview = (values or {}).get("bill_view")
+        if isinstance(bview, dict) and msgs and msgs[-1]["role"] == "assistant":
+            pos = next((i for i, p in enumerate(msgs[-1]["parts"])
+                        if p.get("type") == "text"), 0)
+            msgs[-1]["parts"].insert(pos, {"type": "data-bill-report",
+                                           "data": bview})
         return {"isReadonly": False, "visibility": "private",
                 "userId": None, "messages": msgs}
 
@@ -1674,6 +1685,20 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                                     # 决策按钮以普通消息回话,不占 interrupt
                                     yield _frame({"type": "data-subscription-precheck",
                                                   "data": update["precheck_view"]})
+                                elif node == "b_run" and isinstance(update, dict) \
+                                        and update.get("bill_view"):
+                                    # 年度/月度账单报告卡:报告数据随 b_run 更新
+                                    # 直接下发(与订阅清单同款,不占 interrupt;
+                                    # 只读,无确认按钮)
+                                    yield _frame({"type": "data-bill-report",
+                                                  "data": update["bill_view"]})
+                                elif node == "w_query" and isinstance(update, dict) \
+                                        and update.get("wealth_view"):
+                                    # 可购产品列表卡:问"现在有哪些产品"时随 w_query
+                                    # 更新直接下发(与订阅清单同款,不占 interrupt;
+                                    # 申购按钮以普通消息回话走既有受闸门链路)
+                                    yield _frame({"type": "data-wealth-products",
+                                                  "data": update["wealth_view"]})
                                 elif node in ("a_exec", "a_reflect") \
                                         and isinstance(update, dict) \
                                         and update.get("analysis_view"):

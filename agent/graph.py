@@ -412,6 +412,8 @@ EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对
 - 用户要求"明天/下周三/几点"等定时转时 when="scheduled",scheduled_at 结合
   上下文【今天】换算成具体时刻(如今天 2026-10-25,"明天上午9点"→"2026-10-26T09:00:00");
   立即转 when="now";
+- 用户完全没提及时间(没说"立即/现在",也没说定时)时 when 填 null,由系统反问确认,
+  不要替用户默认"now";
 - 仅当上下文没有【今天】锚点时,相对定时日期才允许填 null(绝不凭空猜日期)。"""
 
 SB_EXTRACT_SYS = """你是 AA 收款信息抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
@@ -457,13 +459,15 @@ LINKAGE_EXTRACT_SYS = """你是跨场景联动计划抽取器(生日/纪念日�
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
 
 BILL_EXTRACT_SYS = """你是账单分析抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
-{"ask": "monthly_report|category_summary|top_merchants|anomaly_scan|null",
- "period": "时间范围的原文短语,如'上个月'/'最近三个月'/'2026-08'|null",
+{"ask": "monthly_report|annual_report|category_summary|top_merchants|anomaly_scan|null",
+ "period": "时间范围的原文短语,如'上个月'/'最近三个月'/'2026-08'/'今年'|null",
  "category": "用户点名的关注分类|null"}
 
 规则:
-- 月报/月度/收支/结余总结 → monthly_report;分类/类别/结构占比 → category_summary;
+- 年度/年报/全年/整年/今年整体/一年账单 → annual_report;月报/月度/本月/上月/收支/结余总结 → monthly_report;
+  分类/类别/结构占比 → category_summary;
   消费排行/花得最多/Top商户 → top_merchants;异常/可疑/重复扣款/盗刷 → anomaly_scan;
+- "月度/年度账单报告"这类同时提到月度和年度的说法 → annual_report(年度报告已含逐月走势);
 - period 原样摘录用户说法即可,不要换算日期(具体起止日期由系统确定性计算);
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
 
@@ -477,6 +481,7 @@ WEALTH_EXTRACT_SYS = """你是理财业务抽取器。结合【已有槽位】�
 规则:
 - 推荐/有什么产品/看看理财/对比产品/查持仓 → query;风险测评/做测评 → assess;
   买/申购/购入/存入 → subscribe;赎回/取出/变现 → redeem;
+- 用户点产品列表卡「申购」按钮发出的「申购 XX」→ subscribe,keyword=XX;
 - 中文数字换算成阿拉伯数字("五千"→"5000");金额只允许纯数字(可带小数点);
 - assess_answer 只在系统刚问了测评题、用户回复了选项分值时填 1-5,其余填 null;
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
@@ -636,6 +641,17 @@ def _fallback_announcement(notice: dict | None) -> str:
         oid = (n.get("order") or {}).get("id")
         if oid:
             return f"转账已完成(订单号 {oid})。"
+    if kind == "wealth_products" and n.get("need_assess"):
+        return ("你还没有风险测评记录,当前仅可申购 R1 低风险产品;"
+                "对我说「做风险测评」,五道题后按等级解锁全部产品。")
+    if kind == "bill_report":
+        ask = str(n.get("ask") or "")
+        if ask == "annual_report":
+            return ("年度账单报告已生成:收支总览、逐月走势、支出分类与"
+                    "消费 Top 商户都在下方卡片里。")
+        if ask == "monthly_report":
+            return ("月度账单报告已生成:收支总览、分类占比与消费 Top 商户"
+                    "都在下方卡片里。")
     return _FALLBACK_TEXT.get(kind, "处理完成。")
 
 
@@ -836,6 +852,8 @@ def _slot_question(missing: list[str]) -> str:
         return "请问转多少钱?请用数字说明(如:500 或 99.9)。"
     if "payee" in missing:
         return "请问转给谁?请提供收款人姓名或手机号。"
+    if "when" in missing:
+        return "这笔转账是立即转,还是过几天/到某个时间再转?立即转请回复「立即」,定时转请说明时间(如:明天早上9点)。"
     if "scheduled_at" in missing:
         return "请问具体什么时间转?请说明日期和时刻(如:明天早上9点)。"
     return "信息还差一点,请补充收款人和金额。"
@@ -1131,6 +1149,16 @@ def _is_due_message(text: str) -> bool:
 # "帮我准备林悦的生日,预算1000,..." 必须继续走 l_extract)
 _PLAN_TRIGGER_WORDS = ("规划", "钱不够", "砍订阅", "取消订阅", "省钱")
 
+# 用户口径(2026-10-26):「理财操作」这类理财入口话术被 LLM 误判成 linkage,
+# 进了"事件日期"反问循环(实测:问"是哪一天",3 轮后 clarify_gaveup 放弃,
+# 全程没碰到理财)。确定性改写补上,口径与 ROUTER_SYS 自洽(泛"计划"请求
+# 须"不含理财语境"才归 linkage)。三道硬闸,防止劫持别的链路:
+# ① 只从 chat/linkage/plan 改写——LLM 已判转账/AA/联系人/订阅/账单/卡片的
+#    一律尊重原判("计划明天转账500"绝不能被改去理财);
+# ② (到期提醒)/(任务提醒) 系统前缀不劫持(提醒文本可能提到"理财专户");
+# ③ 强词只收无歧义项,"收益/资产/基金"这类账单/闲聊语境也常用的词不进来。
+_WEALTH_ROUTE_WORDS = ("理财", "风险测评", "申购", "赎回", "持仓")
+
 
 def _wants_plan(text: str) -> bool:
     """确定性判定"本轮是否要生日预算规划"(router 用,不靠 LLM 二次判断)。"""
@@ -1188,6 +1216,17 @@ def _wants_task_wake(text: str) -> bool:
 def _wants_analysis(text: str) -> bool:
     """是否交给 Agent Core 做只读分析编排(确定性,不新增 LLM 调用)。"""
     return any(w in str(text or "") for w in _ANALYSIS_TRIGGER_WORDS)
+
+
+# 年度账单报告触发词(2026-10-26 演示口径):"月度/年度账单报告"这类入口话术
+# 要一次出结构化报告卡,不依赖 LLM 抽取稳定;年报请求也不该被 Core 分析
+# (analyze_bill 只认月报口径)接走。纯确定性子串判定。
+_ANNUAL_REPORT_WORDS = ("年度报告", "年度账单", "年报", "全年", "整年", "一年账单")
+
+
+def _wants_annual_report(text: str) -> bool:
+    """用户要的是年度账单报告(确定性判定,router 与 b_extract 共用)。"""
+    return any(w in str(text or "") for w in _ANNUAL_REPORT_WORDS)
 
 
 def _repair_bill_args(args: dict) -> dict | None:
@@ -1398,12 +1437,13 @@ def parse_period(phrase: Any, today: date | None = None) -> dict | None:
     def _mk(start: date, end: date) -> dict:
         return {"month": f"{end.year:04d}-{end.month:02d}",
                 "start": start.isoformat(), "end": end.isoformat(),
-                "days": (end - start).days + 1}
+                "days": (end - start).days + 1, "year": end.year}
 
     def _mk_month(year: int, month: int) -> dict:
         s, e = _month_bounds(year, month)
         return {"month": f"{year:04d}-{month:02d}", "start": s, "end": e,
-                "days": (date.fromisoformat(e) - date.fromisoformat(s)).days + 1}
+                "days": (date.fromisoformat(e) - date.fromisoformat(s)).days + 1,
+                "year": year}
 
     # 1) 显式月份 'YYYY-MM'
     m = re.search(r"(20\d{2})[-/年.](\d{1,2})", t)
@@ -1428,14 +1468,30 @@ def parse_period(phrase: Any, today: date | None = None) -> dict | None:
         if n and 1 <= n <= 24:
             start = _shift_month(ref, -(n - 1))
             return _mk(start, ref)
-    # 4) 最近/近/过去 N 天
+    # 5) 最近/近/过去 N 天
     m = re.search(r"(?:最近|近|过去)\s*([0-9一二两三四五六七八九十]+)\s*天", t)
     if m:
         n = int(m.group(1)) if m.group(1).isdigit() else _cn_to_int(m.group(1))
         if n and 1 <= n <= 365:
             return _mk(ref - timedelta(days=n - 1), ref)
-    # 5) 今年/本年
-    if "今年" in t or "本年" in t:
+    # 6) 显式年份:2025年 / 2025年度(整年;当年则截至今天)
+    m = re.search(r"(20\d{2})\s*年(?:度)?", t)
+    if m:
+        y = int(m.group(1))
+        if y == ref.year:
+            return _mk(date(y, 1, 1), ref)
+        if y < ref.year:
+            return _mk(date(y, 1, 1), date(y, 12, 31))
+        return None
+    # 7) 去年/前年(整年)
+    if "去年" in t or "上一年" in t:
+        y = ref.year - 1
+        return _mk(date(y, 1, 1), date(y, 12, 31))
+    if "前年" in t:
+        y = ref.year - 2
+        return _mk(date(y, 1, 1), date(y, 12, 31))
+    # 8) 今年/本年/全年/年度(截至今天;年度报告的缺省口径)
+    if any(w in t for w in ("今年", "本年", "全年", "整年", "年度", "本年度")):
         return _mk(date(ref.year, 1, 1), ref)
     return None
 
@@ -1451,6 +1507,63 @@ _LEVEL_MEANING = {
     "C4": "成长型:可接受较大波动,博取较高收益",
     "C5": "进取型:追求高收益,能承受较大亏损",
 }
+
+# ---------------------------------------------------------------- 理财:目的→个性化推荐
+# 用户口径(2026-10-26):进理财先了解"这次想达成什么目标",再按目的+风险等级
+# 个性化推荐(而不是甩一张全部产品让用户自己挑)。目的说法是入口卡选项与
+# 自然语言的并集,确定性子串匹配(零 LLM):命中即把泛入口视作 query(推荐),
+# w_query 再按目的偏好的产品类型排序。与长期记忆的偏好提炼(_PREF_* 正则)
+# 分工不同:这里管"本次目的",那里管"长期口味"。
+_WEALTH_PURPOSES = [
+    # (key, 展示名, 触发词, 目的偏好的产品类型——推荐排序优先级)
+    ("stable", "稳健保本",
+     ("稳健", "保本", "不想亏", "怕亏", "低风险", "保守"),
+     ("deposit", "bond", "money_fund")),
+    ("flexible", "灵活闲钱",
+     ("灵活", "随用随取", "随存随取", "闲钱", "活钱", "短期要用"),
+     ("money_fund", "deposit")),
+    ("growth", "长期增值",
+     ("长期", "增值", "养老", "教育金", "子女教育"),
+     ("mixed", "gold", "bond")),
+    ("aggressive", "追求高收益",
+     ("高收益", "进取", "激进", "收益最大化", "博收益"),
+     ("mixed", "gold")),
+]
+
+# 理财中心入口卡的目的选项:点击即以该文本回话,措辞落在 _WEALTH_PURPOSES
+# 触发词内(确定性命中);测评入口交给 WEALTH_EXTRACT_SYS 的 assess 规则。
+_WEALTH_ENTRY_OPTIONS = (
+    "稳健保本,不想亏本金",
+    "闲钱要灵活,随用随取",
+    "想要长期增值",
+    "追求高收益,能承担风险",
+)
+
+
+def _detect_wealth_purpose(text: str) -> str:
+    """从用户话里确定性识别理财目的;识别不出返回空串。纯函数,可单测。"""
+    t = str(text or "")
+    for key, _label, words, _prefs in _WEALTH_PURPOSES:
+        if any(w in t for w in words):
+            return key
+    return ""
+
+
+def _risk_int(level: Any) -> int:
+    """'R2' → 2;解析失败按最高风险 5 处理(展示为不可购,宁严勿松)。"""
+    m = re.match(r"R(\d)", str(level or "").strip().upper())
+    return int(m.group(1)) if m else 5
+
+
+def _product_view(p: dict, max_risk: int) -> dict:
+    """产品行视图(理财中心入口卡/可购产品列表卡共用):purchasable 按
+    风险等级逐行算好——不因工具端已过滤就硬编码 True,守卫口径单一。"""
+    return {"id": p.get("id"), "code": p.get("code"), "name": p.get("name"),
+            "p_type": p.get("p_type"), "risk_level": p.get("risk_level"),
+            "expected_return_pct": p.get("expected_return_pct"),
+            "min_subscribe_yuan": p.get("min_subscribe_yuan"),
+            "lock_days": p.get("lock_days"), "intro": p.get("intro"),
+            "purchasable": _risk_int(p.get("risk_level")) <= max_risk}
 
 # 五道测评题(题目与选项固定,答案 1-5;题目名与 bank_core.seed 的
 # risk_profiles.answers_json 键一致,方便与种子数据对账)
@@ -1502,19 +1615,49 @@ def _card_tail(card_no_masked: Any) -> str:
     return digits[-1] if digits else ""
 
 
-def _resolve_card(hint: Any, cards: list[dict]) -> int | None:
-    """从卡号线索(尾号/类型/序号)在 list_cards 结果里确定性定位 card_id。
+def _card_visible(card_no_masked: Any) -> tuple[str, str]:
+    """'6222 **** **** 8821' → ('6222', '8821'):卡号可见的头/尾两段数字。
 
-    优先级:尾号(≥3 位数字)> 卡类型 > 序号(第 N 张/N)。命中不唯一返回 None
-    (交回 k_clarify 反问);cards 为空同样 None(→ notice no_card 由调用层判)。
+    库里只存掩码形态(无完整卡号);只有一段可见时头段置空,匹配只看尾段。
+    """
+    groups = re.findall(r"\d+", str(card_no_masked or ""))
+    if not groups:
+        return "", ""
+    if len(groups) == 1:
+        return "", groups[-1]
+    return groups[0], groups[-1]
+
+
+def _card_hint_match(d: str, card_no_masked: Any) -> bool:
+    """数字线索 d 是否指向这张卡(确定性,不猜掩码外的任何位):
+    - 尾号:d 是尾段的后缀(8821/821,≥3 位由调用方把关);
+    - 可见两段连打:d == 头+尾(用户照卡片念出 '62228821');
+    - 完整卡号形态:d ≥ 12 位且头/尾两段都对得上(库无全号,只校验可见段)。
+    跨掩码边界的拼接(如 '28821')不匹配——中间位是掩码,验证不了。
+    """
+    head, tail = _card_visible(card_no_masked)
+    if not tail:
+        return False
+    return (tail.endswith(d)
+            or d == head + tail
+            or (bool(head) and len(d) >= 12
+                and d.startswith(head) and d.endswith(tail)))
+
+
+def _resolve_card(hint: Any, cards: list[dict]) -> int | None:
+    """从卡号线索(卡号/尾号/类型/序号)在 list_cards 结果里确定性定位 card_id。
+
+    优先级:卡号数字(尾号 ≥3 位/可见两段连打 62228821/完整卡号形态)>
+    卡类型 > 序号(第 N 张/N)。命中不唯一返回 None(交回 k_clarify 反问);
+    cards 为空同样 None(→ notice no_card 由调用层判)。
     """
     t = str(hint or "").strip()
     if not t or not cards:
         return None
-    for d in re.findall(r"\d+", t):  # 1) 尾号
+    for d in re.findall(r"\d+", t):  # 1) 卡号数字
         if len(d) >= 3:
             m = [c for c in cards
-                 if str(c.get("card_no_masked", "")).endswith(d)]
+                 if _card_hint_match(d, c.get("card_no_masked"))]
             if len(m) == 1:
                 return int(m[0]["id"])
     if "信用" in t or "credit" in t.lower():  # 2) 类型
@@ -1539,9 +1682,10 @@ def _resolve_card(hint: Any, cards: list[dict]) -> int | None:
 
 def _bill_slot_question(missing: list[str]) -> str:
     if "ask" in missing:
-        return "想看哪种账单报告?可以说:月报 / 分类统计 / 消费Top商户 / 异常检测。"
+        return ("想看哪种账单报告?可以说:年度报告 / 月报 / 分类统计 / "
+                "消费Top商户 / 异常检测。")
     if "period" in missing:
-        return "想看哪个时间范围?如:上个月 / 最近三个月 / 2026-08。"
+        return "想看哪个时间范围?如:上个月 / 最近三个月 / 2026-08 / 今年。"
     return "想看哪种账单报告、哪个时间范围?"
 
 
@@ -1549,11 +1693,111 @@ def _bill_slot_question(missing: list[str]) -> str:
 # 文案措辞必须落在各抽取器的判定规则内,改动需同步核对)
 def _bill_options(missing: list[str]) -> list[str]:
     if "ask" in missing:
-        return ["看月度收支月报", "看消费分类占比", "看消费Top商户",
-                "查异常可疑交易"]
+        return ["看年度账单报告", "看月度收支月报", "看消费分类占比",
+                "看消费Top商户", "查异常可疑交易"]
     if "period" in missing:
         return ["上个月", "这个月", "最近三个月"]
     return []
+
+
+# ---------------------------------------------------------------- 账单报告卡视图(纯函数)
+
+def _bill_highlights_annual(r: dict) -> list[str]:
+    """年报要点行:仅对工具返回的原始数字做搬运,不推算、不评价。"""
+    out: list[str] = []
+    mm = r.get("max_month") or {}
+    if mm.get("month"):
+        out.append(f"支出最高月 {mm['month']}(¥{mm.get('expense_yuan')})")
+    if r.get("avg_monthly_expense_yuan"):
+        out.append(f"月均支出 ¥{r['avg_monthly_expense_yuan']}")
+    cats = r.get("top_categories") or []
+    if cats:
+        out.append(f"最大开销 {cats[0].get('category')}"
+                   f"(占 {cats[0].get('pct')}%)")
+    return out
+
+
+def _bill_month_view(items: Any) -> list[dict]:
+    """逐月走势视图(显式键 = 前端 BillReportMonth 契约,数值原样透传)。"""
+    out = []
+    for m in items if isinstance(items, list) else []:
+        if isinstance(m, dict):
+            out.append({"month": m.get("month"),
+                        "income_yuan": m.get("income_yuan"),
+                        "expense_yuan": m.get("expense_yuan"),
+                        "net_yuan": m.get("net_yuan")})
+    return out
+
+
+def _bill_category_view(items: Any) -> list[dict]:
+    """分类占比视图(显式键 = 前端 BillReportCategory 契约)。"""
+    out = []
+    for c in items if isinstance(items, list) else []:
+        if isinstance(c, dict):
+            out.append({"category": c.get("category"),
+                        "count": c.get("count"),
+                        "amount_yuan": c.get("amount_yuan"),
+                        "pct": c.get("pct")})
+    return out
+
+
+def _bill_merchant_view(items: Any) -> list[dict]:
+    """商户 Top 视图(显式键 = 前端 BillReportMerchant 契约)。"""
+    out = []
+    for m in items if isinstance(items, list) else []:
+        if isinstance(m, dict):
+            out.append({"merchant": m.get("merchant"),
+                        "count": m.get("count"),
+                        "amount_yuan": m.get("amount_yuan")})
+    return out
+
+
+def _bill_report_view(ask: str, result: Any, *, merchants: Any = None,
+                      period: dict | None = None) -> dict:
+    """账单报告卡视图(api 在 b_run 节点更新时下发 data-bill-report)。
+
+    纯函数:所有金额/占比都原样取自工具返回,这里只做键名归并与标题拼接——
+    卡片上出现的每个数字都能在银行工具结果里找到出处(与播报同一铁律)。
+    年报自带商户 Top;月报工具不含商户维度,由 b_run 补一次 top_merchants。
+    """
+    r = result if isinstance(result, dict) else {}
+    p = period or {}
+    if ask == "annual_report":
+        return {
+            "kind": "annual",
+            "title": f"年度账单报告 {r.get('year') or ''}".strip(),
+            "period_text": (f"{r.get('start') or ''} ~ {r.get('end') or ''}"
+                            f" · 覆盖 {r.get('months_covered') or 0} 个月"),
+            "income_yuan": r.get("income_yuan"),
+            "expense_yuan": r.get("expense_yuan"),
+            "net_yuan": r.get("net_yuan"),
+            "savings_rate_pct": r.get("savings_rate_pct"),
+            "compare_label": "同比",
+            "compare_income_pct": r.get("yoy_income_pct"),
+            "compare_expense_pct": r.get("yoy_expense_pct"),
+            "monthly": _bill_month_view(r.get("monthly")),
+            "categories": _bill_category_view(r.get("top_categories")),
+            "merchants": _bill_merchant_view(r.get("top_merchants")),
+            "highlights": _bill_highlights_annual(r),
+        }
+    m = str(r.get("month") or p.get("month") or "")
+    period_text = " ~ ".join(x for x in (p.get("start"), p.get("end")) if x)
+    return {
+        "kind": "monthly",
+        "title": f"月度账单报告 {m}".strip(),
+        "period_text": period_text,
+        "income_yuan": r.get("income_yuan"),
+        "expense_yuan": r.get("expense_yuan"),
+        "net_yuan": r.get("net_yuan"),
+        "savings_rate_pct": r.get("savings_rate_pct"),
+        "compare_label": "环比",
+        "compare_income_pct": r.get("mom_income_pct"),
+        "compare_expense_pct": r.get("mom_expense_pct"),
+        "monthly": [],
+        "categories": _bill_category_view(r.get("top_categories")),
+        "merchants": _bill_merchant_view(merchants),
+        "highlights": [],
+    }
 
 
 def _wealth_slot_question(missing: list[str]) -> str:
@@ -2091,6 +2335,13 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             elif _wants_longtask(latest):
                 intent = ("task_new" if tasks_mod.get_active_task(uid_now) is None
                           else "task_review")
+        # 账单报告确定性兜底(2026-10-26 演示口径):「月度/年度账单报告」这类
+        # 入口话术只在 LLM 落进 chat 时补一次;含"计划"的句子让给下面既有联动
+        # 口径(用户的"计划"优先约定不变)。
+        if intent == "chat" and "计划" not in latest \
+                and any(w in latest for w in ("账单", "月报", "年报",
+                                              "年度报告", "月度报告")):
+            intent = "bill_analysis"
         # 用户口径(2026-10-26):消息里出现"计划"就进联动。LLM 路由对"帮我做个
         # 计划/我要个生日计划"这类泛说法偶尔认不出、落进 chat 兜底,这里确定性
         # 改写补上。三道硬闸,防止高频词"计划"劫持别的链路:
@@ -2115,6 +2366,13 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                 strong = any(w in latest for w in _PLAN_TRIGGER_WORDS)
                 if strong or not _is_due_message(latest):
                     intent = "plan"
+        # 强理财词确定性改道 wealth(2026-10-26 实测误判修复,见 _WEALTH_ROUTE_WORDS):
+        # 放在"计划→linkage"与"linkage→plan"两段改写之后——"帮我做个理财计划"
+        # 这类双信号消息按 ROUTER_SYS 口径归理财,不归联动。
+        if intent in ("chat", "linkage", "plan") \
+                and not latest.startswith(("(到期提醒)", "(任务提醒)")) \
+                and any(w in latest for w in _WEALTH_ROUTE_WORDS):
+            intent = "wealth"
         # 新一轮对话:清掉上一轮的控制态(notice/order/decision 会误导下游路由),
         # 但保留 slots/split/contact_draft/linkage/bill_slots/wealth/card 等业务记忆,
         # 支持"改成1000""换成上个月"这类跨轮补充。plan_slots 同样跨轮保留。
@@ -2126,6 +2384,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                 "plan_card": None, "plan_stage": "", "plan_edit_budget": None,
                 "plan_edit_round": 0, "plan_cut": None, "plan_force_no_cut": False,
                 "bill_missing": [], "wealth_missing": [], "card_missing": [],
+                # 账单报告卡(2026-10-26):每轮清空,避免上一轮的报告卡
+                # 在刷新恢复时被当成"本轮结果"挂回(与 analysis_view 同口径)
+                "bill_view": None,
                 # Agent Core 每轮从零开始(Plan 不可跨轮复用,避免用旧计划执行写操作)
                 "agent_plan": None, "analysis_view": None, "analysis_skills": [],
                 "clarify_round": 0, "gate_round": 0, "pick_round": 0}
@@ -2142,7 +2403,6 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         for key in ("payee", "payee_phone", "amount_yuan", "when", "scheduled_at", "memo"):
             if parsed.get(key) is not None:
                 slots[key] = parsed[key]
-        slots.setdefault("when", "now")
 
         # 确定性校验(铁律 1:金额合法性由代码判)
         missing: list[str] = []
@@ -2150,11 +2410,20 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             missing.append("payee")
         if _cents(slots.get("amount_yuan")) is None:
             missing.append("amount_yuan")
+        # 转账时机不再默认"now":用户没说立即还是定时,必须反问确认,
+        # 避免"我以为它知道我要过两天再转"的错配建单。
+        if slots.get("when") not in ("now", "scheduled"):
+            missing.append("when")
         if slots.get("when") == "scheduled" and not slots.get("scheduled_at"):
             missing.append("scheduled_at")
         return {"slots": slots, "missing": missing}
 
-    t_clarify = _make_clarify_node("missing", _slot_question)
+    def _t_slot_options(missing: list[str]) -> list[str]:
+        # 枚举型反问:时机未定 → 点选「立即转/定时转」免打字;点「定时转」
+        # 后 scheduled_at 仍缺,下一轮由 _slot_question 追问具体时刻。
+        return ["立即转", "定时转"] if "when" in missing else []
+
+    t_clarify = _make_clarify_node("missing", _slot_question, _t_slot_options)
     async def t_resolve(state: AgentState) -> dict:
         slots = state.get("slots") or {}
         name = slots.get("payee")
@@ -2759,12 +3028,31 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             if parsed.get(key) is not None:
                 draft[key] = parsed[key]
 
+        # 确定性口径兜底(2026-10-26 演示口径):「月度/年度账单报告」这类入口
+        # 话术必须一次出报告卡,不能因为 LLM 抽取抖动就落进 chat 或反复反问。
+        # 强词直接定 ask;报告类没给时间范围时给确定性缺省(年报=今年至今,
+        # 月报=上一个完整月),不反问——先把报告给用户看,精度问题后置。
+        latest = _latest_human(state)
+        if _wants_annual_report(latest):
+            draft["ask"] = "annual_report"
+        elif any(w in latest for w in ("月度账单", "月度报告", "账单报告")) \
+                and not any(w in latest for w in ("分类", "占比", "商户",
+                                                  "排行", "异常")):
+            draft["ask"] = "monthly_report"
+
         # 确定性校验(铁律 1):ask 枚举与日期解析全由代码判,解析失败 → 缺槽
         missing: list[str] = []
-        if draft.get("ask") not in ("monthly_report", "category_summary",
-                                    "top_merchants", "anomaly_scan"):
+        if draft.get("ask") not in ("monthly_report", "annual_report",
+                                    "category_summary", "top_merchants",
+                                    "anomaly_scan"):
             missing.append("ask")
         parsed_period = parse_period(draft.get("period"))
+        if parsed_period is None and draft.get("ask") in ("annual_report",
+                                                          "monthly_report"):
+            fill = "今年" if draft["ask"] == "annual_report" else "上个月"
+            parsed_period = parse_period(fill)
+            if not draft.get("period"):
+                draft["period"] = fill
         if parsed_period is None:
             missing.append("period")
             draft.pop("period_parsed", None)
@@ -2782,6 +3070,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         # 按 ask 分派到对应只读工具;top_n 取 5(1-3 句播报装不下 10 家)
         if ask == "monthly_report":
             name, args = "monthly_report", {"month": p.get("month")}
+        elif ask == "annual_report":
+            name, args = "annual_report", {"year": int(p.get("year")
+                                                      or date.today().year),
+                                           "as_of": p.get("end") or ""}
         elif ask == "category_summary":
             name, args = "category_summary", {"start": p.get("start"),
                                               "end": p.get("end")}
@@ -2796,9 +3088,25 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         if err:
             return {"bank_calls": calls,
                     "notice": {"kind": "bank_error", "where": name, "error": err}}
-        return {"bank_calls": calls,
-                "notice": {"kind": "bill_report", "ask": ask,
-                           "period": draft.get("period"), "result": res}}
+        # 报告类:组装卡片视图(api 在本节点更新时下发 data-bill-report)。
+        # 月报工具不含商户维度,补一次 top_merchants;失败只是少一个次要模块,
+        # 不阻断主报告(卡片可见性优先,且金额仍是工具原值)。
+        merchants = None
+        if ask == "monthly_report":
+            merchants, mrec = await guarded_mod.guarded_call(
+                tools, "top_merchants",
+                {"start": p.get("start"), "end": p.get("end"), "top_n": 6})
+            calls.append(mrec)
+            if _has_error(merchants):
+                merchants = None
+        view = _bill_report_view(ask, res, merchants=merchants, period=p) \
+            if ask in ("monthly_report", "annual_report") else None
+        update: dict = {"bank_calls": calls,
+                        "notice": {"kind": "bill_report", "ask": ask,
+                                   "period": draft.get("period"), "result": res}}
+        if view:
+            update["bill_view"] = view
+        return update
 
     async def b_report(state: AgentState) -> dict:
         return await _announce(state)
@@ -2828,11 +3136,23 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             draft["amount_yuan"] = str(parsed["amount_yuan"])
         # 换了业务动作:清掉上一动作的定位/闸门阶段态,防跨动作串槽
         if parsed.get("action") and parsed["action"] != prev_action:
-            for k in ("kind", "product", "order", "product_options"):
+            for k in ("kind", "product", "order", "product_options", "entry",
+                      "purpose"):
                 draft.pop(k, None)
         action = draft.get("action")
         if action != "assess":
             draft.pop("assess_answers", None)
+        # 理财目的确定性捕获(2026-10-26):入口卡的目的选项/自然语言说法映射到
+        # purpose;泛入口(LLM 没抽出动作)命中目的即视作 query(按目的推荐)。
+        # 已有显式动作(申购/赎回/测评)不受目的词干扰——"申购稳健纯债基金"里的
+        # "稳健"只是产品描述,不能把申购改道成推荐。
+        purpose = _detect_wealth_purpose(_latest_human(state))
+        if purpose and action in (None, "query"):
+            draft["purpose"] = purpose
+            if action is None:
+                action = draft["action"] = "query"
+        if action:
+            draft.pop("entry", None)  # 动作已定,入口卡数据不再需要
 
         # 确定性校验:query 可裸跑(=推荐);subscribe 需产品定位+金额;redeem 需持仓定位
         missing: list[str] = []
@@ -2875,6 +3195,76 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
     w_clarify = _make_clarify_node("wealth_missing", _wealth_slot_question,
                                _wealth_options)
 
+    # ---------------------------------------------------------------- 理财中心入口
+    # 用户口径(2026-10-26):「理财操作」这类泛入口不再反问"想办哪类业务",
+    # 直接进理财中心——风险等级 + 在售产品清单(标注可购/受限)+ 目的选项,
+    # 答了目的再按目的+等级个性化推荐(见 _WEALTH_PURPOSES)。
+    # 拆成两个节点(工具在 w_entry、interrupt 在 w_ask):interrupt 会丢弃节点
+    # 的半程执行、resume 后整节点重跑,工具若与 interrupt 同节点就会被调两次、
+    # 审计日志记双份(与闸门链路同款分工:建单在 w_subscribe、确认在 w_gate)。
+
+    async def w_entry(state: AgentState) -> dict:
+        """拉取风险等级与全量在售产品,组装理财中心入口卡数据(不 interrupt)。"""
+        draft = state.get("wealth") or {}
+        calls: list[dict] = []
+        profile = await tools.call("get_risk_profile")
+        calls.append(_jr("get_risk_profile", {}, profile))
+        err = _has_error(profile)
+        if err:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error", "where": "get_risk_profile",
+                               "error": err}}
+        # 踩坑同 w_query:无测评时 MCP 返回 None → 适配器零内容块 → unwrap 短路
+        # 成 [],非 dict 一律按"未测评"处理(可购上限 R1,与适当性闸门同口径)
+        level = str(profile.get("level")) if isinstance(profile, dict) \
+            and profile.get("level") else ""
+        max_risk = _LEVEL_MAX_RISK.get(level, 1)
+        res = await tools.call("list_wealth_products")
+        calls.append(_jr("list_wealth_products", {}, res))
+        err = _has_error(res)
+        if err or not isinstance(res, list):
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error",
+                               "where": "list_wealth_products",
+                               "error": err or "产品查询失败"}}
+        products = [_product_view(p, max_risk) for p in res]
+        entry = {"level": level or None,
+                 "level_meaning": _LEVEL_MEANING.get(level, ""),
+                 "max_risk_level": max_risk,
+                 "assess_required": not level,
+                 "products": products}
+        return {"bank_calls": calls, "wealth": {**draft, "entry": entry}}
+
+    async def w_ask(state: AgentState) -> dict:
+        """理财中心反问:这次理财的目的是什么(选项即个性化推荐入口)。"""
+        round_no = int(state.get("clarify_round") or 0)
+        if round_no >= MAX_CLARIFY_ROUNDS:  # 反问封顶:与 clarify 工厂同语义
+            return {"notice": {"kind": "clarify_gaveup", "asked": round_no}}
+        entry = (state.get("wealth") or {}).get("entry") or {}
+        level = entry.get("level")
+        max_risk = entry.get("max_risk_level") or 1
+        if level:
+            q = (f"已进入理财中心。你当前的风险等级是 {level}(可购 R1-R{max_risk}),"
+                 "在售产品如下。这次理财想达成什么目标?告诉我目的,我按目的"
+                 "和你的风险等级个性化推荐。")
+        else:
+            q = ("已进入理财中心。你还没有风险测评记录,按适当性要求暂时只能"
+                 "申购 R1(低风险)产品,在售产品如下。这次理财想达成什么目标?"
+                 "也可以先做风险测评(五道题),完成后按等级解锁全部产品。")
+        payload: dict = {"type": "wealth_entry", "question": q,
+                         "options": list(_WEALTH_ENTRY_OPTIONS) + ["先做风险测评"],
+                         **entry}
+        answer = interrupt(payload)
+        answer_text = str(answer or "")
+        # 放弃检测:与 clarify 工厂同一套词表,"不办了/算了"立即收尾零动钱
+        if any(w in answer_text for w in _CLARIFY_CANCEL_WORDS):
+            return {"messages": [HumanMessage(content=answer_text)],
+                    "wealth_missing": [],
+                    "notice": {"kind": "clarify_cancel"}}
+        return {"messages": [AIMessage(content=q),
+                             HumanMessage(content=answer_text)],
+                "wealth_missing": [], "clarify_round": round_no + 1}
+
     async def w_query(state: AgentState) -> dict:
         draft = state.get("wealth") or {}
         calls: list[dict] = []
@@ -2899,7 +3289,27 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         # 踩坑(实测):无测评时 MCP 返回 None → 适配器给零个内容块
         # → unwrap 短路成 [];非 dict 一律按"无测评"引导,先测评再推荐
         if not (isinstance(profile, dict) and profile.get("level")):
-            return {"bank_calls": calls, "notice": {"kind": "no_risk_profile"}}
+            # 2026-10-26 口径调整:未测评不再空手劝退,照常列出可购的 R1 产品
+            # (与适当性闸门"未测评仅可购 R1"同口径),need_assess=True 提示
+            # 做完测评按等级解锁全部产品——用户要"看到能买什么",不是被拦在门外
+            res = await tools.call("list_wealth_products", max_risk_level=1)
+            calls.append(_jr("list_wealth_products", {"max_risk_level": 1}, res))
+            err = _has_error(res)
+            if err or not isinstance(res, list):
+                return {"bank_calls": calls,
+                        "notice": {"kind": "bank_error",
+                                   "where": "list_wealth_products",
+                                   "error": err or "产品查询失败"}}
+            # 可购产品列表卡(2026-10-26 用户口径):问"现在有哪些产品"不再只回
+            # 一段文字,连同 wealth_view 弹出产品表单卡(api 在本节点更新时下发
+            # data-wealth-products;与 s_list 的 sub_view 同款"不占 interrupt"模式)
+            view = {"level": None, "level_meaning": "", "max_risk_level": 1,
+                    "need_assess": True,
+                    "products": [_product_view(p, 1) for p in res]}
+            return {"bank_calls": calls, "wealth_view": view,
+                    "notice": {"kind": "wealth_products", "level": None,
+                               "max_risk_level": 1, "need_assess": True,
+                               "products": res}}
         level = str(profile.get("level"))
         max_risk = _LEVEL_MAX_RISK.get(level)
         args: dict = {"max_risk_level": max_risk}
@@ -2933,9 +3343,25 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             return {"bank_calls": calls,
                     "notice": {"kind": "wealth_compare", "level": level,
                                "products": cmp}}
-        return {"bank_calls": calls,
-                "notice": {"kind": "wealth_products", "level": level,
-                           "max_risk_level": max_risk, "products": res}}
+        # 目的个性化(2026-10-26):有 purpose 且用户没点名具体产品/类型时,
+        # 按目的偏好的产品类型重排(偏好在前、组内保持业绩基准序);只重排
+        # 不删——适当性过滤已在 max_risk_level 里把过关,不会推出超等级产品
+        purpose = str(draft.get("purpose") or "")
+        if purpose and not draft.get("keyword") and not draft.get("p_type"):
+            prefs = next((p[3] for p in _WEALTH_PURPOSES if p[0] == purpose),
+                         ())
+            res = sorted(res, key=lambda p: 0 if p.get("p_type") in prefs else 1)
+        notice: dict = {"kind": "wealth_products", "level": level,
+                        "max_risk_level": max_risk, "products": res}
+        view = {"level": level, "level_meaning": _LEVEL_MEANING.get(level, ""),
+                "max_risk_level": max_risk, "need_assess": False,
+                "products": [_product_view(p, max_risk) for p in res]}
+        if purpose:
+            meta = next((p for p in _WEALTH_PURPOSES if p[0] == purpose), None)
+            notice["purpose"] = purpose
+            notice["purpose_label"] = meta[1] if meta else purpose
+            view["purpose_label"] = notice["purpose_label"]
+        return {"bank_calls": calls, "notice": notice, "wealth_view": view}
 
     async def w_assess(state: AgentState) -> dict:
         draft = state.get("wealth") or {}
@@ -3227,7 +3653,13 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             if len(cards) == 1:
                 draft["card_id"] = int(cards[0]["id"])
             else:
-                draft["card_id"] = _resolve_card(draft.get("card_hint"), cards)
+                # 多卡定位:card_hint 为主;拼接本轮原话兜底(2026-10-26 用户口径
+                # "说了卡号还被反问哪一张")——hint 在前、数字线索优先,抽取器漏摘
+                # 数字(如"挂失借记卡62228821")时用原话也能定位,上一轮残留的
+                # 旧类型线索压不过本轮明说的卡号。
+                draft["card_id"] = _resolve_card(
+                    f"{draft.get('card_hint') or ''} {_latest_human(state)}",
+                    cards)
         if action in ("limits", "status") and draft.get("card_id") is None:
             missing.append("card")
         if action == "apply" and draft.get("card_type") not in ("debit", "credit"):
@@ -4396,6 +4828,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         # (迭代计划 §3)。未命中仍走旧 b_*/w_* 路径,行为一字不变。
         if intent in ("bill_analysis", "wealth") \
                 and _wants_analysis(_latest_human(state)):
+            # 例外(2026-10-26):年度账单报告走 b_* 确定性报告卡。Core 的
+            # analyze_bill 只有月报口径,接走就出不了年报("分析一下年度账单")
+            if intent == "bill_analysis" \
+                    and _wants_annual_report(_latest_human(state)):
+                return "bill_analysis"
             return "a_perceive"
         return intent
 
@@ -4521,11 +4958,19 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
 
     def after_w_extract(state: AgentState) -> str:
         if state.get("wealth_missing"):
-            return "w_clarify"
+            # 泛入口(action 缺失)= 理财中心卡;其余缺槽(产品/金额/测评题)
+            # 照旧走 w_clarify 反问。missing==["action"] 是 action 缺失的唯一
+            # 形态(其余缺槽只在 subscribe/redeem 动作下追加,见 w_extract)。
+            missing = state.get("wealth_missing") or []
+            return "w_entry" if missing == ["action"] else "w_clarify"
         return {"query": "w_query", "assess": "w_assess",
                 "subscribe": "w_subscribe",
                 "redeem": "w_redeem"}.get((state.get("wealth") or {}).get("action"),
                                           "w_report")
+
+    def after_w_entry(state: AgentState) -> str:
+        # 工具失败(bank_error)直接播报,不进反问
+        return "w_ask" if not state.get("notice") else "w_report"
 
     def after_w_clarify(state: AgentState) -> str:
         return "w_report" if state.get("notice") else "w_extract"
@@ -4733,6 +5178,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                      ("s_pick", s_pick),
                      ("s_gate", s_gate), ("s_exec", s_exec),
                      ("s_decide", s_decide), ("s_report", s_report),
+                     ("w_entry", w_entry), ("w_ask", w_ask),
                      ("p_extract", p_extract), ("p_clarify", p_clarify),
                      ("p_snapshot", p_snapshot), ("p_build", p_build),
                      ("p_gate", p_gate), ("p_cut", p_cut),
@@ -4823,8 +5269,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
     g.add_edge("b_report", END)
     # ---- 理财 ----
     g.add_conditional_edges("w_extract", after_w_extract,
-                            ["w_clarify", "w_query", "w_assess", "w_subscribe",
-                             "w_redeem", "w_report"])
+                            ["w_clarify", "w_entry", "w_query", "w_assess",
+                             "w_subscribe", "w_redeem", "w_report"])
+    g.add_conditional_edges("w_entry", after_w_entry, ["w_ask", "w_report"])
+    g.add_conditional_edges("w_ask", after_w_clarify, ["w_extract", "w_report"])
     g.add_conditional_edges("w_clarify", after_w_clarify, ["w_extract", "w_report"])
     g.add_edge("w_query", "w_report")
     g.add_conditional_edges("w_assess", after_w_assess, ["w_clarify", "w_report"])

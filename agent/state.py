@@ -73,7 +73,7 @@ class BillSlots(TypedDict, total=False):
     period 只存用户原文短语(如"上个月"),换算成具体 start/end/month 全由
     确定性代码完成(铁律:日期计算绝不给 LLM)。
     """
-    ask: str | None                   # monthly_report | category_summary | top_merchants | anomaly_scan
+    ask: str | None                   # monthly_report | annual_report | category_summary | top_merchants | anomaly_scan
     period: str | None                # 时间范围原文短语;'YYYY-MM' 也原样存
     category: str | None              # 用户点名的关注分类(播报上下文用)
     period_parsed: dict | None        # 确定性解析结果 {"month","start","end","days"}
@@ -173,10 +173,12 @@ class AgentState(TypedDict, total=False):
     # ---- 账单分析(b_ 前缀节点,只读) ----
     bill_slots: BillSlots              # 账单抽取槽位(键名说明见 BillSlots 注释)
     bill_missing: list[str]            # 待补项(ask/period);非空 → 反问
+    bill_view: dict | None             # 账单报告卡视图(api 在 b_run 节点下发 data-bill-report)
 
     # ---- 理财(w_ 前缀节点) ----
     wealth: WealthSlots                # 理财抽取槽位 + 闸门阶段态(kind/order)
     wealth_missing: list[str]          # 待补项(action/product/amount_yuan/holding/assess_qN)
+    wealth_view: dict | None           # 可购产品列表卡视图(api 在 w_query 节点下发 data-wealth-products)
 
     # ---- 卡片管理(k_ 前缀节点) ----
     card: CardSlots                    # 卡片抽取槽位 + 闸门卡片视图(card_view)
