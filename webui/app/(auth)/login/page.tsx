@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type ChangeEvent, type FormEvent, useCallback, useState } from "react";
-import { Landmark } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -146,7 +145,7 @@ export default function LoginPage() {
       });
       const json = (await res.json().catch(() => null)) as LoginResponse | null;
       if (!res.ok || !json?.token) {
-        setError(authErrorMessage(json, "登录失败,请检查账号与密码"));
+        setError(authErrorMessage(json, "登录失败，请检查账号与密码"));
         return;
       }
       storeBankAuth(json.token, json);
@@ -169,7 +168,7 @@ export default function LoginPage() {
       }
       router.push(target);
     } catch {
-      setError("无法连接服务器,请稍后重试");
+      setError("无法连接服务器，请稍后重试");
     } finally {
       setLoading(false);
     }
@@ -178,9 +177,6 @@ export default function LoginPage() {
   return (
     <>
       <div className="mb-1 flex items-center gap-2.5">
-        <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-ink to-ink-2 text-white ring-1 ring-gold/30">
-          <Landmark className="size-5" />
-        </div>
         <div className="flex flex-col">
           <span className="text-[15px] font-semibold text-ink">AI 银行助手</span>
           <span className="text-[11px] text-muted-foreground">
@@ -189,7 +185,7 @@ export default function LoginPage() {
         </div>
       </div>
       <h1 className="sr-only text-2xl font-semibold tracking-tight">AI 银行</h1>
-      <p className="mt-3 text-sm text-muted-foreground">欢迎回来,请登录你的账户</p>
+      <p className="mt-3 text-sm text-muted-foreground">欢迎回来，请登录你的账户</p>
 
       <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
         <div className="flex flex-col gap-2">
@@ -224,7 +220,7 @@ export default function LoginPage() {
         ) : null}
 
         <Button
-          className="rounded-lg bg-ink text-white hover:bg-ink-2 disabled:opacity-50"
+          className="rounded-lg bg-ink text-white transition-colors hover:bg-ink-2 disabled:bg-muted disabled:text-muted-foreground"
           disabled={loading || !identifier.trim() || !password}
           type="submit"
         >
@@ -232,7 +228,7 @@ export default function LoginPage() {
         </Button>
 
         <p className="text-center text-[13px] text-muted-foreground">
-          {"没有账号?"}
+          {"没有账号？"}
           <Link
             className="text-foreground underline-offset-4 hover:underline"
             href="/register"
