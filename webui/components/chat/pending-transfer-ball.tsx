@@ -214,9 +214,9 @@ export function PendingTransferBall({
               nearCenter
                 ? {
                     background:
-                      "conic-gradient(#fde68a, #f59e0b, #b45309, #fbbf24, #fde68a)",
+                      "conic-gradient(#8FB0FF, #3E60CE, #1E52A5, #7E9CF0, #8FB0FF)",
                   }
-                : { background: "linear-gradient(135deg,#fbbf24,#d97706)" }
+                : { background: "linear-gradient(135deg,#1E52A5,#3E60CE)" }
             }
           />
           <span className="relative text-lg font-bold text-white drop-shadow">

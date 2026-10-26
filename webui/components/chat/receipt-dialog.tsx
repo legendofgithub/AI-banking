@@ -61,7 +61,7 @@ const STATUS_CN: Record<string, string> = {
 function Stamp({ label, time }: { label: string; time?: string }) {
   return (
     <div className="flex gap-2 text-[12px]">
-      <span className="shrink-0 font-medium text-amber-700 dark:text-amber-300">
+      <span className="shrink-0 font-medium text-gold-ink dark:text-gold">
         {label}
       </span>
       <span className="min-w-0 break-words text-muted-foreground">
@@ -100,7 +100,7 @@ export function ReceiptButton({ orderId }: { orderId: number }) {
   return (
     <>
       <button
-        className="mt-1 text-xs text-amber-700 underline-offset-2 transition hover:underline dark:text-amber-300"
+        className="mt-1 text-xs text-gold-ink underline-offset-2 transition hover:underline dark:text-gold"
         data-testid="receipt-button"
         onClick={load}
         type="button"
@@ -109,15 +109,15 @@ export function ReceiptButton({ orderId }: { orderId: number }) {
       </button>
       <Dialog onOpenChange={setOpen} open={open}>
         <DialogContent
-          className="max-h-[75dvh] gap-0 overflow-y-auto rounded-2xl border border-amber-300/70 bg-gradient-to-b from-amber-50 to-yellow-50 p-0 ring-amber-300/40 dark:border-amber-500/40 dark:from-amber-950/60 dark:to-yellow-950/40 sm:max-w-md"
+          className="max-h-[75dvh] gap-0 overflow-y-auto rounded-2xl border border-border/60 bg-card p-0 ring-border/40 sm:max-w-md"
           data-testid="receipt-dialog"
         >
           <DialogHeader className="px-5 pt-4 pb-1">
-            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-amber-800 dark:text-amber-300">
+            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-gold-ink dark:text-gold">
               <span aria-hidden>🧾</span>
               转账凭证 · 订单号 {o?.order_id ?? orderId}
               {o?.status ? (
-                <span className="rounded-full bg-amber-100/80 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                <span className="rounded-full bg-gold/10 px-1.5 py-0.5 text-[10px] text-gold-ink dark:bg-gold/15 dark:text-gold">
                   {STATUS_CN[o.status] ?? o.status}
                 </span>
               ) : null}
@@ -150,7 +150,7 @@ export function ReceiptButton({ orderId }: { orderId: number }) {
                     </div>
                   ) : null}
                 </div>
-                <div className="mt-3 border-t border-amber-200/60 pt-2 dark:border-amber-500/20">
+                <div className="mt-3 border-t border-border/60 pt-2">
                   <div className="mb-1 text-xs font-medium text-foreground">
                     审计链(时间序)
                   </div>
@@ -173,7 +173,7 @@ export function ReceiptButton({ orderId }: { orderId: number }) {
                   </div>
                 </div>
                 {(data.audit_trail?.length ?? 0) > 0 ? (
-                  <div className="mt-3 border-t border-amber-200/60 pt-2 dark:border-amber-500/20">
+                  <div className="mt-3 border-t border-border/60 pt-2">
                     <div className="mb-1 text-xs font-medium text-foreground">
                       工具调用轨迹
                     </div>
@@ -195,7 +195,7 @@ export function ReceiptButton({ orderId }: { orderId: number }) {
                   </div>
                 ) : null}
                 {o?.idempotency_key ? (
-                  <div className="mt-3 border-t border-amber-200/60 pt-2 text-[11px] break-all text-muted-foreground dark:border-amber-500/20">
+                  <div className="mt-3 border-t border-border/60 pt-2 text-[11px] break-all text-muted-foreground">
                     幂等键 {o.idempotency_key}(同指令重发不二次扣款)
                   </div>
                 ) : null}
