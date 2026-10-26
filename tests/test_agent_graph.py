@@ -2656,3 +2656,65 @@ def test_linkage_clarify_offers_clickable_options(tmp_path):
             assert plan["event"]["date"] == next_sat.isoformat()
 
     run(scenario())
+
+
+# ----------------------------- 多单并行挂起(2026-10-26 陈朵朵/老王实测反馈)
+
+def test_looks_like_new_transfer_patterns():
+    """闸门"新转账指令"判定:命中口语转账指令;密码/确认/取消/闲聊不命中。"""
+    from agent.graph import _looks_like_new_transfer as f
+    assert f("给老王转500元")
+    assert f("给老王转 500")
+    assert f("转账2000元")
+    assert f("转给陈朵朵1000块")
+    assert f("500元给老王")
+    assert not f("888888")          # 纯数字 = 密码尝试
+    assert not f("12345678")
+    assert not f("确认")            # 确认语义
+    assert not f("取消")
+    assert not f("先不转了")        # 取消类口语(无金额信号)
+    assert not f("这单先挂着")
+    assert not f("")                # 空输入
+
+
+def test_transfer_gate_suspends_on_new_transfer(tmp_path):
+    """闸门上说出新转账:当前单挂起(不确认不取消、不动钱),可再建第二单——
+    两单并行 pending_confirm。"""
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "transfer"}',                       # 第一笔路由
+            _slots_json(payee="张三", amount_yuan="1000", when="now"),
+            "好的,这笔先挂着,为你办新的。",                  # 段1:挂起播报(LLM)
+            '{"intent": "transfer"}',                       # 第二笔路由(新输入)
+            _slots_json(payee="张三", amount_yuan="500", when="now"),
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "multi-pend"}}
+            r1 = await graph.ainvoke({"auth_user_id": 1, "messages": [
+                HumanMessage("给张三转1000元")]}, cfg)
+            p1 = _interrupt_payload(r1)
+            assert p1["type"] == "confirm_transfer"
+
+            # 闸门上直接说出第二笔转账指令
+            r2 = await graph.ainvoke(Command(resume="给张三转500元"), cfg)
+            # 关键一:没有再停在闸门(分流收尾,不是把指令当密码重问)
+            assert not r2.get("__interrupt__")
+            # 关键二:第一单仍是 pending_confirm(挂起,未确认未取消)
+            o1 = p1["order"]["id"]
+            assert _order(db, o1)["status"] == "pending_confirm"
+            assert _balance(db) == DEFAULT_BALANCE          # 分文未动
+
+            # 模拟 api 层两段式:同一条指令再作为新输入进图
+            r3 = await graph.ainvoke({"auth_user_id": 1, "messages": [
+                HumanMessage("给张三转500元")]}, cfg)
+            p3 = _interrupt_payload(r3)
+            assert p3["type"] == "confirm_transfer"
+            o2 = p3["order"]["id"]
+            assert o2 != o1
+            # 两单并行挂起:都 pending_confirm,余额仍分文未动
+            assert _order(db, o1)["status"] == "pending_confirm"
+            assert _order(db, o2)["status"] == "pending_confirm"
+            assert _balance(db) == DEFAULT_BALANCE
+
+    run(scenario())

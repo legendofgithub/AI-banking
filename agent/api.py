@@ -51,6 +51,7 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
                                   data-thinking   = 本服务 Agent Core 的编排进度(确定性生成,
                                                     与模型是否推理无关)
     data-wealth-confirmation    理财确认卡片(kind=subscribe|redeem;order=产品/金额/费率/锁定期/风险/账户)
+    data-wealth-entry           理财中心入口卡(level/在售产品含 purchasable 标注/目的选项)
     data-card-confirmation      卡片确认卡片(kind=apply|limits|status;card=card_id/尾号/类型/当前值/目标值)
     data-contact-choices        同名联系人选项(卡片式消歧,而非开放反问)
     data-ask-slot               缺槽反问(附缺失字段清单)
@@ -98,7 +99,8 @@ from agent import memory as memory_mod
 from agent import persona as persona_mod
 from agent import tasks as tasks_mod
 from agent.bank import BankTools, load_bank_tools
-from agent.graph import build_agent_graph, make_sqlite_checkpointer
+from agent.graph import (_looks_like_new_transfer, build_agent_graph,
+                         make_sqlite_checkpointer)
 from bank_core.db import migrate_cards_bound
 from bank_core.ledger import LedgerError, LedgerService
 from bank_core.money import cents_to_yuan, yuan_to_cents
@@ -280,6 +282,25 @@ def _chunk_reasoning(chunk: Any) -> str:
     if isinstance(r, list):
         return "".join(d.get("text", "") for d in r if isinstance(d, dict))
     return ""
+
+
+def _gate_new_transfer(snapshot: Any, text: str | None) -> bool:
+    """thread 停在**转账支付密码闸门**且新消息像另一笔转账指令(多单并行挂起)。
+
+    只认 confirm_transfer 且 pay_required 的中断:其余闸门(理财/卡片/联动)
+    的确认流程不受影响。纯函数,可单测。
+    """
+    if not text:
+        return False
+    for task in (getattr(snapshot, "tasks", None) or []):
+        for intr in (getattr(task, "interrupts", None) or []):
+            payload = getattr(intr, "value", None)
+            if (isinstance(payload, dict)
+                    and payload.get("type") == "confirm_transfer"
+                    and payload.get("pay_required")
+                    and _looks_like_new_transfer(text)):
+                return True
+    return False
 
 
 def _snippet(text: str, needle: str, radius: int = 18) -> str:
@@ -1462,6 +1483,16 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         graph_input: Any = (Command(resume=last_user) if paused else
                             {"auth_user_id": uid,
                              "messages": [HumanMessage(content=last_user)]})
+        # 多单并行挂起(2026-10-26):停在**转账支付密码闸门**且新消息其实是
+        # 另一笔转账指令时,不再"必须先处理上一单"——第一段 resume 让闸门
+        # 分流把当前单挂起(不确认不取消,不动钱),第二段把指令作为新输入
+        # 正常建单。两段串在同一响应里,用户无需重说一遍。
+        turn_inputs: list[Any] = []
+        if paused and _gate_new_transfer(snapshot, last_user):
+            turn_inputs = [Command(resume=last_user),
+                           {"auth_user_id": uid,
+                            "messages": [HumanMessage(content=last_user)]}]
+            graph_input = turn_inputs[0]
 
         async def event_source() -> AsyncIterator[str]:
             yield _frame({"type": "start", "messageId": uuid4().hex})
@@ -1525,8 +1556,20 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 # 评审修复:单轮整体 deadline(模型/工具挂起时前端 guaranteed 收到
                 # error 帧 + finish,不再无限等待;asyncio.timeout 取消底层流)
                 async with asyncio.timeout(TURN_DEADLINE_S):
+                  # 多段输入(turn_inputs):闸门上新转账指令的两段式——
+                  # 段1 resume(分流挂起旧单)+ 段2 新输入(办理新单)。
+                  # 缩进两格是刻意的:不动内部 400 行帧处理逻辑,只包一层循环。
+                  for one_input in (turn_inputs or [graph_input]):
+                    # 段间防御:上一段收尾后若仍停在闸门(分流未生效),
+                    # 后续段不再作为新输入硬闯(interrupt 节点会把新输入当
+                    # resume 值),退化为已完成的段(旧行为等价)。
+                    if one_input is not graph_input:
+                        snap2 = await graph.aget_state(cfg)
+                        if bool(snap2.next) and any(
+                                t.interrupts for t in snap2.tasks):
+                            break
                     async for mode, data in graph.astream(
-                            graph_input, cfg,
+                            one_input, cfg,
                             stream_mode=["messages", "updates"]):
                         if mode == "messages":
                             chunk, meta = data
@@ -1781,6 +1824,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             # 锁定预算各自还有一道支付密码闸门(p_cut→s_gate / p_lock→l_gate)
             return [{"type": "data-plan",
                             "data": {**(payload.get("plan") or {}), "pay_required": False}}]
+        if ptype == "wealth_entry":
+            # 理财中心入口卡:风险等级 + 在售产品(标注可购/受限)+ 目的选项
+            # (question 由调用方另发 text 帧,这里只下卡片数据)
+            return [{"type": "data-wealth-entry",
+                            "data": {k: v for k, v in payload.items()
+                                     if k not in ("type", "question")}}]
         if ptype == "ask_slot":
             # options:枚举型反问的可点选项(graph 各 *_options 提供,可缺省);
             # 前端 AskSlot 渲染选项按钮 + 「其他」自由输入区

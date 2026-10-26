@@ -1177,3 +1177,27 @@ def test_persona_get_put_endpoints(tmp_path):
         assert client.put("/api/persona", headers=headers,
                           json={"persona": "长" * 301}
                           ).status_code == 422
+
+
+# ----------------------------- 多单并行挂起: api 侧闸门新指令判定(2026-10-26)
+
+def test_gate_new_transfer_predicate():
+    """_gate_new_transfer:只认 confirm_transfer+pay_required 的中断载荷;
+    其他闸门(理财/卡片)或非指令文本一律不分流。"""
+    from types import SimpleNamespace as NS
+    from agent.api import _gate_new_transfer
+
+    def snap(ptype, pay=True):
+        intr = NS(value={"type": ptype, "pay_required": pay, "question": "q"})
+        return NS(tasks=[NS(interrupts=[intr])])
+
+    assert _gate_new_transfer(snap("confirm_transfer"), "给老王转500元") is True
+    assert _gate_new_transfer(snap("confirm_wealth"), "给老王转500元") is False
+    assert _gate_new_transfer(snap("confirm_card"), "给老王转500元") is False
+    assert _gate_new_transfer(snap("confirm_transfer", pay=False),
+                              "给老王转500元") is False
+    assert _gate_new_transfer(snap("confirm_transfer"), "888888") is False
+    assert _gate_new_transfer(snap("confirm_transfer"), "取消") is False
+    assert _gate_new_transfer(snap("confirm_transfer"), "") is False
+    assert _gate_new_transfer(NS(tasks=[NS(interrupts=[])]),
+                              "给老王转500元") is False

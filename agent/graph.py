@@ -530,6 +530,8 @@ CHAT_SYS = """你是"练功假银行"的智能助手(大赛演示沙箱)。当�
 
 _FALLBACK_TEXT = {
     "executed": "转账已完成。",
+    "transfer_suspended": "这笔转账单已挂起(未确认未取消,资金未动);"
+                          "稍后可在右下角提醒里确认,或现在直接说下一笔转账。",
     "sub_precheck": "已列出即将扣费的订阅,请在卡片上选择放行、跳过或解约。",
     "sub_precheck_done": "预审决策已记录。",
     "cancelled": "转账已取消,资金未变动。",
@@ -1751,9 +1753,32 @@ def _make_clarify_node(missing_key: str, question_of, options_of=None):
     return clarify
 
 
+# 动钱闸门上的"新转账指令"判定(2026-10-26 多单并行挂起):
+# 用户在转账闸门等支付密码时,直接说出另一笔转账(实测"给老王转500元"被
+# 当成密码吞掉,变成"必须先处理上一单")。命中即分流:当前单保持
+# pending_confirm 挂起(不动钱),指令进入下一轮正常建单。
+# 保守优先:必须同时有转账动作与金额/收款人信号;纯数字(可能是密码)、
+# 确认/取消类短答一律不命中。
+_NEW_TRANSFER_RE = re.compile(
+    r"(?:转(?:账|款|给|汇)?[\u4e00-\u9fa5A-Za-z]{0,8}?\d+(?:\.\d+)?\s*(?:元|块)"
+    r"|\d+(?:\.\d+)?\s*(?:元|块)\s*(?:给|转给)[\u4e00-\u9fa5]{1,8}"
+    r"|给[\u4e00-\u9fa5]{1,8}转(?:账|款)?\s*\d"
+    r"|转(?:账|款)给[\u4e00-\u9fa5]{1,8})")
+
+
+def _looks_like_new_transfer(text: Any) -> bool:
+    """动钱闸门上的回答是否其实是一笔新的转账指令。纯函数,可单测。"""
+    t = str(text or "").strip()
+    if not t or re.fullmatch(r"\d{3,12}", t):  # 纯数字视作密码尝试,绝不分流
+        return False
+    if parse_confirmation(t) is not None:  # 显式确认/取消语义优先
+        return False
+    return bool(_NEW_TRANSFER_RE.search(t))
+
+
 def _make_gate_node(payload_type: str, subject_key: str, view_key: str,
                     question_of, view_of, notice_of_no=None, notice_of_giveup=None,
-                    pay_required=False, tools=None):
+                    pay_required=False, tools=None, divert_of=None):
     """人工确认闸门节点工厂(各业务 gate 共用),控制流与原实现逐行等价:
     两问仍不可识别 → 一律按取消(铁律,见函数体注释);单一 interrupt() 调用点
     (两个连续调用点会死循环,踩坑见 MAX_GATE_ASKS 注释,须"单调用点+状态
@@ -1771,6 +1796,11 @@ def _make_gate_node(payload_type: str, subject_key: str, view_key: str,
     "确认")都当密码尝试走 verify_pay_password 工具核验,错/无效→自环重问
     (带"支付密码不正确"前缀),两问封顶按取消,绝不误动钱。tools 为当前
     用户的 BankTools(build_agent_graph 闭包注入,核验天然对准登录用户)。
+
+    divert_of(text)→bool(2026-10-26,目前仅 t_gate 用):动钱闸门上用户
+    说出**新的业务指令**(如另一笔转账)时分流——当前单既不确认也不取消,
+    保持 pending_confirm 挂起(不动钱),设 notice 走 report 收尾,指令由
+    api 层在同轮作为新输入重放(多单并行挂起)。
     """
 
     def _need_pay(subject) -> bool:
@@ -1801,6 +1831,13 @@ def _make_gate_node(payload_type: str, subject_key: str, view_key: str,
                 if notice_of_no is not None:
                     cancelled["notice"] = notice_of_no(subject, view)
                 return cancelled
+            # 新业务指令分流(多单并行挂起):不把新转账指令当密码吞掉——
+            # 当前单保持 pending_confirm 挂起(不动钱),收尾播报后由
+            # api 层把这条指令作为新输入重放
+            if divert_of is not None and divert_of(str(value or "")):
+                return {**update, "decision": "", "gate_round": 0,
+                        "notice": {"kind": "transfer_suspended",
+                                   "order": view}}
             ok = False
             if tools is not None:
                 res = await tools.call("verify_pay_password",
@@ -2232,7 +2269,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
     # 闸门:取消 notice 不在此设——显式拒绝/追问超限都流转到 t_cancel 撤单产生
     t_gate = _make_gate_node("confirm_transfer", "order", "order",
                              _confirm_question, _order_view,
-                             pay_required=True, tools=tools)
+                             pay_required=True, tools=tools,
+                             divert_of=_looks_like_new_transfer)
 
     async def t_confirm(state: AgentState) -> dict:
         order = state.get("order") or {}
@@ -4392,6 +4430,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         return "t_report" if state.get("notice") else "t_gate"
 
     def after_gate(state: AgentState) -> str:
+        # 新指令分流(transfer_suspended):不确认不取消,收尾播报后走新输入
+        if state.get("notice"):
+            return "t_report"
         decision = state.get("decision")
         if decision == "yes":
             return "t_confirm"
@@ -4739,7 +4780,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
     g.add_conditional_edges("t_policy", after_policy, ["t_report", "t_create"])
     g.add_conditional_edges("t_create", after_create, ["t_report", "t_gate"])
     g.add_conditional_edges("t_gate", after_gate,
-                            ["t_confirm", "t_cancel", "t_gate"])
+                            ["t_confirm", "t_cancel", "t_gate", "t_report"])
     g.add_edge("t_confirm", "t_report")
     g.add_edge("t_cancel", "t_report")
     g.add_edge("t_report", END)
