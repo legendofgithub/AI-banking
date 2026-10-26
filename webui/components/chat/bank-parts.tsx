@@ -3,8 +3,10 @@
 import {
   type ChangeEvent,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
+  useMemo,
   useState,
 } from "react";
 import { ReceiptButton } from "@/components/chat/receipt-dialog";
@@ -25,6 +27,12 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *   data-thinking               Agent Core 思维链(识别意图→调取记忆→计划→守卫→执行→复盘,可折叠面板)
  *   data-wealth-confirmation    理财确认卡(kind=subscribe|redeem;order=产品/金额/
  *                               费率/锁定期/风险/付款账户 或 持仓/估值/费用/到手)
+ *   data-wealth-entry           理财中心入口卡(风险等级+在售产品可购标注+目的选项,
+ *                               点目的即按目的+等级个性化推荐)
+ *   data-bill-report            账单报告卡(年度/月度:KPI 总览 + 逐月走势 + 分类占比 +
+ *                               商户 Top;数字全部来自后端工具返回)
+ *   data-wealth-products        可购产品列表卡(w_query 查询结果;逐行「申购」按钮
+ *                               以普通消息回话,走既有确认+支付密码闸门)
  *   data-card-confirmation      卡片确认卡(kind=apply|limits|status;card=card_id/
  *                               尾号/类型/当前限额或状态/目标值;挂失加红字警示)
  *   data-subscription-list      订阅/代扣总览卡(逐项金额/下次扣费/年化+取消入口;
@@ -223,6 +231,91 @@ interface WealthCardData {
 }
 
 /*
+ * 理财中心入口卡(graph.py w_entry/w_ask → data-wealth-entry):
+ * level/assess_required=风险等级横条(未测评时提示仅可购 R1),
+ * products=在售清单(原样引用产品库,purchasable 由后端按等级算好),
+ * options=理财目的选项——点击即回话,后端确定性映射 purpose 后个性化推荐。
+ */
+interface WealthProductView {
+  code?: string;
+  expected_return_pct?: number;
+  id?: number;
+  intro?: string;
+  lock_days?: number;
+  min_subscribe_yuan?: string;
+  name?: string;
+  p_type?: string;
+  purchasable?: boolean;
+  risk_level?: string;
+}
+
+interface WealthEntryData {
+  assess_required?: boolean;
+  level?: string | null;
+  level_meaning?: string;
+  max_risk_level?: number;
+  options?: string[];
+  products?: WealthProductView[];
+}
+
+/*
+ * 可购产品列表卡(graph.py w_query → data-wealth-products):
+ * 问「现在有哪些产品」时弹出,逐行列出当前可申购产品(等级/基准/起购/锁定期),
+ * 每行带「申购」按钮——点击即以「申购 产品名」回话,走既有 w_extract→闸门链路。
+ */
+interface WealthProductsData {
+  level?: string | null;
+  level_meaning?: string;
+  max_risk_level?: number;
+  need_assess?: boolean;
+  products?: WealthProductView[];
+  purpose_label?: string;
+}
+
+/*
+ * 账单报告卡(graph.py b_run → data-bill-report):
+ * 年度/月度两种口径共用一张卡(kind 区分)。所有金额/占比都是后端工具返回原值,
+ * 前端只做展示与条形宽度换算(不做任何金额运算/推算)。
+ * monthly 仅年报有(逐月走势);merchants 月报由 b_run 补一次 top_merchants。
+ */
+interface BillReportMonth {
+  expense_yuan?: string;
+  income_yuan?: string;
+  month?: string;
+  net_yuan?: string;
+}
+
+interface BillReportCategory {
+  amount_yuan?: string;
+  category?: string;
+  count?: number;
+  pct?: number;
+}
+
+interface BillReportMerchant {
+  amount_yuan?: string;
+  count?: number;
+  merchant?: string;
+}
+
+interface BillReportData {
+  categories?: BillReportCategory[];
+  compare_expense_pct?: number | null;
+  compare_income_pct?: number | null;
+  compare_label?: string;
+  expense_yuan?: string;
+  highlights?: string[];
+  income_yuan?: string;
+  kind?: string;
+  merchants?: BillReportMerchant[];
+  monthly?: BillReportMonth[];
+  net_yuan?: string;
+  period_text?: string;
+  savings_rate_pct?: number | null;
+  title?: string;
+}
+
+/*
  * 卡片闸门(api.py confirm_card → data-card-confirmation):
  * {kind: apply|limits|status, card: ...}——card 视图由 graph.py k_apply/k_limits/
  * k_status 组装:apply 只有 card_type;limits 带当前/新限额对照;status 带
@@ -292,8 +385,8 @@ function useGateReply() {
 
 function GoldCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="w-[min(100%,420px)] rounded-2xl border border-amber-300/70 bg-gradient-to-br from-amber-50 to-yellow-50 p-4 shadow-[var(--shadow-card)] dark:border-amber-500/40 dark:from-amber-950/40 dark:to-yellow-950/30">
-      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+    <div className="w-[min(100%,420px)] rounded-2xl border border-gold/80 bg-gold-bg p-4 shadow-[var(--shadow-card)] dark:border-gold/40 dark:bg-gold-card-dark">
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-gold-ink dark:text-gold">
         <span aria-hidden>🏦</span>
         {title}
       </div>
@@ -344,7 +437,7 @@ function ConfirmButtons({ payRequired = false }: { payRequired?: boolean }) {
       {payRequired ? (
         <input
           aria-label="支付密码"
-          className="h-8 w-36 rounded-lg border border-amber-300/70 bg-white/80 px-2.5 text-sm tracking-[0.35em] text-foreground outline-none transition placeholder:text-xs placeholder:tracking-normal placeholder:text-muted-foreground focus:border-amber-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-500/40 dark:bg-amber-950/40"
+          className="h-8 w-36 rounded-lg border border-gold/80 bg-white/80 px-2.5 text-sm tracking-[0.35em] text-foreground outline-none transition placeholder:text-xs placeholder:tracking-normal placeholder:text-muted-foreground focus:border-gold disabled:cursor-not-allowed disabled:opacity-50 dark:border-gold/40 dark:bg-gold-card-dark"
           disabled={disabled}
           inputMode="numeric"
           maxLength={6}
@@ -358,7 +451,7 @@ function ConfirmButtons({ payRequired = false }: { payRequired?: boolean }) {
         />
       ) : null}
       <button
-        className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#b89438] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={disabled || (payRequired && !payReady)}
         onClick={payRequired ? handlePayConfirm : handlePlainConfirm}
         type="button"
@@ -390,7 +483,7 @@ function TransferCard({ data }: { data: TransferCardData }) {
         <Row label="定时" value={data.scheduled_at} />
         <Row label="备注" value={data.memo} />
         {data.policy_note ? (
-          <div className="mt-1 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+          <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
             {data.policy_note}
           </div>
         ) : null}
@@ -473,7 +566,7 @@ function LinkagePlanCard({ data }: { data: LinkagePlanCardData }) {
         <div className="mt-1 flex flex-col gap-1">
           {actions.map((action, index) => (
             <div
-              className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 rounded-md bg-amber-100/50 px-2 py-1 text-[13px] dark:bg-amber-900/20"
+              className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 rounded-md bg-gold-bg/50 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
               key={action.idx ?? index}
             >
               <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
@@ -620,11 +713,11 @@ function PlanCard({ data }: { data: PlanCardData }) {
         />
       </div>
       {facts.formula ? (
-        <div className="mt-1 rounded-md bg-white/60 px-2 py-1 text-xs text-muted-foreground [overflow-wrap:anywhere] dark:bg-amber-950/30">
+        <div className="mt-1 rounded-md bg-white/60 px-2 py-1 text-xs text-muted-foreground [overflow-wrap:anywhere] dark:bg-gold-card-dark">
           {facts.formula}
         </div>
       ) : null}
-      <div className="mt-2 flex flex-col gap-1 rounded-lg bg-amber-100/50 px-2 py-1.5 dark:bg-amber-900/20">
+      <div className="mt-2 flex flex-col gap-1 rounded-lg bg-gold-bg/50 px-2 py-1.5 dark:bg-gold-card-dark">
         <Row
           label="原预算"
           value={data.requested_budget_yuan && `¥${data.requested_budget_yuan}`}
@@ -649,7 +742,7 @@ function PlanCard({ data }: { data: PlanCardData }) {
             };
             return (
               <div
-                className="flex items-start justify-between gap-3 rounded-md bg-amber-100/50 px-2 py-1 text-[13px] dark:bg-amber-900/20"
+                className="flex items-start justify-between gap-3 rounded-md bg-gold-bg/50 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
                 key={step.idx ?? index}
               >
                 <span className="min-w-0 [overflow-wrap:anywhere]">
@@ -686,8 +779,8 @@ function PlanCard({ data }: { data: PlanCardData }) {
               <div
                 className={`rounded-md border px-2 py-1 text-[13px] ${
                   picked
-                    ? "border-amber-400/80 bg-amber-100/70 dark:border-amber-500/40 dark:bg-amber-900/30"
-                    : "border-transparent bg-amber-100/40 dark:bg-amber-900/10"
+                    ? "border-gold/80 bg-gold-bg/70 dark:border-gold/40 dark:bg-gold-card-dark"
+                    : "border-transparent bg-gold-bg/40 dark:bg-gold-card-dark"
                 }`}
                 key={candidate.sub_id ?? candidate.merchant ?? index}
               >
@@ -695,7 +788,7 @@ function PlanCard({ data }: { data: PlanCardData }) {
                   <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
                     {candidate.merchant}
                     {picked ? (
-                      <span className="ml-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-normal text-white">
+                      <span className="ml-1 rounded-full bg-gold px-1.5 py-0.5 text-[10px] font-normal text-white">
                         计划取消
                       </span>
                     ) : null}
@@ -714,12 +807,12 @@ function PlanCard({ data }: { data: PlanCardData }) {
         </div>
       ) : null}
       {selected?.reason ? (
-        <div className="mt-1 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+        <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
           {selected.reason}
         </div>
       ) : null}
       {data.note ? (
-        <div className="mt-1 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+        <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
           {data.note}
         </div>
       ) : null}
@@ -787,6 +880,565 @@ function WealthCard({ data }: { data: WealthCardData }) {
         {data.confirm_hint ?? "回复「确认」执行;回复「取消」放弃"}
       </div>
     </GoldCard>
+  );
+}
+
+const WEALTH_P_TYPE_CN: Record<string, string> = {
+  bond: "债券基金",
+  deposit: "定期存款",
+  gold: "黄金积存",
+  mixed: "混合基金",
+  money_fund: "货币基金",
+};
+
+const WEALTH_RISK_STYLE: Record<string, string> = {
+  R1: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
+  R2: "bg-sky-100 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300",
+  R3: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
+  R4: "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300",
+  R5: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+};
+
+/*
+ * 理财中心入口卡:等于把"理财柜台"搬进对话——先看能买什么(在售产品+
+ * 可购标注),再说这次理财的目的(选项),后端按目的+风险等级出个性化推荐。
+ * 选项/自由输入与 AskSlot 同一条发送链路(useGateReply.reply)。
+ */
+function WealthEntryCard({ data }: { data: WealthEntryData }) {
+  const { answered, busy, reply } = useGateReply();
+  const [other, setOther] = useState("");
+  const disabled = answered || busy;
+  const products = data.products ?? [];
+  const options = data.options ?? [];
+  const level = data.level ?? null;
+  const sendOther = useCallback(() => {
+    const text = other.trim();
+    if (text) {
+      reply(text);
+    }
+  }, [other, reply]);
+  const handleOtherChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => setOther(e.target.value),
+    [],
+  );
+  const handleOtherKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        sendOther();
+      }
+    },
+    [sendOther],
+  );
+  // 选项点击处理器预生成(引用直传,不在 JSX 里内联箭头——与 lint 规则和解)
+  const optionReplies = useMemo(
+    () => new Map(options.map((option) => [option, () => reply(option)])),
+    [options, reply],
+  );
+  return (
+    <div className="w-[min(100%,420px)] rounded-2xl border border-teal-200/70 bg-gradient-to-br from-teal-50 to-emerald-50 p-4 shadow-[var(--shadow-card)] dark:border-teal-500/30 dark:from-teal-950/30 dark:to-emerald-950/20">
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-teal-700 dark:text-teal-300">
+        <span aria-hidden>💰</span>
+        理财中心
+        {level ? (
+          <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground dark:bg-teal-950/40">
+            {level} · 可购 R1-R{data.max_risk_level ?? 1}
+          </span>
+        ) : null}
+      </div>
+      <div
+        className={`mb-2 rounded-lg px-2 py-1 text-[12px] leading-5 [overflow-wrap:anywhere] ${
+          level
+            ? "bg-white/60 text-muted-foreground dark:bg-teal-950/30"
+            : "border border-gold/30 bg-gold/10 text-gold-ink dark:text-gold"
+        }`}
+      >
+        {level
+          ? data.level_meaning || `你的风险等级为 ${level}`
+          : "未做风险测评:按适当性要求当前仅可申购 R1 低风险产品,做风险测评后按等级解锁全部产品。"}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {products.map((p) => {
+          const risk = p.risk_level ?? "";
+          const ok = p.purchasable !== false;
+          return (
+            <div
+              className={`rounded-md bg-white/60 px-2 py-1.5 text-[13px] dark:bg-teal-950/30 ${
+                ok ? "" : "opacity-60"
+              }`}
+              key={p.id ?? p.code}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate font-medium text-foreground">
+                  {p.name}
+                  <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                    {p.code}
+                  </span>
+                </span>
+                <span className="flex shrink-0 items-center gap-1">
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                      WEALTH_RISK_STYLE[risk] ??
+                      "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {risk}
+                  </span>
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                      ok
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {ok ? "可购" : "受限"}
+                  </span>
+                </span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                {WEALTH_P_TYPE_CN[p.p_type ?? ""] ?? p.p_type} · 基准{" "}
+                {p.expected_return_pct}% · 起购 ¥{p.min_subscribe_yuan} ·{" "}
+                {p.lock_days ? `锁定期 ${p.lock_days} 天` : "随时可取"}
+              </div>
+              {p.intro ? (
+                <div className="mt-0.5 text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+                  {p.intro}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      {options.length > 0 ? (
+        <>
+          <div className="mt-2 text-xs text-muted-foreground">
+            这次理财想达成什么目标?选一个,按目的为你推荐:
+          </div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {options.map((option) => (
+              <button
+                className="rounded-full border border-teal-300/80 bg-white/80 px-3 py-1 text-[12px] transition hover:border-teal-500 hover:bg-teal-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-teal-500/40 dark:bg-teal-900/30 dark:hover:bg-teal-900/60"
+                disabled={disabled}
+                key={option}
+                onClick={optionReplies.get(option)}
+                type="button"
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center gap-1.5">
+            <input
+              className="min-w-0 flex-1 rounded-lg border border-teal-300/70 bg-white/80 px-2 py-1 text-[12px] outline-none transition placeholder:text-teal-400 focus:border-teal-500 disabled:opacity-50 dark:border-teal-500/40 dark:bg-teal-950/40"
+              disabled={disabled}
+              onChange={handleOtherChange}
+              onKeyDown={handleOtherKeyDown}
+              placeholder="其他:直接描述你的理财目的"
+              value={other}
+            />
+            <button
+              className="shrink-0 rounded-lg bg-teal-600 px-2.5 py-1 text-[12px] text-white transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={disabled || !other.trim()}
+              onClick={sendOther}
+              type="button"
+            >
+              发送
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/* 单条产品行 + 申购按钮(循环里各自的稳定回调,照 SubscriptionRow 的写法) */
+function WealthProductRow({
+  disabled,
+  onSubscribe,
+  product,
+}: {
+  disabled: boolean;
+  onSubscribe: (product: WealthProductView) => void;
+  product: WealthProductView;
+}) {
+  const handleClick = useCallback(
+    () => onSubscribe(product),
+    [onSubscribe, product],
+  );
+  const ok = product.purchasable !== false;
+  const risk = product.risk_level ?? "";
+  return (
+    <div
+      className={`rounded-md bg-white/60 px-2 py-1.5 text-[13px] dark:bg-teal-950/30 ${
+        ok ? "" : "opacity-60"
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate font-medium text-foreground">
+          {product.name}
+          <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+            {product.code}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1">
+          <span
+            className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+              WEALTH_RISK_STYLE[risk] ?? "bg-muted text-muted-foreground"
+            }`}
+          >
+            {risk}
+          </span>
+          <span
+            className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+              ok
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                : "bg-muted text-muted-foreground"
+            }`}
+          >
+            {ok ? "可购" : "受限"}
+          </span>
+        </span>
+      </div>
+      <div className="mt-0.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span className="min-w-0">
+          {WEALTH_P_TYPE_CN[product.p_type ?? ""] ?? product.p_type} · 基准{" "}
+          {product.expected_return_pct}% · 起购 ¥{product.min_subscribe_yuan} ·{" "}
+          {product.lock_days ? `锁定期 ${product.lock_days} 天` : "随时可取"}
+        </span>
+        {ok ? (
+          <button
+            className="shrink-0 rounded-md border border-teal-300/70 px-2 py-0.5 text-[11px] text-teal-700 transition hover:bg-teal-100/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-teal-500/40 dark:text-teal-300 dark:hover:bg-teal-900/30"
+            disabled={disabled}
+            onClick={handleClick}
+            type="button"
+          >
+            申购
+          </button>
+        ) : null}
+      </div>
+      {product.intro ? (
+        <div className="mt-0.5 text-[11px] text-muted-foreground [overflow-wrap:anywhere]">
+          {product.intro}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WealthProductsCard({ data }: { data: WealthProductsData }) {
+  const { answered, busy, reply } = useGateReply();
+  const disabled = answered || busy;
+  const products = data.products ?? [];
+  const level = data.level ?? null;
+  const onSubscribe = useCallback(
+    (product: WealthProductView) => {
+      if (product.name) {
+        reply(`申购 ${product.name}`);
+      }
+    },
+    [reply],
+  );
+  return (
+    <div className="w-[min(100%,420px)] rounded-2xl border border-teal-200/70 bg-gradient-to-br from-teal-50 to-emerald-50 p-4 shadow-[var(--shadow-card)] dark:border-teal-500/30 dark:from-teal-950/30 dark:to-emerald-950/20">
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-teal-700 dark:text-teal-300">
+        <span aria-hidden>📈</span>
+        {data.purpose_label ? `按「${data.purpose_label}」推荐` : "当前可申购产品"}
+        {level ? (
+          <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground dark:bg-teal-950/40">
+            {level} · 可购 R1-R{data.max_risk_level ?? 1}
+          </span>
+        ) : null}
+      </div>
+      <div
+        className={`mb-2 rounded-lg px-2 py-1 text-[12px] leading-5 [overflow-wrap:anywhere] ${
+          level
+            ? "bg-white/60 text-muted-foreground dark:bg-teal-950/30"
+            : "border border-gold/30 bg-gold/10 text-gold-ink dark:text-gold"
+        }`}
+      >
+        {level
+          ? data.level_meaning || `你的风险等级为 ${level}`
+          : "未做风险测评:按适当性要求当前仅可申购 R1 低风险产品,做风险测评后按等级解锁全部产品。"}
+      </div>
+      {products.length ? (
+        <div className="flex flex-col gap-1.5">
+          {products.map((p) => (
+            <WealthProductRow
+              disabled={disabled}
+              key={p.id ?? p.code}
+              onSubscribe={onSubscribe}
+              product={p}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-md bg-white/60 px-2 py-1.5 text-[12px] text-muted-foreground dark:bg-teal-950/30">
+          当前没有符合条件的可申购产品。
+        </div>
+      )}
+      <div className="mt-2 text-[11px] text-muted-foreground">
+        点「申购」选好产品后告诉我金额,确认并输入支付密码后才会扣款。
+      </div>
+    </div>
+  );
+}
+
+/* 金额标签:后端给的是两位小数字符串,千分位只为可读性,不做四舍五入 */
+function moneyLabel(v?: string | null): string {
+  if (v === undefined || v === null || v === "") {
+    return "—";
+  }
+  const [int, dec] = String(v).split(".");
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return dec ? `${grouped}.${dec}` : grouped;
+}
+
+function pctNum(v?: number | null): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/* 同比/环比徽章:支出上涨用琥珀色、下降用绿色;收入反之 */
+function TrendBadge({
+  label,
+  pct,
+  goodWhenUp,
+}: {
+  label?: string;
+  pct?: number | null;
+  goodWhenUp: boolean;
+}) {
+  const n = pctNum(pct);
+  if (n === null || !label) {
+    return null;
+  }
+  const up = n > 0;
+  const good = up === goodWhenUp;
+  return (
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+        good
+          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+          : "bg-orange-100 text-orange-700 dark:bg-orange-950/40 dark:text-orange-300"
+      }`}
+    >
+      {label}
+      {up ? "↑" : "↓"}
+      {Math.abs(n)}%
+    </span>
+  );
+}
+
+/*
+ * 账单报告卡(年度/月度):KPI 总览 → 逐月走势(年报) → 分类占比 → 商户 Top。
+ * 纯展示:数字全部来自后端工具返回(口径见 bank_core/analysis.py),条形宽度
+ * 只用同组数据做相对换算,不产生新数字。
+ */
+function BillReportCard({ data }: { data: BillReportData }) {
+  const months = data.monthly ?? [];
+  const cats = data.categories ?? [];
+  const merchants = data.merchants ?? [];
+  const highlights = data.highlights ?? [];
+  const isAnnual = data.kind === "annual";
+  const maxExpense = Math.max(
+    ...months.map((m) => Number.parseFloat(m.expense_yuan ?? "0") || 0),
+    1,
+  );
+  const netPositive = !String(data.net_yuan ?? "").startsWith("-");
+  const kpis = [
+    {
+      badge: (
+        <TrendBadge
+          goodWhenUp
+          label={data.compare_label}
+          pct={data.compare_income_pct}
+        />
+      ),
+      label: "收入",
+      tone: "text-emerald-600 dark:text-emerald-400",
+      value: data.income_yuan,
+    },
+    {
+      badge: (
+        <TrendBadge
+          goodWhenUp={false}
+          label={data.compare_label}
+          pct={data.compare_expense_pct}
+        />
+      ),
+      label: "支出",
+      tone: "text-orange-600 dark:text-orange-400",
+      value: data.expense_yuan,
+    },
+    {
+      badge: null,
+      label: "结余",
+      tone: netPositive
+        ? "text-sky-600 dark:text-sky-400"
+        : "text-red-600 dark:text-red-400",
+      value: data.net_yuan,
+    },
+    {
+      badge: null,
+      label: "储蓄率",
+      tone: "text-foreground",
+      value:
+        pctNum(data.savings_rate_pct) === null
+          ? "—"
+          : `${data.savings_rate_pct}%`,
+    },
+  ];
+  return (
+    <div className="w-[min(100%,460px)] rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-50 to-indigo-50 p-4 shadow-[var(--shadow-card)] dark:border-sky-500/30 dark:from-sky-950/30 dark:to-indigo-950/20">
+      <div className="mb-0.5 flex items-center gap-2 text-[13px] font-semibold text-sky-700 dark:text-sky-300">
+        <span aria-hidden>📊</span>
+        {data.title ?? (isAnnual ? "年度账单报告" : "月度账单报告")}
+      </div>
+      <div className="mb-2 text-[11px] text-muted-foreground">
+        {data.period_text}
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        {kpis.map((k) => (
+          <div
+            className="rounded-lg bg-white/70 px-2 py-1.5 dark:bg-sky-950/30"
+            key={k.label}
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[11px] text-muted-foreground">
+                {k.label}
+              </span>
+              {k.badge}
+            </div>
+            <div className={`text-[15px] font-semibold ${k.tone}`}>
+              {/* 储蓄率是百分比,不重复加货币符号 */}
+              {k.label === "储蓄率" ? k.value : `¥${moneyLabel(k.value)}`}
+            </div>
+          </div>
+        ))}
+      </div>
+      {months.length > 0 ? (
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>逐月走势</span>
+            <span className="flex items-center gap-2">
+              <span className="flex items-center gap-1">
+                <i className="h-2 w-2 rounded-sm bg-emerald-400" />
+                收入
+              </span>
+              <span className="flex items-center gap-1">
+                <i className="h-2 w-2 rounded-sm bg-sky-500" />
+                支出
+              </span>
+            </span>
+          </div>
+          <div className="flex h-24 items-end gap-1">
+            {months.map((m) => {
+              const inc = Number.parseFloat(m.income_yuan ?? "0") || 0;
+              const exp = Number.parseFloat(m.expense_yuan ?? "0") || 0;
+              const mon = Number((m.month ?? "").slice(5));
+              return (
+                <div
+                  className="flex min-w-0 flex-1 flex-col items-center justify-end gap-0.5"
+                  key={m.month}
+                  title={`${m.month} 收入 ¥${moneyLabel(m.income_yuan)} / 支出 ¥${moneyLabel(m.expense_yuan)}`}
+                >
+                  <div className="flex h-20 w-full items-end justify-center gap-[2px]">
+                    <div
+                      className="w-1/3 rounded-t-sm bg-emerald-400 dark:bg-emerald-500"
+                      style={{ height: `${Math.max((inc / maxExpense) * 100, inc > 0 ? 3 : 0)}%` }}
+                    />
+                    <div
+                      className="w-1/3 rounded-t-sm bg-sky-500 dark:bg-sky-400"
+                      style={{ height: `${Math.max((exp / maxExpense) * 100, exp > 0 ? 3 : 0)}%` }}
+                    />
+                  </div>
+                  <span className="text-[9px] text-muted-foreground">
+                    {Number.isFinite(mon) && mon > 0 ? `${mon}月` : ""}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+      {cats.length > 0 ? (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] text-muted-foreground">
+            支出分类占比
+          </div>
+          <div className="flex flex-col gap-1">
+            {cats.slice(0, 6).map((c) => {
+              const pct = pctNum(c.pct) ?? 0;
+              return (
+                <div key={c.category}>
+                  <div className="flex items-baseline justify-between text-[12px]">
+                    <span className="min-w-0 truncate text-foreground">
+                      {c.category}
+                      <span className="ml-1 text-[10px] text-muted-foreground">
+                        {c.count}笔
+                      </span>
+                    </span>
+                    <span className="shrink-0 font-medium text-foreground">
+                      ¥{moneyLabel(c.amount_yuan)}
+                      <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                        {pct}%
+                      </span>
+                    </span>
+                  </div>
+                  <div className="mt-0.5 h-1.5 overflow-hidden rounded-full bg-sky-100 dark:bg-sky-950/50">
+                    <div
+                      className="h-full rounded-full bg-sky-500/80"
+                      style={{ width: `${Math.min(Math.max(pct, 1), 100)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+      {merchants.length > 0 ? (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] text-muted-foreground">
+            消费 Top 商户
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {merchants.slice(0, 6).map((m, i) => (
+              <div
+                className="flex items-baseline justify-between text-[12px]"
+                key={m.merchant}
+              >
+                <span className="min-w-0 truncate text-foreground">
+                  <span className="mr-1 text-[10px] text-muted-foreground">
+                    {i + 1}.
+                  </span>
+                  {m.merchant}
+                  <span className="ml-1 text-[10px] text-muted-foreground">
+                    {m.count}笔
+                  </span>
+                </span>
+                <span className="shrink-0 font-medium text-foreground">
+                  ¥{moneyLabel(m.amount_yuan)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {highlights.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-1">
+          {highlights.map((h) => (
+            <span
+              className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] text-sky-700 dark:bg-sky-900/30 dark:text-sky-200"
+              key={h}
+            >
+              {h}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-2 text-[11px] text-muted-foreground">
+        以上数字均来自银行流水原始记录,只读展示,不涉及任何资金操作。
+      </div>
+    </div>
   );
 }
 
@@ -940,7 +1592,7 @@ function SplitCard({ data }: { data: SplitCardData }) {
           <div className="text-xs text-muted-foreground">参与人分摊</div>
           {data.participants.map((p) => (
             <div
-              className="flex justify-between gap-4 rounded-md bg-amber-100/40 px-2 py-1 text-[13px] dark:bg-amber-900/20"
+              className="flex justify-between gap-4 rounded-md bg-gold-bg/40 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
               key={`${p.name}-${p.share_yuan}`}
             >
               <span className="text-foreground">{p.name}</span>
@@ -996,14 +1648,14 @@ function SubscriptionRow({
 }) {
   const handleClick = useCallback(() => onCancel(item), [item, onCancel]);
   return (
-    <div className="rounded-xl border border-amber-200/60 bg-white/60 p-2.5 dark:border-amber-500/20 dark:bg-amber-950/20">
+    <div className="rounded-xl border border-gold/50 bg-white/60 p-2.5 dark:border-gold/20 dark:bg-gold-card-dark">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[13px] font-medium text-foreground">
             {item.merchant_name}
           </span>
           {item.category ? (
-            <span className="shrink-0 rounded-full bg-amber-100/80 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+            <span className="shrink-0 rounded-full bg-gold-bg/80 px-1.5 py-0.5 text-[10px] text-gold-ink dark:bg-gold-card-dark dark:text-gold">
               {item.category}
             </span>
           ) : null}
@@ -1021,7 +1673,7 @@ function SubscriptionRow({
           {item.annual_yuan ?? "—"}
         </span>
         <button
-          className="shrink-0 rounded-md border border-amber-300/70 px-2 py-0.5 text-[11px] text-amber-700 transition hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-500/40 dark:text-amber-300 dark:hover:bg-amber-900/30"
+          className="shrink-0 rounded-md border border-gold/80 px-2 py-0.5 text-[11px] text-gold-ink transition hover:bg-gold-bg/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gold/40 dark:text-gold dark:hover:bg-gold-card-dark"
           disabled={disabled}
           onClick={handleClick}
           type="button"
@@ -1030,7 +1682,7 @@ function SubscriptionRow({
         </button>
       </div>
       {item.note ? (
-        <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+        <div className="mt-1 text-[11px] text-gold-ink dark:text-gold">
           {item.note}
         </div>
       ) : null}
@@ -1061,7 +1713,7 @@ function SubscriptionListBody({
           />
         ))}
       </div>
-      <div className="mt-2.5 flex flex-col gap-1 border-t border-amber-200/60 pt-2 dark:border-amber-500/20">
+      <div className="mt-2.5 flex flex-col gap-1 border-t border-gold/50 pt-2 dark:border-gold/20">
         <Row
           label="本月合计"
           value={<span className="text-base">¥{data.monthly_total_yuan}</span>}
@@ -1137,15 +1789,15 @@ function PrecheckCard({ data }: { data: PrecheckView }) {
   );
   const items = data.items ?? [];
   return (
-    <div className="w-[min(100%,420px)] rounded-2xl border border-amber-300/70 bg-gradient-to-br from-amber-50 to-yellow-50 p-4 shadow-[var(--shadow-card)] dark:border-amber-500/40 dark:from-amber-950/40 dark:to-yellow-950/30">
-      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+    <div className="w-[min(100%,420px)] rounded-2xl border border-gold/80 bg-gold-bg p-4 shadow-[var(--shadow-card)] dark:border-gold/40 dark:bg-gold-card-dark">
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-gold-ink dark:text-gold">
         <span aria-hidden>🔔</span>
         代扣预审 · 即将扣费 {items.length} 项
       </div>
       <div className="flex flex-col gap-2">
         {items.map((item) => (
           <div
-            className="rounded-xl border border-amber-200/60 bg-white/60 p-2.5 dark:border-amber-500/20 dark:bg-amber-950/20"
+            className="rounded-xl border border-gold/50 bg-white/60 p-2.5 dark:border-gold/20 dark:bg-gold-card-dark"
             key={item.sub_id ?? item.merchant_name}
           >
             <div className="flex items-center justify-between gap-3">
@@ -1154,7 +1806,7 @@ function PrecheckCard({ data }: { data: PrecheckView }) {
                   {item.merchant_name}
                 </span>
                 {item.category ? (
-                  <span className="shrink-0 rounded-full bg-amber-100/80 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                  <span className="shrink-0 rounded-full bg-gold-bg/80 px-1.5 py-0.5 text-[10px] text-gold-ink dark:bg-gold-card-dark dark:text-gold">
                     {item.category}
                   </span>
                 ) : null}
@@ -1174,7 +1826,7 @@ function PrecheckCard({ data }: { data: PrecheckView }) {
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
-                className="rounded-lg bg-amber-500 px-3 py-1 text-xs font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-gold px-3 py-1 text-xs font-medium text-white transition hover:bg-[#b89438] disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={disabled}
                 onClick={make(item, "放行")}
                 type="button"
@@ -1182,7 +1834,7 @@ function PrecheckCard({ data }: { data: PrecheckView }) {
                 放行本期
               </button>
               <button
-                className="rounded-lg border border-amber-300/70 px-3 py-1 text-xs text-amber-700 transition hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-amber-500/40 dark:text-amber-300 dark:hover:bg-amber-900/30"
+                className="rounded-lg border border-gold/80 px-3 py-1 text-xs text-gold-ink transition hover:bg-gold-bg/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gold/40 dark:text-gold dark:hover:bg-gold-card-dark"
                 disabled={disabled}
                 onClick={make(item, "跳过")}
                 type="button"
@@ -1258,7 +1910,7 @@ export function SubscriptionCancelCard({
     <div className="mt-3 flex flex-wrap items-center gap-2">
       <input
         aria-label="支付密码"
-        className="h-8 w-36 rounded-lg border border-amber-300/70 bg-white/80 px-2.5 text-sm tracking-[0.35em] text-foreground outline-none transition placeholder:text-xs placeholder:tracking-normal placeholder:text-muted-foreground focus:border-amber-500 dark:border-amber-500/40 dark:bg-amber-950/40"
+        className="h-8 w-36 rounded-lg border border-gold/80 bg-white/80 px-2.5 text-sm tracking-[0.35em] text-foreground outline-none transition placeholder:text-xs placeholder:tracking-normal placeholder:text-muted-foreground focus:border-gold dark:border-gold/40 dark:bg-gold-card-dark"
         inputMode="numeric"
         maxLength={6}
         onChange={handleLocalChange}
@@ -1268,7 +1920,7 @@ export function SubscriptionCancelCard({
         value={payPassword}
       />
       <button
-        className="rounded-lg bg-amber-500 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#b89438] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={!payReady}
         onClick={handleLocalConfirm}
         type="button"
@@ -1299,7 +1951,7 @@ export function SubscriptionCancelCard({
         <Row label="取消后年省" value={`¥${data.annual_yuan ?? "—"}`} />
       </div>
       {data.note ? (
-        <div className="mt-1 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+        <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
           {data.note}
         </div>
       ) : null}
@@ -1345,6 +1997,8 @@ const SLOT_LABELS: Record<string, string> = {
   time: "时间",
   title: "标题",
   to: "收款人",
+  // 转账时机(立即/定时)缺槽反问,2026-10-26 起不再默认"now"必问
+  when: "转账时机(立即还是定时)",
 };
 
 function AskSlot({ data }: { data: { missing?: string[]; options?: string[] } }) {
@@ -1469,7 +2123,7 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
         ) : null}
       </div>
       {data.persona ? (
-        <div className="mb-2 flex items-start gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[12px] leading-5 text-amber-700 dark:text-amber-300">
+        <div className="mb-2 flex items-start gap-1.5 rounded-lg border border-gold/30 bg-gold/10 px-2 py-1 text-[12px] leading-5 text-gold-ink dark:text-gold">
           <span aria-hidden>🎭</span>
           <span className="min-w-0 [overflow-wrap:anywhere]">
             人设已加载：{data.persona}
@@ -1531,7 +2185,7 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
         </div>
       ) : null}
       {diffText ? (
-        <div className="mt-2 rounded-md bg-amber-100/60 px-2 py-1 text-xs text-amber-800 [overflow-wrap:anywhere] dark:bg-amber-900/30 dark:text-amber-200">
+        <div className="mt-2 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink [overflow-wrap:anywhere] dark:bg-gold-card-dark dark:text-gold">
           计划调整:{diffText}(已完成步骤不重跑)
         </div>
       ) : null}
@@ -1618,6 +2272,15 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
   }
   if (type === "data-wealth-confirmation") {
     return <WealthCard data={(data ?? {}) as WealthCardData} />;
+  }
+  if (type === "data-wealth-entry") {
+    return <WealthEntryCard data={(data ?? {}) as WealthEntryData} />;
+  }
+  if (type === "data-wealth-products") {
+    return <WealthProductsCard data={(data ?? {}) as WealthProductsData} />;
+  }
+  if (type === "data-bill-report") {
+    return <BillReportCard data={(data ?? {}) as BillReportData} />;
   }
   if (type === "data-card-confirmation") {
     return <CardConfirmCard data={(data ?? {}) as CardConfirmationData} />;

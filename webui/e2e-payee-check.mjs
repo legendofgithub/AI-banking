@@ -52,7 +52,7 @@ try {
   console.log("T1 登录 + 首页建议胶囊(PC 顶栏无可见性切换): 通过");
 
   // ---- T1b PC「New chat」强制先命名(≤10 字)后建会话 ----
-  await page.getByRole("button", { name: /New chat/i }).first().click();
+  await page.getByRole("button", { name: /新对话/i }).first().click();
   const newChatDialog = page.locator('[data-testid="pc-new-chat-dialog"]');
   await newChatDialog.waitFor({ timeout: 10_000 });
   const nameInput = page.locator('[data-testid="pc-session-name-input"]');

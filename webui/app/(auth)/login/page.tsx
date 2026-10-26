@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type ChangeEvent, type FormEvent, useCallback, useState } from "react";
+import { Landmark } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -68,7 +69,7 @@ function DemoAccountRow({
           <span className="text-[13px] font-medium text-foreground">
             {account.name}
           </span>
-          <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+          <span className="rounded-full bg-gold/10 px-1.5 py-0.5 text-[10px] text-gold-ink dark:text-gold">
             {account.badge}
           </span>
         </div>
@@ -176,8 +177,19 @@ export default function LoginPage() {
 
   return (
     <>
-      <h1 className="text-2xl font-semibold tracking-tight">AI 银行</h1>
-      <p className="text-sm text-muted-foreground">欢迎回来,请登录你的账户</p>
+      <div className="mb-1 flex items-center gap-2.5">
+        <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-ink to-ink-2 text-gold ring-1 ring-gold/30">
+          <Landmark className="size-5" />
+        </div>
+        <div className="flex flex-col">
+          <span className="text-[15px] font-semibold text-ink">AI 银行助手</span>
+          <span className="text-[11px] text-muted-foreground">
+            智能对话银行 · 资金安全由确认制保障
+          </span>
+        </div>
+      </div>
+      <h1 className="sr-only text-2xl font-semibold tracking-tight">AI 银行</h1>
+      <p className="mt-3 text-sm text-muted-foreground">欢迎回来,请登录你的账户</p>
 
       <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
         <div className="flex flex-col gap-2">
@@ -212,7 +224,7 @@ export default function LoginPage() {
         ) : null}
 
         <Button
-          className="rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+          className="rounded-lg bg-ink text-white hover:bg-ink-2 disabled:opacity-50"
           disabled={loading || !identifier.trim() || !password}
           type="submit"
         >

@@ -84,11 +84,11 @@ function OrderRow({
 
   return (
     <form
-      className="rounded-2xl border border-amber-300/70 bg-gradient-to-br from-amber-50 to-yellow-50 p-4 dark:border-amber-500/40 dark:from-amber-950/40 dark:to-yellow-950/30"
+      className="rounded-2xl border border-gold/70 bg-gradient-to-br bg-gold-bg p-4 dark:border-gold/40 dark:bg-gold-card-dark"
       onSubmit={handleSubmit}
     >
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2 text-[14px] font-semibold text-amber-700 dark:text-amber-300">
+        <div className="flex items-center gap-2 text-[14px] font-semibold text-gold-ink dark:text-gold">
           <span aria-hidden>🏦</span>给 {order.to_name}
         </div>
         <div className="text-lg font-semibold text-foreground">
@@ -125,7 +125,7 @@ function OrderRow({
               />
             </div>
             <Button
-              className="mt-5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+              className="mt-5 rounded-lg bg-gold text-white hover:bg-[#b89438] disabled:opacity-50"
               disabled={!payReady}
               type="submit"
             >
@@ -222,22 +222,26 @@ export default function PendingTransfersPage() {
     [load, token]
   );
 
-  const pendingCount =
-    orders?.filter((o) => o.status === "pending_confirm").length ?? 0;
+  // 账单细分:待确认(悬空需输密码)与延时类(定时未到期,到期自动转待确认)
+  // 两类单分区块展示,不再混排——延时单可能堆很多笔,混排会淹掉要办的急事
+  const pendingOrders =
+    orders?.filter((o) => o.status === "pending_confirm") ?? [];
+  const scheduledOrders = orders?.filter((o) => o.status === "scheduled") ?? [];
 
   return (
     <>
       <h1 className="text-2xl font-semibold tracking-tight">待确认转账</h1>
       <p className="text-sm text-muted-foreground">
-        {user?.nickname ? `${user.nickname},这里` : "这里"}是你名下悬空待确认的
-        转账单——确认需输入支付密码,与对话中的确认卡同一套安全规则
+        {user?.nickname ? `${user.nickname},这里` : "这里"}是你名下的转账单,
+        分「待确认」与「延时(定时)」两类——待确认需输入支付密码,与对话中的
+        确认卡同一套安全规则;延时单到期后会自动转为待确认
       </p>
 
       <div className="mt-6 flex flex-col gap-4">
         {!ready || orders === null ? (
           <p className="text-sm text-muted-foreground">加载中…</p>
         ) : token ? (
-          orders.length === 0 ? (
+          pendingOrders.length + scheduledOrders.length === 0 ? (
             <div className="rounded-xl border border-border/50 bg-card p-4 text-sm text-muted-foreground">
               {Object.keys(results).length > 0
                 ? "全部处理完毕,没有待确认的转账了 ✅"
@@ -245,20 +249,47 @@ export default function PendingTransfersPage() {
             </div>
           ) : (
             <>
-              <p className="text-[13px] text-muted-foreground">
-                待确认 {pendingCount} 笔
-                {orders.length > pendingCount
-                  ? ` · 定时 ${orders.length - pendingCount} 笔`
-                  : ""}
-              </p>
-              {orders.map((o) => (
-                <OrderRow
-                  key={o.order_id}
-                  onConfirm={handleConfirm}
-                  order={o}
-                  result={results[o.order_id] ?? null}
-                />
-              ))}
+              {pendingOrders.length > 0 ? (
+                <section aria-label="待确认转账">
+                  <h2 className="mb-2 flex items-center gap-2 text-[15px] font-semibold text-gold-ink dark:text-gold">
+                    <span aria-hidden>⏳</span>待确认转账
+                    <span className="text-[13px] font-normal text-muted-foreground">
+                      {pendingOrders.length} 笔 · 需输支付密码执行
+                    </span>
+                  </h2>
+                  <div className="flex flex-col gap-4">
+                    {pendingOrders.map((o) => (
+                      <OrderRow
+                        key={o.order_id}
+                        onConfirm={handleConfirm}
+                        order={o}
+                        result={results[o.order_id] ?? null}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {scheduledOrders.length > 0 ? (
+                <section aria-label="延时转账">
+                  <h2 className="mb-2 flex items-center gap-2 text-[15px] font-semibold text-foreground">
+                    <span aria-hidden>🗓️</span>延时转账(定时)
+                    <span className="text-[13px] font-normal text-muted-foreground">
+                      {scheduledOrders.length} 笔 ·
+                      到期自动转待确认,确认前不扣款
+                    </span>
+                  </h2>
+                  <div className="flex flex-col gap-4">
+                    {scheduledOrders.map((o) => (
+                      <OrderRow
+                        key={o.order_id}
+                        onConfirm={handleConfirm}
+                        order={o}
+                        result={results[o.order_id] ?? null}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ) : null}
             </>
           )
         ) : (

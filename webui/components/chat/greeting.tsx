@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { ShieldCheckIcon } from "lucide-react";
 
 export const Greeting = () => (
   <div className="flex flex-col items-center px-4" key="overview">
@@ -16,7 +17,16 @@ export const Greeting = () => (
       initial={{ opacity: 0, y: 10 }}
       transition={{ delay: 0.5, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
     >
-      转账、定时转账、AA 收款,一句话搞定 —— 动钱前都会先请你确认。
-    </motion.div>
-  </div>
+        转账、定时转账、AA 收款,一句话搞定 —— 动钱前都会先请你确认。
+      </motion.div>
+      <motion.div
+        animate={{ opacity: 1, y: 0 }}
+        className="mt-5 flex items-center gap-1.5 rounded-full border border-gold/30 bg-gold-bg px-3 py-1 text-[12px] text-gold-ink"
+        initial={{ opacity: 0, y: 10 }}
+        transition={{ delay: 0.65, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+      >
+        <ShieldCheckIcon className="size-3.5" />
+        <span>全程加密 · 动钱需二次确认支付密码</span>
+      </motion.div>
+    </div>
 );

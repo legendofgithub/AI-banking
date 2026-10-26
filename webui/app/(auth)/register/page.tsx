@@ -421,7 +421,7 @@ export default function RegisterPage() {
         ) : null}
 
         <Button
-          className="rounded-lg bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+          className="rounded-lg bg-ink text-white hover:bg-ink-2 disabled:opacity-50"
           disabled={loading}
           type="submit"
         >

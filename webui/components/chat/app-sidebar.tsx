@@ -271,7 +271,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                 <SidebarMenuButton
                   asChild
                   className="size-8 !px-0 items-center justify-center group-data-[collapsible=icon]:group-hover/logo:opacity-0"
-                  tooltip="Chatbot"
+                  tooltip="AI 银行助手"
                 >
                   <Link href="/" onClick={closeMobile}>
                     <MessageSquareIcon className="size-4 text-sidebar-foreground/50" />
@@ -309,7 +309,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                       tooltip="New Chat"
                     >
                       <PenSquareIcon className="size-4" />
-                      <span className="font-medium">New chat</span>
+                      <span className="font-medium">新对话</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
@@ -318,7 +318,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                     <SidebarMenuButton
                       className="rounded-lg text-sidebar-foreground/40 transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive"
                       onClick={handleShowDeleteAllDialog}
-                      tooltip="Delete All Chats"
+                      tooltip="清空所有对话"
                     >
                       <TrashIcon className="size-4" />
                       <span className="text-[13px]">Delete all</span>

@@ -121,7 +121,7 @@ export async function POST(request: Request) {
     } else if (message?.role === "user") {
       await saveChat({
         id,
-        title: "New chat",
+        title: "新对话",
         userId: session.user.id,
         visibility: selectedVisibilityType,
       });

@@ -198,7 +198,7 @@ export function PendingTransferBall({
       >
         <div
           className={cn(
-            "flex items-center justify-center rounded-full border border-amber-300/80 shadow-[0_6px_20px_rgba(180,83,9,0.45)]",
+            "flex items-center justify-center rounded-full border border-gold/80 shadow-[0_6px_20px_rgba(166,124,46,0.45)]",
             landing && "pending-ball-land",
             dragging ? "cursor-grabbing" : "cursor-grab"
           )}
@@ -234,17 +234,17 @@ export function PendingTransferBall({
       {bubbleOpen && !sheetOpen ? (
         <div
           className={cn(
-            "fixed z-50 w-56 rounded-2xl border border-amber-300/80 bg-gradient-to-br from-amber-50 to-yellow-50 p-3 shadow-[var(--shadow-float)] dark:border-amber-500/50 dark:from-amber-950/60 dark:to-yellow-950/40",
+            "fixed z-50 w-56 rounded-2xl border border-gold/80 bg-gradient-to-br bg-gold-bg p-3 shadow-[var(--shadow-float)] dark:border-gold/50 dark:bg-gold-card-dark",
             atEdge && (left ? "left-4" : "right-4")
           )}
           data-testid="pending-bubble"
           style={{ top: clampY(center.y - 60) }}
         >
-          <div className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+          <div className="text-[13px] font-semibold text-gold-ink dark:text-gold">
             {nickname ? `${nickname},` : ""}你有 {pending.length} 笔转账待确认
           </div>
           <Button
-            className="mt-2 h-8 w-full bg-amber-500 text-xs text-white hover:bg-amber-600"
+            className="mt-2 h-8 w-full bg-gold text-xs text-white hover:bg-[#b89438]"
             data-testid="pending-bubble-detail"
             onClick={openSheet}
             size="sm"
@@ -257,11 +257,11 @@ export function PendingTransferBall({
       {/* ---- 屏幕正中央确认卡(左上角朝右箭头 = 收回为悬浮球) ---- */}
       <Dialog onOpenChange={setSheetOpen} open={sheetOpen}>
         <DialogContent
-          className="max-h-[70dvh] gap-0 rounded-2xl border border-amber-300/70 bg-gradient-to-b from-amber-50 to-yellow-50 p-0 ring-amber-300/40 dark:border-amber-500/40 dark:from-amber-950/60 dark:to-yellow-950/40"
+          className="max-h-[70dvh] gap-0 rounded-2xl border border-gold/70 bg-gradient-to-b bg-gold-bg p-0 ring-gold/40 dark:border-gold/40 dark:bg-gold-card-dark"
           data-testid="pending-sheet"
         >
           <DialogHeader className="px-5 pt-4 pb-1">
-            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-amber-800 dark:text-amber-300">
+            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-gold-ink dark:text-gold">
               <span aria-hidden>⚠️</span>
               待确认转账 · {pending.length} 笔
             </DialogTitle>
@@ -270,7 +270,7 @@ export function PendingTransferBall({
             <div className="flex flex-col gap-1.5">
               {pending.slice(0, 5).map((o) => (
                 <div
-                  className="flex items-center justify-between gap-3 rounded-lg bg-white/70 px-2.5 py-1.5 text-[13px] dark:bg-amber-900/30"
+                  className="flex items-center justify-between gap-3 rounded-lg bg-white/70 px-2.5 py-1.5 text-[13px] dark:bg-gold-card-dark"
                   key={o.order_id}
                 >
                   <span className="min-w-0 truncate text-foreground">
@@ -293,13 +293,13 @@ export function PendingTransferBall({
                 </div>
               ) : null}
             </div>
-            <div className="mt-2 text-[11px] text-amber-700/80 dark:text-amber-300/80">
+            <div className="mt-2 text-[11px] text-gold-ink/80 dark:text-gold/80">
               动钱等你亲自确认——需输入支付密码,此提醒不可关闭
             </div>
           </div>
           <div className="px-5 pt-1 pb-5">
             <Button
-              className="h-10 w-full bg-amber-500 font-medium text-white hover:bg-amber-600"
+              className="h-10 w-full bg-gold font-medium text-white hover:bg-[#b89438]"
               data-testid="pending-sheet-go"
               onClick={goConfirm}
             >
@@ -309,7 +309,7 @@ export function PendingTransferBall({
           {/* 左上角朝右小箭头:点击收回为悬浮球 */}
           <button
             aria-label="收起为悬浮球"
-            className="absolute top-3 left-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/70 text-amber-700 transition hover:bg-amber-100 dark:bg-amber-900/50 dark:text-amber-300"
+            className="absolute top-3 left-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/70 text-gold-ink transition hover:bg-gold-bg dark:bg-gold-card-dark dark:text-gold"
             data-testid="pending-sheet-collapse"
             onClick={() => setSheetOpen(false)}
             type="button"

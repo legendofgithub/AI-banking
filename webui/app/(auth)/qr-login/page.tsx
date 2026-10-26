@@ -144,7 +144,7 @@ function QrLoginInner() {
             <div className="flex flex-col gap-2">
               <Link href="/login">
                 <Button
-                  className="w-full rounded-lg bg-amber-500 text-white hover:bg-amber-600"
+                  className="w-full rounded-lg bg-ink text-white hover:bg-ink-2"
                   type="button"
                 >
                   改用账号密码登录

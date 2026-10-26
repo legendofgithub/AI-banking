@@ -131,12 +131,12 @@ export function PersonaDialog() {
       <DialogContent className="max-h-[85vh] w-[92vw] max-w-md overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <SparklesIcon className="size-4 text-amber-500" />
+            <SparklesIcon className="size-4 text-gold" />
             人设
           </DialogTitle>
           <DialogDescription className="text-xs leading-5">
             给 Agent 设定性格、说话方式与温度。只影响语气和详略，
-            <span className="text-amber-600 dark:text-amber-400">
+            <span className="text-gold-ink dark:text-gold">
               不会改变任何事实数字与状态
             </span>
             ；规划时会在思维链与计划卡上标明当前人设。
@@ -159,7 +159,7 @@ export function PersonaDialog() {
                 className={
                   isDefault
                     ? "h-5 px-1.5 text-[10px]"
-                    : "h-5 border-amber-500/40 bg-amber-500/15 px-1.5 text-[10px] text-amber-700 dark:text-amber-300"
+                    : "h-5 border-gold/40 bg-gold/15 px-1.5 text-[10px] text-gold-ink dark:text-gold"
                 }
                 variant="secondary"
               >
@@ -194,7 +194,7 @@ export function PersonaDialog() {
               </div>
               <input
                 aria-label="温度"
-                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted accent-amber-500"
+                className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted accent-gold"
                 data-testid="persona-temperature"
                 max={1}
                 min={0}
@@ -224,7 +224,7 @@ export function PersonaDialog() {
                 恢复默认
               </Button>
               <Button
-                className="h-8 rounded-lg bg-amber-500/90 px-4 text-[13px] text-white hover:bg-amber-500"
+                className="h-8 rounded-lg bg-gold/90 px-4 text-[13px] text-white hover:bg-gold"
                 data-testid="persona-save"
                 disabled={saving}
                 onClick={() => void save(text, temperature)}

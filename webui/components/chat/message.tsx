@@ -17,7 +17,7 @@ import { BankDataPart } from "./bank-parts";
 import { useDataStream } from "./data-stream-provider";
 import { DocumentToolResult } from "./document";
 import { DocumentPreview } from "./document-preview";
-import { SparklesIcon } from "./icons";
+import { Landmark } from "lucide-react";
 import { MessageActions } from "./message-actions";
 import { MessageReasoning } from "./message-reasoning";
 import { PreviewAttachment } from "./preview-attachment";
@@ -219,7 +219,7 @@ const PurePreviewMessage = ({
               <ToolHeader state="output-denied" type="tool-getWeather" />
               <ToolContent>
                 <div className="px-4 py-3 text-muted-foreground text-sm">
-                  Weather lookup was denied.
+                  天气查询已被拒绝。
                 </div>
               </ToolContent>
             </Tool>
@@ -394,8 +394,8 @@ const PurePreviewMessage = ({
       >
         {isAssistant && (
           <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-            <div className="flex size-7 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground ring-1 ring-border/50">
-              <SparklesIcon size={13} />
+            <div className="flex size-7 items-center justify-center rounded-lg bg-ink text-gold ring-1 ring-gold/30">
+              <Landmark size={13} />
             </div>
           </div>
         )}
@@ -419,8 +419,8 @@ export const ThinkingMessage = () => (
   >
     <div className="flex items-start gap-3">
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-        <div className="flex size-7 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground ring-1 ring-border/50">
-          <SparklesIcon size={13} />
+        <div className="flex size-7 items-center justify-center rounded-lg bg-ink text-gold ring-1 ring-gold/30">
+          <Landmark size={13} />
         </div>
       </div>
 

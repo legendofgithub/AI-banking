@@ -53,7 +53,7 @@ try {
   const sessionName = `同步${suffix}`;
   const desktopToken = `桌面暗号${suffix}`;
   const mobileToken = `手机暗号${suffix}`;
-  await page.getByRole("button", { name: /New chat/i }).first().click();
+  await page.getByRole("button", { name: /新对话/i }).first().click();
   const newChatDialog = page.locator('[data-testid="pc-new-chat-dialog"]');
   await newChatDialog.waitFor({ timeout: 10_000 });
   await page.locator('[data-testid="pc-session-name-input"]').fill(sessionName);
@@ -173,7 +173,7 @@ try {
   // ---- T5 电脑端切换/新建会话 → 手机自动跟随 ----
   await page.waitForTimeout(1500);
   const switchedName = `切换${suffix}`;
-  await page.getByRole("button", { name: /New chat/i }).first().click();
+  await page.getByRole("button", { name: /新对话/i }).first().click();
   await newChatDialog.waitFor({ timeout: 10_000 });
   await page.locator('[data-testid="pc-session-name-input"]').fill(switchedName);
   await page.locator('[data-testid="pc-session-create-button"]').click();
