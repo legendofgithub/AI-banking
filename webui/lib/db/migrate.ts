@@ -1,33 +1,28 @@
 import { config } from "dotenv";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
-import postgres from "postgres";
 
 config({
   path: ".env.local",
 });
 
-const runMigrate = async () => {
-  if (!process.env.POSTGRES_URL) {
-    console.log("POSTGRES_URL not defined, skipping migrations");
-    process.exit(0);
-  }
+/*
+ * 本地存储初始化（原 Postgres 迁移脚本的替代）。
+ * 库文件与建表语句由 client.ts 在首次连接时幂等创建，这里负责触发一次、做一次探针查询并打印落点，
+ * 供 `pnpm build` / `pnpm db:migrate` 复用同一入口。
+ */
+const runInit = async () => {
+  const [{ db, resolveDbPath }, { chat }] = await Promise.all([
+    import("./client"),
+    import("./schema"),
+  ]);
 
-  const connection = postgres(process.env.POSTGRES_URL, { max: 1 });
-  const db = drizzle(connection);
+  // 一次真实查询，确认表结构就绪；失败就在构建阶段暴露，而不是等到用户点开页面
+  const rows = await db.select({ id: chat.id }).from(chat).limit(1);
 
-  console.log("Running migrations...");
-
-  const start = Date.now();
-  await migrate(db, { migrationsFolder: "./lib/db/migrations" });
-  const end = Date.now();
-
-  console.log("Migrations completed in", end - start, "ms");
-  process.exit(0);
+  console.log(`Local sqlite ready at ${resolveDbPath()} (rows=${rows.length})`);
 };
 
-runMigrate().catch((err) => {
-  console.error("Migration failed");
-  console.error(err);
+runInit().catch((error) => {
+  console.error("Local sqlite init failed");
+  console.error(error);
   process.exit(1);
 });

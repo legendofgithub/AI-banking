@@ -12,11 +12,10 @@ import {
   lt,
   type SQL,
 } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
 import type { ArtifactKind } from "@/components/chat/artifact";
 import { ChatbotError } from "../errors";
 import { generateUUID } from "../utils";
+import { db } from "./client";
 import {
   type Chat,
   chat,
@@ -32,8 +31,24 @@ import {
 } from "./schema";
 import { generateHashedPassword } from "./utils";
 
-const client = postgres(process.env.POSTGRES_URL ?? "");
-const db = drizzle(client);
+/*
+ * 本地 SQLite 开启了外键约束，而访客身份（guest-<时间戳>）只存在于 JWT、不落 User 表，
+ * 直接写 Chat/Document 会撞外键。这里幂等补一条占位用户，保证访客也能正常落库。
+ */
+async function ensureLocalUser(userId: string) {
+  const [existing] = await db
+    .select({ id: user.id })
+    .from(user)
+    .where(eq(user.id, userId))
+    .limit(1);
+  if (existing) {
+    return;
+  }
+  await db
+    .insert(user)
+    .values({ email: `${userId}@local`, id: userId })
+    .onConflictDoNothing();
+}
 
 export async function getUser(email: string): Promise<User[]> {
   try {
@@ -81,6 +96,7 @@ export async function saveChat({
   visibility: "private" | "public";
 }) {
   try {
+    await ensureLocalUser(userId);
     return await db.insert(chat).values({
       createdAt: new Date(),
       id,
@@ -320,6 +336,7 @@ export async function saveDocument({
   userId: string;
 }) {
   try {
+    await ensureLocalUser(userId);
     return await db
       .insert(document)
       .values({
