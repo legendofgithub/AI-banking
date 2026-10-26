@@ -442,8 +442,15 @@ LINKAGE_EXTRACT_SYS = """你是跨场景联动计划抽取器(生日/纪念日�
 规则:
 - 用户说"帮我准备生日/纪念日"而没点名人时,event_title 填"生日";
 - 中文数字换算成阿拉伯数字("一千"→"1000");金额只允许纯数字(可带小数点);
-- "10月1日/下周五"等相对日期换算成具体 YYYY-MM-DD(以今天为基准);
+- "10月1日/下周五/后天"等相对日期必须结合上下文【今天】换算成具体 YYYY-MM-DD,
+  仅当上下文没有【今天】锚点时才允许填 null(绝不凭空猜日期);
 - days_before 未说明时填 2;merchant 未说明填 null(由系统默认);
+- actions 的 what 取口语里的**事项名词**(门票/鲜花/快速通行/酒店),不要整句;
+- 同类多笔合并成一条总额:"门票一个人200,三个人去共花600元"
+  → {"what":"门票","amount_yuan":"600"};
+- "走5个快速通道,共花1000元" → {"what":"快速通道","amount_yuan":"1000"};
+- 用户一次列举多样东西时每样一条;金额必须落在 amount_yuan(纯数字),
+  绝不能拼进 what 或带"元"字;
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
 
 BILL_EXTRACT_SYS = """你是账单分析抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
@@ -902,14 +909,63 @@ def _contact_confirm_question(draft: dict) -> str:
 
 # ---------------------------------------------------------------- 联动文案/视图(确定性)
 
+# actions 容错规整:字符串条目 "门票 600"/"门票:600元" → {what, amount_yuan}
+_ACTION_STR_RE = re.compile(
+    r"^\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 ]{0,11}?)"
+    r"\s*[:：,，]?\s*(\d+(?:\.\d+)?)\s*[元块]?\s*$")
+# what 里混进金额 "门票600(元)" → 拆开(供 dict 分支复用)
+_ACTION_MIX_RE = re.compile(
+    r"^\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 ]*?)"
+    r"\s*(\d+(?:\.\d+)?)\s*[元块]?\s*$")
+
+
+def _normalize_linkage_actions(acts: Any) -> list[dict] | None:
+    """LLM 输出的 actions 容错规整(2026-10-26 实测兜底:口语化列举
+    "门票600、快速通道1000"曾被抽成歪形,导致同一缺槽问题反复追问)。
+
+    覆盖三种实测歪形:① 字符串条目;② dict 金额带单位("600元");③ 金额
+    混进 what("门票600")。规整不出任何可用条目返回 None——交由缺槽反问,
+    绝不硬造。纯函数,可单测。
+    """
+    if not isinstance(acts, list) or not acts:
+        return None
+    out: list[dict] = []
+    for a in acts:
+        if isinstance(a, str):
+            m = _ACTION_STR_RE.match(a) or _ACTION_MIX_RE.match(a)
+            if m:
+                out.append({"what": m.group(1).strip(), "merchant": None,
+                            "days_before": 2, "amount_yuan": m.group(2)})
+            continue
+        if not (isinstance(a, dict) and str(a.get("what") or "").strip()):
+            continue
+        what = str(a["what"]).strip()
+        amount = a.get("amount_yuan")
+        if amount is None or str(amount).strip() == "":
+            m = _ACTION_MIX_RE.match(what)  # 金额混进 what
+            if m:
+                what, amount = m.group(1).strip(), m.group(2)
+        amount_clean = re.sub(r"[^\d.]", "", str(amount)) if amount is not None else ""
+        try:
+            days = int(a.get("days_before") or 2)
+        except (TypeError, ValueError):
+            days = 2
+        if what and _cents(amount_clean) is not None:
+            out.append({"what": what[:20], "merchant": a.get("merchant") or None,
+                        "days_before": days, "amount_yuan": amount_clean})
+    return out or None
+
+
 def _linkage_slot_question(missing: list[str]) -> str:
-    # 联动缺槽反问:预算 → 日期 → 动作(与任务书文案顺序一致)
+    # 联动缺槽反问:预算 → 日期 → 动作(与任务书文案顺序一致);
+    # 动作示例兼顾生日(鲜花/蛋糕)与出行(门票/快速通行)两类场景
     if "budget_yuan" in missing:
         return "这次准备预留多少预算?请用数字说明(如:1000)。"
     if "event_date" in missing:
         return "是哪一天?请说明具体日期(如:10月1日 或 2026-10-01)。"
     if "actions" in missing:
-        return "想准备些什么?请说明每样东西和金额(如:鲜花 300,蛋糕 200)。"
+        return ("想准备些什么?请说明每样东西和金额"
+                "(如:鲜花 300、蛋糕 200,或:门票 600、快速通行 1000)。")
     return "请补充事件日期、预算和要准备的东西。"
 
 
@@ -2345,6 +2401,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         for key in ("event_title", "event_date", "budget_yuan", "actions"):
             if parsed.get(key) is not None:
                 draft[key] = parsed[key]
+        # actions 容错规整:歪形(字符串条目/金额带单位/what 混金额)救回来,
+        # 救不回置 None → 走缺槽反问,不硬造
+        if draft.get("actions") is not None:
+            draft["actions"] = _normalize_linkage_actions(draft["actions"])
 
         # 确定性校验(铁律 1):日期格式/预算金额/动作数量与金额全由代码判
         missing: list[str] = []
@@ -3410,6 +3470,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         for key in ("event_title", "event_date", "budget_yuan", "actions"):
             if parsed.get(key) is not None:
                 slots[key] = parsed[key]
+        # actions 容错规整(与 l_extract 同款):歪形救回,救不回置 None
+        if slots.get("actions") is not None:
+            slots["actions"] = _normalize_linkage_actions(slots["actions"])
 
         # 确定性赋值(铁律 1:意图判断/约束提取/动作规范化全在代码)
         goal = str(state.get("turn_text") or "")

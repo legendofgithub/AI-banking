@@ -2452,3 +2452,59 @@ def test_plan_word_never_hijacks_transfer(tmp_path):
             assert payload["order"]["amount_yuan"] == "500.00"
 
     run(scenario())
+# ----------------------------- 联动动作容错规整(2026-10-26 迪士尼实测反馈)
+
+def test_normalize_linkage_actions_shapes():
+    """规整器覆盖三种实测歪形;救不回返回 None(交缺槽反问,不硬造)。"""
+    from agent.graph import _normalize_linkage_actions as norm
+    # ① 字符串条目
+    got = norm(["门票 600", "快速通道:1000元"])
+    assert [(a["what"], a["amount_yuan"]) for a in got] ==         [("门票", "600"), ("快速通道", "1000")]
+    # ② dict 金额带单位
+    got = norm([{"what": "门票", "amount_yuan": "600元", "days_before": 1}])
+    assert got[0]["amount_yuan"] == "600" and got[0]["days_before"] == 1
+    # ③ 金额混进 what
+    got = norm([{"what": "门票600"}])
+    assert got[0]["what"] == "门票" and got[0]["amount_yuan"] == "600"
+    # 救不回:非列表 / 空列表 / 全垃圾
+    assert norm("门票600") is None
+    assert norm([]) is None
+    assert norm(["到时候再定"]) is None
+    # 规整后的形状能过 l_extract 的确定性校验(金额可用 _cents 换算)
+    for a in norm(["门票 600"]):
+        assert a["merchant"] is None and a["days_before"] == 2
+
+
+def test_linkage_malformed_actions_no_reask(tmp_path):
+    """端到端:抽取 LLM 输出歪形动作(金额混 what/带单位)时,规整器救回,
+    一步到闸门(不再重复追问"想准备些什么")。"""
+    db = _mk_linkage_db(tmp_path)
+    event_day = (date.today() + timedelta(days=10)).isoformat()
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "chat"}',   # "计划"关键词改写兜底进联动
+            json.dumps({"event_title": "上海迪士尼之行", "event_date": event_day,
+                        "budget_yuan": "10000",
+                        "actions": [{"what": "门票600"},
+                                    {"what": "快速通道",
+                                     "amount_yuan": "1000元"}]},
+                       ensure_ascii=False),
+            "预算已预留,联动计划生效。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "kw-disney"}}
+            r1 = await graph.ainvoke({"auth_user_id": 1, "messages": [
+                HumanMessage("帮我做个计划,10天后去上海迪士尼,"
+                             "门票600,快速通道1000")]}, cfg)
+            payload = _interrupt_payload(r1)
+            # 直接到闸门:没有 ask_slot 反问
+            assert payload["type"] == "confirm_linkage"
+            plan = payload["plan"]
+            whts = [a["what"] for a in plan["actions"]]
+            assert "门票" in whts and "快速通道" in whts
+            amounts = {a["what"]: a["amount_yuan"] for a in plan["actions"]}
+            assert amounts["门票"] == "600.00"
+            assert amounts["快速通道"] == "1000.00"
+            assert plan["budget_yuan"] == "10000.00"
+
+    run(scenario())

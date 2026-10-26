@@ -1326,6 +1326,14 @@ const SLOT_LABELS: Record<string, string> = {
   holding: "赎回的持仓",
   keyword: "产品关键词",
   limits: "新限额",
+  // 2026-10-26 补漏:联动预算/AA 份额与参与人/定时时刻/总金额/商户此前
+  // 漏登记,缺槽提示会把 budget_yuan 这类英文键裸露给用户(实测截图)
+  budget_yuan: "预算",
+  merchant: "商户",
+  participants: "参与人",
+  scheduled_at: "定时时刻",
+  shares: "分摊份额",
+  total_yuan: "总金额",
   members: "参与人",
   name: "姓名",
   note: "备注",
