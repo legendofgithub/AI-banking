@@ -44,6 +44,10 @@ gui-test-*/
 .zcode/
 .workbuddy/
 
+# ===== 演示材料构建中间产物(.cache 为渲染图片缓存 / .slidep 为生成器工作目录,均可重建) =====
+演示材料/**/.cache/
+.slidep/
+
 # ===== 系统 =====
 Thumbs.db
 .DS_Store
