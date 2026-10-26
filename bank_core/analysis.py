@@ -113,6 +113,100 @@ class AnalysisService:
               {"income": result["income_yuan"], "expense": result["expense_yuan"]})
         return result
 
+    def annual_report(self, year: int | str, as_of: str | None = None) -> dict:
+        """年度账单报告:全年收支总览 + 逐月走势 + 分类/商户 Top + 同比。
+
+        year: 2026 或 "2026";as_of 截止日(默认今天;当年报告只统计到当天,
+        往年按自然年 12-31 收口)。
+        口径与月报一致:排除 subscribe/redeem 与"收款方是本人账户"的内部划转
+        ——资产调配不是收支。所有数字均为原始流水汇总,本函数不做任何推断。
+        """
+        y = int(str(year).strip()[:4])
+        ref = (as_of or now_iso())[:10]
+        start = f"{y}-01-01"
+        full_end = f"{y + 1}-01-01"  # 次年首日(半开区间上界)
+        current = f"{y:04d}" == ref[:4]
+        if current:
+            end = (datetime.strptime(ref, "%Y-%m-%d")
+                   + timedelta(days=1)).strftime("%Y-%m-%d")
+            end_inclusive = ref
+            months_covered = int(ref[5:7])
+        else:
+            end = full_end
+            end_inclusive = f"{y}-12-31"
+            months_covered = 12 if y < int(ref[:4]) else 0
+
+        rows = self.conn.execute(
+            """SELECT substr(ts,1,7) m, direction d, SUM(amount_cents) s
+               FROM transactions
+               WHERE account_id IN (SELECT id FROM accounts WHERE user_id=:uid)
+                 AND ts>=:s AND ts<:e"""
+            + _INTERNAL_FILTER + """
+               GROUP BY m, d""",
+            {"uid": self.user_id, "s": start, "e": end}).fetchall()
+        by_month: dict[str, dict[str, int]] = defaultdict(lambda: {"in": 0, "out": 0})
+        for r in rows:
+            by_month[r["m"]][r["d"]] += r["s"]
+
+        monthly: list[dict] = []
+        for mon in range(1, max(months_covered, 0) + 1):
+            key = f"{y:04d}-{mon:02d}"
+            inc, exp = by_month[key]["in"], by_month[key]["out"]
+            monthly.append({"month": key, "income_yuan": cents_to_yuan(inc),
+                            "expense_yuan": cents_to_yuan(exp),
+                            "net_yuan": cents_to_yuan(inc - exp)})
+        income = sum(by_month[k]["in"] for k in by_month)
+        expense = sum(by_month[k]["out"] for k in by_month)
+
+        # 同比:上年同口径年度合计(无数据 → None,前端不显示)
+        prev_start, prev_end = f"{y - 1}-01-01", f"{y}-01-01"
+        prow = self.conn.execute(
+            """SELECT direction d, COALESCE(SUM(amount_cents),0) s
+               FROM transactions
+               WHERE account_id IN (SELECT id FROM accounts WHERE user_id=:uid)
+                 AND ts>=:s AND ts<:e"""
+            + _INTERNAL_FILTER + """
+               GROUP BY direction""",
+            {"uid": self.user_id, "s": prev_start, "e": prev_end}).fetchall()
+        prev = {r["d"]: r["s"] for r in prow}
+
+        def _yoy(cur: int, before: int):
+            if not before:
+                return None
+            return round((cur - before) * 100 / before, 1)
+
+        exp_months = [m for m in monthly if m["expense_yuan"]]
+        max_month = max(exp_months, key=lambda m: float(m["expense_yuan"]),
+                        default=None) if exp_months else None
+        min_month = min(exp_months, key=lambda m: float(m["expense_yuan"]),
+                        default=None) if exp_months else None
+        cats = self.category_summary(start, end, "out")
+        merchants = self.top_merchants(start, end, 8)
+        result = {
+            "year": y,
+            "start": start, "end": end_inclusive,
+            "months_covered": len(monthly),
+            "income_yuan": cents_to_yuan(income),
+            "expense_yuan": cents_to_yuan(expense),
+            "net_yuan": cents_to_yuan(income - expense),
+            "savings_rate_pct": round((income - expense) * 100 / income, 1)
+            if income else None,
+            "avg_monthly_expense_yuan": cents_to_yuan(round(expense / len(monthly)))
+            if monthly else "0.00",
+            "max_month": max_month and {"month": max_month["month"],
+                                        "expense_yuan": max_month["expense_yuan"]},
+            "min_month": min_month and {"month": min_month["month"],
+                                        "expense_yuan": min_month["expense_yuan"]},
+            "yoy_income_pct": _yoy(income, prev.get("in", 0)),
+            "yoy_expense_pct": _yoy(expense, prev.get("out", 0)),
+            "monthly": monthly,
+            "top_categories": cats["items"][:8],
+            "top_merchants": merchants,
+        }
+        audit(self.conn, "annual_report", {"year": y, "as_of": end_inclusive},
+              {"income": result["income_yuan"], "expense": result["expense_yuan"]})
+        return result
+
     # ------------------------------------------------------------- 异常检测
 
     def detect_anomalies(self, days: int = 90) -> list[dict]:

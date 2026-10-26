@@ -398,6 +398,50 @@ def test_monthly_report_math(seeded_db):
         yuan(rep["net_yuan"]), abs=0.01)
 
 
+def test_annual_report_math(seeded_db):
+    """年度报告:逐月走势之和 == 全年合计;覆盖率/月均/极值月自洽;
+    往年按自然年收口(12 个月刻度),分类与商户 Top 非空。"""
+    from datetime import date
+
+    conn = seeded_db
+    svc = AnalysisService(conn, 1)
+    cur = date.today().year
+    rep = svc.annual_report(cur)
+    yuan = lambda s: float(s)  # noqa: E731
+    # 收支自洽 + 储蓄率口径
+    assert yuan(rep["income_yuan"]) - yuan(rep["expense_yuan"]) == pytest.approx(
+        yuan(rep["net_yuan"]), abs=0.01)
+    if yuan(rep["income_yuan"]) > 0:
+        assert rep["savings_rate_pct"] == pytest.approx(
+            yuan(rep["net_yuan"]) * 100 / yuan(rep["income_yuan"]), abs=0.1)
+    # 覆盖到当月:刻度数 == 当前月份,逐月之和 == 全年合计
+    assert rep["months_covered"] == len(rep["monthly"]) == date.today().month
+    assert sum(yuan(m["income_yuan"]) for m in rep["monthly"]) == pytest.approx(
+        yuan(rep["income_yuan"]), abs=0.01)
+    assert sum(yuan(m["expense_yuan"]) for m in rep["monthly"]) == pytest.approx(
+        yuan(rep["expense_yuan"]), abs=0.01)
+    assert rep["monthly"][0]["month"] == f"{cur}-01"
+    # 月均支出 = 合计 / 覆盖月数
+    assert yuan(rep["avg_monthly_expense_yuan"]) == pytest.approx(
+        yuan(rep["expense_yuan"]) / len(rep["monthly"]), abs=0.01)
+    # 极值月来自逐月数据本身
+    max_month = max(rep["monthly"], key=lambda m: yuan(m["expense_yuan"]))
+    assert rep["max_month"]["month"] == max_month["month"]
+    assert rep["top_categories"] and rep["top_merchants"]
+    assert sum(c["pct"] for c in rep["top_categories"]) <= 100.1
+
+    # 往年:12 个月刻度,as_of 按自然年末收口
+    past = svc.annual_report(cur - 1)
+    assert past["months_covered"] == 12 and len(past["monthly"]) == 12
+    assert past["end"] == f"{cur - 1}-12-31"
+    assert past["start"] == f"{cur - 1}-01-01"
+
+    # 未来年份:空报告不炸(0 个月、空列表、储蓄率 None)
+    fut = svc.annual_report(cur + 1)
+    assert fut["months_covered"] == 0 and fut["monthly"] == []
+    assert fut["savings_rate_pct"] is None
+
+
 # ----------------------------------------------------------------- 事件联动
 
 def test_events_and_linkage(seeded_db):

@@ -26,9 +26,10 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# bank_core 实际注册 44 个 @mcp.tool(与 bank_core.tool_meta.REGISTRY 逐一对账,
+# bank_core 实际注册 45 个 @mcp.tool(与 bank_core.tool_meta.REGISTRY 逐一对账,
 # 漂移由 tests/test_tool_meta.py 在全量测试里拦下)
-EXPECTED_TOOL_COUNT = 44
+# 44 → 45:2026-10-26 新增 annual_report(年度账单报告,纯只读)
+EXPECTED_TOOL_COUNT = 45
 
 
 def _stdio_config(db_path: str, user_id: int = 1) -> dict[str, Any]:

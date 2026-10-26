@@ -34,6 +34,8 @@ scripts_eval_*.stderr
 *.log
 logs/
 .tmp_notes/
+# 调试残留:调接口时把 body/sse/登录 token 写到仓库根,一旦 add -A 即泄露凭证
+.tmp_*
 .playwright-mcp/
 nul
 

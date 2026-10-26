@@ -184,6 +184,15 @@ def monthly_report(month: str) -> dict:
 
 
 @mcp.tool
+def annual_report(year: int = 0, as_of: str = "") -> dict:
+    """[READ] 年度账单报告（year 缺省当年）：全年收支/储蓄率/逐月走势/
+    分类与商户 Top/同比。as_of 为截止日（'YYYY-MM-DD'，缺省今天）。"""
+    from datetime import date as _date
+    return _analysis.annual_report(int(year) or _date.today().year,
+                                   as_of or None)
+
+
+@mcp.tool
 def detect_anomalies(days: int = 90) -> list[dict]:
     """[READ] 异常交易检测（确定性规则）：重复扣款/大额离群/凌晨大额。
     返回规则名+证据+建议，请原样转述证据，不要自行编造数字。"""
