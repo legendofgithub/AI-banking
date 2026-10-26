@@ -118,16 +118,19 @@ export default function BankHomePage() {
         <div className="flex size-8 items-center justify-center rounded-lg bg-white/15 text-white">
           <Landmark className="size-4" />
         </div>
-        <div className="flex flex-col">
-          <span className="text-[14px] font-semibold leading-tight text-white">
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-[14px] font-semibold leading-tight text-white">
             {data?.nickname ? `${data.nickname}，欢迎回来` : "AI 银行助手"}
           </span>
-          <span className="text-[11px] leading-tight text-white/70">
-            你的银行数字员工 · AI 处理常规，人负责例外
+          <span className="truncate text-[11px] leading-tight text-white/70">
+            <span className="sm:hidden">你的银行数字员工</span>
+            <span className="hidden sm:inline">
+              你的银行数字员工 · AI 处理常规，人负责例外
+            </span>
           </span>
         </div>
         <Link
-          className="ml-auto inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/25 bg-white/10 px-3 text-[12px] font-medium text-white/90 transition-colors hover:bg-white/20 hover:text-white"
+          className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/25 bg-white/10 px-3 text-[12px] font-medium text-white/90 transition-colors hover:bg-white/20 hover:text-white"
           href="/chat"
         >
           <SparklesIcon className="size-3.5" />
