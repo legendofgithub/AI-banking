@@ -198,7 +198,7 @@ export function PendingTransferBall({
       >
         <div
           className={cn(
-            "flex items-center justify-center rounded-full border border-gold/80 shadow-[0_6px_20px_rgba(166,124,46,0.45)]",
+            "flex items-center justify-center rounded-full border border-gold/80 shadow-[0_6px_20px_rgba(30,82,165,0.45)]",
             landing && "pending-ball-land",
             dragging ? "cursor-grabbing" : "cursor-grab"
           )}
@@ -244,7 +244,7 @@ export function PendingTransferBall({
             {nickname ? `${nickname},` : ""}你有 {pending.length} 笔转账待确认
           </div>
           <Button
-            className="mt-2 h-8 w-full bg-gold text-xs text-white hover:bg-[#b89438]"
+            className="mt-2 h-8 w-full bg-gold text-xs text-white hover:bg-[#3352b8]"
             data-testid="pending-bubble-detail"
             onClick={openSheet}
             size="sm"
@@ -299,7 +299,7 @@ export function PendingTransferBall({
           </div>
           <div className="px-5 pt-1 pb-5">
             <Button
-              className="h-10 w-full bg-gold font-medium text-white hover:bg-[#b89438]"
+              className="h-10 w-full bg-gold font-medium text-white hover:bg-[#3352b8]"
               data-testid="pending-sheet-go"
               onClick={goConfirm}
             >

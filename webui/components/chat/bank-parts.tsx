@@ -451,7 +451,7 @@ function ConfirmButtons({ payRequired = false }: { payRequired?: boolean }) {
         />
       ) : null}
       <button
-        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#b89438] disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#3352b8] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={disabled || (payRequired && !payReady)}
         onClick={payRequired ? handlePayConfirm : handlePlainConfirm}
         type="button"
@@ -1826,7 +1826,7 @@ function PrecheckCard({ data }: { data: PrecheckView }) {
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
-                className="rounded-lg bg-gold px-3 py-1 text-xs font-medium text-white transition hover:bg-[#b89438] disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-gold px-3 py-1 text-xs font-medium text-white transition hover:bg-[#3352b8] disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={disabled}
                 onClick={make(item, "放行")}
                 type="button"
@@ -1920,7 +1920,7 @@ export function SubscriptionCancelCard({
         value={payPassword}
       />
       <button
-        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#b89438] disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#3352b8] disabled:cursor-not-allowed disabled:opacity-50"
         disabled={!payReady}
         onClick={handleLocalConfirm}
         type="button"

@@ -125,7 +125,7 @@ function OrderRow({
               />
             </div>
             <Button
-              className="mt-5 rounded-lg bg-gold text-white hover:bg-[#b89438] disabled:opacity-50"
+              className="mt-5 rounded-lg bg-gold text-white hover:bg-[#3352b8] disabled:opacity-50"
               disabled={!payReady}
               type="submit"
             >

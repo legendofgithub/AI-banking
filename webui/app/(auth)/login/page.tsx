@@ -178,7 +178,7 @@ export default function LoginPage() {
   return (
     <>
       <div className="mb-1 flex items-center gap-2.5">
-        <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-ink to-ink-2 text-gold ring-1 ring-gold/30">
+        <div className="flex size-10 items-center justify-center rounded-xl bg-gradient-to-br from-ink to-ink-2 text-white ring-1 ring-gold/30">
           <Landmark className="size-5" />
         </div>
         <div className="flex flex-col">
