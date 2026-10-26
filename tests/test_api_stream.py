@@ -1366,3 +1366,42 @@ def test_home_overview_aggregates_readonly(tmp_path):
         # 未登录 401
         r401 = client.get("/api/home")
         assert r401.status_code == 401
+
+
+def test_delete_thread_endpoint(tmp_path):
+    """删会话:目录行/active 一并清掉,重复删 404,非本人 403。"""
+    client, db, tok = _client(tmp_path, ["好的"])
+    with client:
+        h = {"x-bank-token": tok}
+        tid = client.post("/api/threads", headers=h,
+                          json={"title": "待删会话"}).json()["id"]
+        listed = client.get("/api/threads?limit=200", headers=h).json()
+        assert any(c["id"] == tid for c in listed["chats"])
+
+        # 未登录(owner=0)删别人的会话 → 403
+        assert client.delete(f"/api/threads/{tid}").status_code == 403
+
+        d = client.delete(f"/api/threads/{tid}", headers=h)
+        assert d.status_code == 200
+        assert d.json()["deleted"] == tid
+        after = client.get("/api/threads?limit=200", headers=h).json()
+        assert all(c["id"] != tid for c in after["chats"])
+        # 重复删 → 404
+        assert client.delete(f"/api/threads/{tid}", headers=h).status_code == 404
+
+
+def test_delete_all_threads_endpoint(tmp_path):
+    """清空全部会话:只清当前用户的,返回删除条数。"""
+    client, db, tok = _client(tmp_path, ["好的"])
+    with client:
+        h = {"x-bank-token": tok}
+        for title in ("会话一", "会话二"):
+            assert client.post("/api/threads", headers=h,
+                               json={"title": title}).status_code == 200
+        before = client.get("/api/threads?limit=200", headers=h).json()
+        assert len(before["chats"]) >= 2
+        d = client.delete("/api/threads", headers=h)
+        assert d.status_code == 200
+        assert d.json()["deleted"] >= 2
+        after = client.get("/api/threads?limit=200", headers=h).json()
+        assert after["chats"] == []

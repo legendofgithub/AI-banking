@@ -174,18 +174,28 @@ export function AppSidebar({ user }: { user: User | undefined }) {
     setShowDeleteAllDialog(true);
   }, []);
 
-  const handleDeleteAll = useCallback(() => {
+  const handleDeleteAll = useCallback(async () => {
     setShowDeleteAllDialog(false);
-    router.replace("/");
-    mutate(unstable_serialize(getChatHistoryPaginationKey), [], {
-      revalidate: false,
-    });
-
-    fetch(`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/history`, {
-      method: "DELETE",
-    });
-
-    toast.success("All chats deleted");
+    try {
+      const res = await fetch(`${bankAgentBase()}/api/threads`, {
+        headers: bankAuthHeaders(),
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        toast.error(body?.error ?? "清空失败，请稍后重试");
+        return;
+      }
+      router.replace("/");
+      mutate(unstable_serialize(getChatHistoryPaginationKey), [], {
+        revalidate: false,
+      });
+      toast.success("已清空全部会话");
+    } catch {
+      toast.error("清空失败，请检查网络");
+    }
   }, [mutate, router]);
 
   const mobileHeader = isMobile ? (

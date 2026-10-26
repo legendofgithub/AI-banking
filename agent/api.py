@@ -1267,6 +1267,58 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         await app.state.threads.commit()
         return {"id": thread_id, "title": title, "createdAt": now}
 
+    @app.delete("/api/threads/{thread_id}")
+    async def delete_thread(thread_id: str,
+                            x_bank_token: str | None = Header(default=None)):
+        """删除单个会话:目录行 + active_threads + 检查点消息一并清掉。
+
+        归属校验与 GET /api/threads 同口径:登录用户只能删自己的;
+        观光态(无 token)只能删 user_id=0 的观光会话。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        owner = me["user_id"] if me else 0
+        cur = await app.state.threads.execute(
+            "SELECT user_id FROM threads WHERE thread_id=?", (thread_id,))
+        row = await cur.fetchone()
+        if not row:
+            return JSONResponse(status_code=404,
+                                content={"error": "会话不存在"})
+        if int(row[0]) != int(owner):
+            return JSONResponse(status_code=403,
+                                content={"error": "无权删除该会话"})
+        await app.state.threads.execute(
+            "DELETE FROM threads WHERE thread_id=?", (thread_id,))
+        await app.state.threads.execute(
+            "DELETE FROM active_threads WHERE thread_id=?", (thread_id,))
+        await app.state.threads.commit()
+        checkpoint_deleted = True
+        try:  # 检查点库里才是消息本体;删失败不让目录回滚,但如实上报
+            await app.state.saver.adelete_thread(thread_id)
+        except Exception:  # noqa: BLE001
+            checkpoint_deleted = False
+        return {"deleted": thread_id, "checkpointDeleted": checkpoint_deleted}
+
+    @app.delete("/api/threads")
+    async def delete_all_threads(
+            x_bank_token: str | None = Header(default=None)) -> dict:
+        """清空当前用户的全部会话(目录 + active + 检查点)。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        owner = me["user_id"] if me else 0
+        cur = await app.state.threads.execute(
+            "SELECT thread_id FROM threads WHERE user_id=?", (owner,))
+        ids = [str(r[0]) for r in await cur.fetchall()]
+        await app.state.threads.execute(
+            "DELETE FROM threads WHERE user_id=?", (owner,))
+        await app.state.threads.execute(
+            "DELETE FROM active_threads WHERE user_id=?", (owner,))
+        await app.state.threads.commit()
+        for tid in ids:
+            try:
+                await app.state.saver.adelete_thread(tid)
+            except Exception:  # noqa: BLE001 —— 单条失败不拖垮整体清空
+                pass
+        return {"deleted": len(ids)}
+
     @app.get("/api/threads")
     async def threads(limit: int = 100, offset: int = 0, q: str = "",
                       x_bank_token: str | None = Header(default=None)) -> dict:

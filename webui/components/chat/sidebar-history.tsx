@@ -26,6 +26,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import type { Chat } from "@/lib/db/schema";
+import { bankAgentBase, bankAuthHeaders } from "@/hooks/use-bank-auth";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
@@ -170,34 +171,40 @@ export function SidebarHistory({
     { chats: groupedChats.older, label: "更早" },
   ].filter((group) => group.chats.length > 0);
 
-  const handleDelete = useCallback(() => {
+  const handleDelete = useCallback(async () => {
     const chatToDelete = deleteId;
+    if (!chatToDelete) {
+      return;
+    }
     const isCurrentChat = pathname === `/chat/${chatToDelete}`;
 
     setShowDeleteDialog(false);
 
-    if (isCurrentChat) {
-      router.replace("/");
-    }
-
-    mutate((chatHistories) => {
-      if (chatHistories) {
-        return chatHistories.map((chatHistory) => ({
-          ...chatHistory,
-          chats: chatHistory.chats.filter((chat) => chat.id !== chatToDelete),
-        }));
+    // 会话目录在 8800(bank agent),不是 Next 的本地聊天库——必须打对端点,
+    // 否则只是前端乐观移除,刷新后会话又回来(2026-10-26 修复)。
+    try {
+      const res = await fetch(
+        `${bankAgentBase()}/api/threads/${encodeURIComponent(chatToDelete)}`,
+        { headers: bankAuthHeaders(), method: "DELETE" }
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        toast.error(body?.error ?? "删除失败，请稍后重试");
+        return;
       }
-    });
-    if (searchUrl) {
-      globalMutate(searchUrl);
+      if (isCurrentChat) {
+        router.replace("/");
+      }
+      mutate();
+      if (searchUrl) {
+        globalMutate(searchUrl);
+      }
+      toast.success("会话已删除");
+    } catch {
+      toast.error("删除失败，请检查网络");
     }
-
-    fetch(
-      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/chat?id=${chatToDelete}`,
-      { method: "DELETE" }
-    );
-
-    toast.success("Chat deleted");
   }, [deleteId, globalMutate, mutate, pathname, router, searchUrl]);
 
   const handleShowDeleteDialog = useCallback((chatId: string) => {
