@@ -3,7 +3,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
-import { ArrowUpIcon, MicIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, MicIcon, SettingsIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { ModelSelectorLogo } from "@/components/ai-elements/model-selector";
+import { SettingsDropdownButton } from "@/components/chat/sidebar-settings";
 import { useChatModel } from "@/hooks/use-chat-model";
 import { useSpeechInput } from "@/hooks/use-speech-input";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -601,6 +602,16 @@ function PureMultimodalInput({
         />
         <PromptInputFooter className="px-3 pb-1.5">
           <PromptInputTools>
+            {/* 手机端左下角设置入口:与侧栏左下角/门户顶栏同一份菜单(桌面端有侧栏,不重复) */}
+            <div className="md:hidden">
+              <SettingsDropdownButton
+                align="start"
+                aria-label="设置"
+                className="size-7 rounded-lg text-muted-foreground hover:text-foreground"
+              >
+                <SettingsIcon className="size-4" />
+              </SettingsDropdownButton>
+            </div>
             <AttachmentsButton fileInputRef={fileInputRef} status={status} />
             {speech.status !== "unsupported" ? (
               <button

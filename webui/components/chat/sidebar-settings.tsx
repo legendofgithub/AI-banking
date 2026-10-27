@@ -362,13 +362,15 @@ export function SettingsMenu({
   );
 }
 
-/** 独立触发器:门户顶栏/手机聊天顶栏用,菜单从下方弹出、右对齐。 */
+/** 独立触发器:门户顶栏/手机聊天顶栏用,菜单从下方弹出;左下角触发器用 align="start" 向右展开。 */
 export function SettingsDropdownButton({
   "aria-label": ariaLabel = "设置",
+  align = "end",
   children,
   className,
 }: {
   "aria-label"?: string;
+  align?: "start" | "end" | "center";
   children: React.ReactNode;
   className?: string;
 }) {
@@ -385,7 +387,7 @@ export function SettingsDropdownButton({
           {children}
         </Button>
       </DropdownMenuTrigger>
-      <SettingsMenu align="end" side="bottom" />
+      <SettingsMenu align={align} side="bottom" />
     </DropdownMenu>
   );
 }
