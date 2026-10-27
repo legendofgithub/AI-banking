@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">AI Banking</string>
+    <string name="app_name">小小微银行助手</string>
     <string name="setup_title">连接你的银行助手</string>
     <string name="setup_hint">电脑地址,如 http://192.168.1.5:3000</string>
     <string name="setup_note">手机与电脑需连接同一 Wi-Fi。地址在电脑端「手机 App 下载」页可以看到。</string>

@@ -79,7 +79,7 @@ export default function DownloadPage() {
           </div>
           <div>
             <h1 className="text-[19px] font-semibold text-ink dark:text-brand-blue">
-              AI Banking 手机 App
+              小小微银行助手 App
             </h1>
             <p className="text-[12px] text-muted-foreground">
               装到手机上的智能银行助手,数据与电脑端实时联动
