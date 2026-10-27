@@ -77,7 +77,7 @@ function PureMultimodalInput({
 }) {
   const router = useRouter();
   const { setTheme, resolvedTheme } = useTheme();
-  const { openModelSettings } = useChatModel();
+  const { openModelSettings, isLoading: modelsLoading } = useChatModel();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
   const hasAutoFocused = useRef(false);
@@ -112,27 +112,34 @@ function PureMultimodalInput({
   // bank-autosend(今日待办六卡等):预填并立即由 agent 开跑,不要求用户补发送;
   // bank-prefill:只填入输入框,用户过目后自己回车。
   useEffect(() => {
-    const autosend = sessionStorage.getItem("bank-autosend");
     const prefill = sessionStorage.getItem("bank-prefill");
-    sessionStorage.removeItem("bank-autosend");
-    sessionStorage.removeItem("bank-prefill");
-    const text = autosend ?? prefill;
-    if (!text) {
+    if (prefill) {
+      sessionStorage.removeItem("bank-prefill");
+      setInput(prefill);
+    }
+  }, [setInput]);
+
+  useEffect(() => {
+    const autosend = sessionStorage.getItem("bank-autosend");
+    if (!autosend) {
       return;
     }
-    if (autosend) {
-      // 与 submitForm 同口径:压 /chat/<id> 历史栈 + 清草稿 + 直发
-      setLocalStorageInput("");
-      window.history.pushState(
-        {},
-        "",
-        `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
-      );
-      sendMessage({ parts: [{ text, type: "text" }], role: "user" });
-    } else {
-      setInput(text);
+    // 必须等 /api/models 返回、模型偏好落位后再发:落位前 currentModelId
+    // 还是编译期默认(glm-4.6),直接发会被 DeepSeek 端点 400 拒掉。
+    if (modelsLoading) {
+      return;
     }
-  }, [setInput, setLocalStorageInput, sendMessage, chatId]);
+    sessionStorage.removeItem("bank-autosend");
+    // 与 submitForm 同口径:压 /chat/<id> 历史栈 + 清草稿/输入框 + 直发
+    setLocalStorageInput("");
+    setInput("");
+    window.history.pushState(
+      {},
+      "",
+      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
+    );
+    sendMessage({ parts: [{ text: autosend, type: "text" }], role: "user" });
+  }, [modelsLoading, setInput, setLocalStorageInput, sendMessage, chatId]);
 
   // 语音输入(2026-10-27,Web Speech API):转写以"开始录音时的输入"为前缀
   // 覆盖合并(识别器对当前语句发的是最新累积文本,不能追加),不自动发送
