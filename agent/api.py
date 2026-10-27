@@ -86,7 +86,7 @@ import secrets
 import sqlite3
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -106,9 +106,11 @@ from agent import tasks as tasks_mod
 from agent.bank import BankTools, load_bank_tools
 from agent.graph import (_looks_like_new_transfer, build_agent_graph,
                          make_sqlite_checkpointer)
+from bank_core.analysis import AnalysisService
 from bank_core.db import migrate_cards_bound
 from bank_core.ledger import LedgerError, LedgerService
 from bank_core.money import cents_to_yuan, yuan_to_cents
+from bank_core.wealth import WealthService
 from agent.llm import (RequestLLM, fetch_models_json, get_llm,
                        normalize_base_url, pick_default_model,
                        reset_request_llm, set_request_llm)
@@ -996,6 +998,30 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 "counterparty": r["counterparty"],
                 "tx_type": r["tx_type"]} for r in recent],
         }
+
+    # ------------------------------------------------ 门户展示(/portal)只读数据
+    # 8788 的同名数据只绑 127.0.0.1 且固定演示用户,局域网/手机门户页用不了;
+    # 这里按 /api/home 同一口径(token 鉴权、按登录用户)补两个纯读端点。
+    @app.get("/api/wealth/products")
+    async def wealth_products(x_bank_token: str | None = Header(default=None)) -> dict:
+        """理财产品目录(全局表,无个人数据):名称/类型/风险/业绩基准/起购/锁定期。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后查看"})
+        svc = WealthService(app.state.auth_conn, user_id=me["user_id"])
+        return {"products": svc.list_products()}
+
+    @app.get("/api/analysis/monthly")
+    async def analysis_monthly(x_bank_token: str | None = Header(default=None)) -> dict:
+        """上个自然月账单报告:收支/环比/储蓄率/Top 分类(AnalysisService 现成口径)。"""
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        if not me:
+            return JSONResponse(status_code=401,
+                                content={"error": "请先登录后查看"})
+        prev = (datetime.now().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        svc = AnalysisService(app.state.auth_conn, user_id=me["user_id"])
+        return svc.monthly_report(prev)
 
     # ------------------------------------------------ Agent 记忆检阅(view/delete)
     # 参考 Anthropic memory tool:按主题"一档一文件"、人类可读、可看可删。
