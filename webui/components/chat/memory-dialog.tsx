@@ -86,16 +86,17 @@ type MemoryResponse = {
 
 const EMPTY: MemoryResponse = { active_task: null, modules: [] };
 
-// 图表配色(琥珀/蓝/翠/紫/红/灰),条形图与环图共用一套,视觉成体系
+// 图表配色(蓝/青/蓝紫/翠/琥珀/紫/灰),条形图与环图共用一套;
+// 红色放最后,避免分类色被误读成风险或亏损
 const PALETTE = [
-  "#f59e0b",
-  "#3b82f6",
-  "#10b981",
-  "#8b5cf6",
-  "#ef4444",
-  "#64748b",
-  "#0ea5e9",
-  "#f97316",
+  "#3E60CE",
+  "#0EA5E9",
+  "#6C97E9",
+  "#10B981",
+  "#F59E0B",
+  "#8B5CF6",
+  "#64748B",
+  "#D32E19",
 ];
 
 const PROFILE_FIELDS: [string, string][] = [

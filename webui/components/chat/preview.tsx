@@ -18,7 +18,7 @@ function PreviewSuggestionButton({
 
   return (
     <button
-      className="rounded-xl border border-border/30 bg-card/20 px-3 py-2.5 text-left text-[11px] leading-relaxed text-muted-foreground/70 transition-all duration-200 hover:border-border/60 hover:bg-card/40 hover:text-muted-foreground"
+      className="rounded-xl border border-brand-blue/10 bg-white/55 px-3 py-2.5 text-left text-[11px] leading-relaxed text-muted-foreground transition-all duration-200 hover:border-brand-red/30 hover:bg-brand-red-soft/70 hover:text-brand-red-deep dark:border-white/10 dark:bg-white/5 dark:hover:text-brand-red"
       onClick={handleClick}
       type="button"
     >
@@ -43,9 +43,9 @@ export function Preview() {
   }, [handleAction]);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-tl-2xl bg-background">
-      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-border/20 px-5">
-        <div className="flex size-5 items-center justify-center rounded bg-ink text-white ring-1 ring-gold/30">
+    <div className="glass-panel flex h-full flex-col overflow-hidden rounded-3xl">
+      <div className="flex h-14 shrink-0 items-center gap-3 border-b border-white/50 px-5 dark:border-white/10">
+        <div className="flex size-5 items-center justify-center rounded bg-brand-red-solid text-white ring-1 ring-brand-red/30">
           <Landmark size={10} />
         </div>
         <span className="text-[13px] text-muted-foreground">AI 银行助手</span>
@@ -57,7 +57,7 @@ export function Preview() {
             我能帮你做什么？
           </h2>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            问个问题、写段代码，或聊聊想法。
+            转账、账单、订阅、理财，都可以直接说。
           </p>
         </div>
 
@@ -74,7 +74,7 @@ export function Preview() {
 
       <div className="shrink-0 px-5 pb-5">
         <button
-          className="flex w-full items-center rounded-2xl border border-border/30 bg-card/30 px-4 py-3 text-left text-[13px] text-muted-foreground/40 transition-colors hover:border-border/50 hover:text-muted-foreground/60"
+          className="flex w-full items-center rounded-2xl border border-brand-blue/10 bg-white/55 px-4 py-3 text-left text-[13px] text-muted-foreground/60 transition-colors hover:border-brand-red/25 hover:text-muted-foreground dark:border-white/10 dark:bg-white/5"
           onClick={handleDefaultAction}
           type="button"
         >

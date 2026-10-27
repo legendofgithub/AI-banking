@@ -66,7 +66,7 @@ function goChat(router: ReturnType<typeof useRouter>, q: string) {
 
 function TodoBadge({ n }: { n: number }) {
   return (
-    <span className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[#D60C1A] px-1 text-[11px] font-semibold text-white">
+    <span className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-red-solid px-1 text-[11px] font-semibold text-white shadow-[0_4px_10px_-4px_rgba(211,46,25,0.7)]">
       {n}
     </span>
   );
@@ -112,17 +112,25 @@ export default function BankHomePage() {
   const todoN = pendingN + subsN + plansN;
 
   return (
-    <div className="flex min-h-dvh flex-col bg-[linear-gradient(180deg,#EEF3FF_0%,#F8FAFE_220px, var(--background)_420px)] pb-16 md:pb-0">
-      {/* 顶栏:蓝渐变头部(与对话页同语言) */}
-      <header className="sticky top-0 z-10 flex h-14 items-center gap-2 bg-gradient-to-r from-ink to-ink-3 px-4 shadow-[var(--shadow-card)]">
-        <div className="flex size-8 items-center justify-center rounded-lg bg-white/15 text-white">
+    <div className="relative isolate flex min-h-dvh flex-col overflow-hidden bg-aurora pb-16 md:pb-0">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[520px] overflow-hidden"
+      >
+        <div className="aurora-drift absolute -left-28 -top-32 size-[420px] rounded-full bg-[radial-gradient(circle,rgba(255,176,192,0.5),transparent_66%)]" />
+        <div className="aurora-drift absolute -right-36 top-8 size-[460px] rounded-full bg-[radial-gradient(circle,rgba(150,214,255,0.46),transparent_66%)] [animation-delay:-9s]" />
+      </div>
+
+      {/* 顶栏:玻璃白底 + 深蓝文字 + 红色品牌点,对齐参考图的导航语言 */}
+      <header className="glass-bar sticky top-0 z-10 flex h-14 items-center gap-2 border-b border-white/60 px-4 shadow-[0_1px_0_rgba(255,255,255,0.7),0_8px_24px_-20px_rgba(30,82,165,0.45)]">
+        <div className="flex size-8 items-center justify-center rounded-xl bg-brand-red-solid text-white shadow-[0_6px_16px_-6px_rgba(211,46,25,0.7)]">
           <Landmark className="size-4" />
         </div>
         <div className="flex min-w-0 flex-col">
-          <span className="truncate text-[14px] font-semibold leading-tight text-white">
+          <span className="truncate text-[14px] font-semibold leading-tight text-ink dark:text-brand-blue">
             {data?.nickname ? `${data.nickname}，欢迎回来` : "AI 银行助手"}
           </span>
-          <span className="truncate text-[11px] leading-tight text-white/70">
+          <span className="truncate text-[11px] leading-tight text-muted-foreground">
             <span className="sm:hidden">你的银行数字员工</span>
             <span className="hidden sm:inline">
               你的银行数字员工 · AI 处理常规，人负责例外
@@ -130,7 +138,7 @@ export default function BankHomePage() {
           </span>
         </div>
         <Link
-          className="ml-auto inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-white/25 bg-white/10 px-3 text-[12px] font-medium text-white/90 transition-colors hover:bg-white/20 hover:text-white"
+          className="sheen ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-brand-red-solid px-3 text-[12px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep sm:h-8"
           href="/chat"
         >
           <SparklesIcon className="size-3.5" />
@@ -140,7 +148,7 @@ export default function BankHomePage() {
 
       <main className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pt-5">
         {guest ? (
-          <div className="rounded-2xl border border-gold-line/50 bg-card p-8 text-center shadow-[var(--shadow-card)]">
+          <div className="glass-panel gradient-hairline rounded-2xl p-8 text-center">
             <p className="text-[15px] font-medium text-foreground">
               登录后查看你的银行
             </p>
@@ -148,7 +156,7 @@ export default function BankHomePage() {
               资产、待办、订阅提醒都在这里等你
             </p>
             <Link
-              className="mt-4 inline-flex h-10 items-center rounded-xl bg-gradient-to-r from-ink to-ink-3 px-6 text-[14px] font-medium text-white"
+              className="sheen mt-4 inline-flex h-10 items-center rounded-xl bg-brand-red-solid px-6 text-[14px] font-medium text-white shadow-[0_10px_24px_-12px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
               href="/login"
             >
               去登录
@@ -160,25 +168,33 @@ export default function BankHomePage() {
           </div>
         ) : (
           <>
-            {/* 资产卡:蓝色渐变大卡,银行语言的核心件 */}
+            {/* 资产卡:红-紫-蓝主视觉,页面唯一的持续光效 */}
             <section
               aria-label="总资产"
-              className="rounded-2xl bg-gradient-to-br from-ink via-ink-2 to-ink-3 p-5 text-white shadow-[var(--shadow-float)]"
+              className="brand-surface glow-brand relative overflow-hidden rounded-2xl p-5 text-white"
             >
-              <div className="flex items-center gap-1.5 text-[12px] text-white/70">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -right-12 -top-20 size-56 rounded-full border border-white/20"
+              />
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -right-4 -top-6 size-28 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.3),transparent_68%)]"
+              />
+              <div className="relative flex items-center gap-1.5 text-[12px] text-white/85">
                 <ShieldCheckIcon className="size-3.5" />
                 总资产(演示)
               </div>
-              <div className="mt-1 text-[34px] font-bold leading-tight tabular-nums">
+              <div className="relative mt-1 text-[34px] font-bold leading-tight tabular-nums">
                 ¥{data.total_yuan}
               </div>
-              <div className="mt-3 flex flex-col gap-1 border-t border-white/15 pt-3">
+              <div className="relative mt-3 flex flex-col gap-1 border-t border-white/25 pt-3">
                 {data.accounts.map((a) => (
                   <div
                     className="flex items-center justify-between text-[13px]"
                     key={a.name}
                   >
-                    <span className="text-white/75">{a.name}</span>
+                    <span className="text-white/80">{a.name}</span>
                     <span className="font-medium tabular-nums">
                       ¥{a.balance_yuan}
                     </span>
@@ -188,7 +204,10 @@ export default function BankHomePage() {
             </section>
 
             {/* 待办:agent 主动来找用户,而不是等用户开口 */}
-            <section aria-label="今日待办" className="rounded-2xl border border-gold-line/40 bg-card p-4 shadow-[var(--shadow-card)]">
+            <section
+              aria-label="今日待办"
+              className="glass-panel gradient-hairline rounded-2xl p-4"
+            >
               <div className="flex items-center justify-between">
                 <h2 className="flex items-center gap-1.5 text-[14px] font-semibold text-foreground">
                   今日待办
@@ -206,7 +225,7 @@ export default function BankHomePage() {
                 <ul className="mt-2 flex flex-col divide-y divide-border/60">
                   {pendingN > 0 ? (
                     <li className="flex items-center gap-3 py-2.5">
-                      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-gold-bg text-gold-ink">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-red-soft text-brand-red">
                         <BanknoteIcon className="size-4" />
                       </span>
                       <div className="min-w-0 flex-1">
@@ -222,7 +241,7 @@ export default function BankHomePage() {
                         </p>
                       </div>
                       <Link
-                        className="shrink-0 rounded-lg bg-gold px-3 py-1.5 text-[12px] font-medium text-white transition hover:bg-[#3352b8]"
+                        className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-medium text-white shadow-[0_6px_14px_-8px_rgba(30,82,165,0.6)] transition hover:bg-primary/90"
                         href="/pending-transfers"
                       >
                         去确认
@@ -294,14 +313,20 @@ export default function BankHomePage() {
             {/* 快捷入口:一句话直达六大场景 */}
             <section aria-label="快捷入口">
               <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-6">
-                {QUICK_ACTIONS.map((a) => (
+                {QUICK_ACTIONS.map((a, i) => (
                   <button
-                    className="flex flex-col items-center gap-1.5 rounded-xl border border-gold-line/40 bg-card px-2 py-3 text-[12px] text-foreground transition-all hover:-translate-y-0.5 hover:border-gold/40 hover:bg-gold-bg/70 hover:text-gold-ink hover:shadow-[var(--shadow-card)]"
+                    className="group flex flex-col items-center gap-1.5 rounded-xl border border-white/60 bg-white/70 px-2 py-3 text-[12px] text-foreground backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-brand-red/30 hover:bg-white/90 hover:shadow-[var(--shadow-float)] dark:border-white/10 dark:bg-white/[0.04] dark:hover:border-brand-red/30 dark:hover:bg-white/[0.08]"
                     key={a.label}
                     onClick={() => goChat(router, a.q)}
                     type="button"
                   >
-                    <span className="flex size-9 items-center justify-center rounded-full bg-gold-bg text-gold-ink">
+                    <span
+                      className={`flex size-9 items-center justify-center rounded-full transition-colors ${
+                        i % 2 === 0
+                          ? "bg-brand-red-soft text-brand-red group-hover:bg-brand-red-solid group-hover:text-white"
+                          : "bg-brand-blue-soft text-brand-blue group-hover:bg-brand-blue group-hover:text-white"
+                      }`}
+                    >
                       {a.icon}
                     </span>
                     {a.label}
@@ -311,7 +336,10 @@ export default function BankHomePage() {
             </section>
 
             {/* 最近交易 */}
-            <section aria-label="最近交易" className="rounded-2xl border border-border/50 bg-card p-4 shadow-[var(--shadow-card)]">
+            <section
+              aria-label="最近交易"
+              className="glass-panel gradient-hairline rounded-2xl p-4"
+            >
               <h2 className="text-[14px] font-semibold text-foreground">
                 最近交易
               </h2>
@@ -363,11 +391,15 @@ export default function BankHomePage() {
       </main>
 
       {/* 手机端底部 tab:首页 / 对话(银行 App 范式) */}
-      <nav className="fixed inset-x-0 bottom-0 z-10 flex h-16 items-stretch border-t border-border/60 bg-card md:hidden">
+      <nav className="glass-bar fixed inset-x-0 bottom-0 z-10 flex h-16 items-stretch border-t border-white/60 dark:border-white/10 md:hidden">
         <Link
-          className="flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-gold-ink"
+          className="relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-brand-red"
           href="/home"
         >
+          <span
+            aria-hidden="true"
+            className="absolute top-0 h-[2px] w-8 rounded-full bg-brand-red-solid"
+          />
           <Landmark className="size-5" />
           首页
         </Link>

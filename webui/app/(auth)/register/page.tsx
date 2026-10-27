@@ -421,7 +421,7 @@ export default function RegisterPage() {
         ) : null}
 
         <Button
-          className="rounded-lg bg-ink text-white transition-colors hover:bg-ink-2 disabled:bg-muted disabled:text-muted-foreground"
+          className="sheen rounded-lg bg-brand-red-solid text-white shadow-[0_10px_24px_-12px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
           disabled={loading}
           type="submit"
         >

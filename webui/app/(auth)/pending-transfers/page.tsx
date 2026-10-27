@@ -84,11 +84,15 @@ function OrderRow({
 
   return (
     <form
-      className="rounded-2xl border border-gold/70 bg-gradient-to-br bg-gold-bg p-4 dark:border-gold/40 dark:bg-gold-card-dark"
+      className="gradient-hairline relative overflow-hidden rounded-2xl border border-transparent bg-card/90 p-4 backdrop-blur-sm"
       onSubmit={handleSubmit}
     >
+      <span
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand-red via-brand-violet to-brand-blue/40"
+      />
       <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2 text-[14px] font-semibold text-gold-ink dark:text-gold">
+        <div className="flex items-center gap-2 text-[14px] font-semibold text-ink dark:text-brand-blue">
           <span aria-hidden>🏦</span>给 {order.to_name}
         </div>
         <div className="text-lg font-semibold text-foreground">
@@ -125,7 +129,7 @@ function OrderRow({
               />
             </div>
             <Button
-              className="mt-5 rounded-lg bg-gold text-white hover:bg-[#3352b8] disabled:opacity-50"
+              className="mt-5 rounded-lg bg-primary text-white shadow-[0_8px_18px_-10px_rgba(30,82,165,0.7)] hover:bg-primary/90 disabled:opacity-50"
               disabled={!payReady}
               type="submit"
             >
@@ -251,7 +255,7 @@ export default function PendingTransfersPage() {
             <>
               {pendingOrders.length > 0 ? (
                 <section aria-label="待确认转账">
-                  <h2 className="mb-2 flex items-center gap-2 text-[15px] font-semibold text-gold-ink dark:text-gold">
+                  <h2 className="mb-2 flex items-center gap-2 text-[15px] font-semibold text-ink dark:text-brand-blue">
                     <span aria-hidden>⏳</span>待确认转账
                     <span className="text-[13px] font-normal text-muted-foreground">
                       {pendingOrders.length} 笔 · 需输支付密码执行

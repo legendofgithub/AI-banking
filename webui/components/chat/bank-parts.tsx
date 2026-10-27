@@ -386,8 +386,8 @@ function useGateReply() {
 
 function GoldCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="w-[min(100%,420px)] rounded-2xl border border-gold/80 bg-gold-bg p-4 shadow-[var(--shadow-card)] dark:border-gold/40 dark:bg-gold-card-dark">
-      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-gold-ink dark:text-gold">
+    <div className="w-[min(100%,420px)] rounded-2xl border border-brand-blue/15 bg-card/90 p-4 shadow-[var(--shadow-card)] backdrop-blur-sm dark:border-white/10 dark:bg-gold-card-dark">
+      <div className="mb-2 flex items-center gap-2 border-l-2 border-brand-red/70 pl-2 text-[13px] font-semibold text-ink dark:text-brand-blue">
         <span aria-hidden>🏦</span>
         {title}
       </div>
@@ -452,7 +452,7 @@ function ConfirmButtons({ payRequired = false }: { payRequired?: boolean }) {
         />
       ) : null}
       <button
-        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#3352b8] disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         disabled={disabled || (payRequired && !payReady)}
         onClick={payRequired ? handlePayConfirm : handlePlainConfirm}
         type="button"
@@ -484,7 +484,7 @@ function TransferCard({ data }: { data: TransferCardData }) {
         <Row label="定时" value={data.scheduled_at} />
         <Row label="备注" value={data.memo} />
         {data.policy_note ? (
-          <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
+          <div className="mt-1 rounded-md bg-muted/40 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
             {data.policy_note}
           </div>
         ) : null}
@@ -567,7 +567,7 @@ function LinkagePlanCard({ data }: { data: LinkagePlanCardData }) {
         <div className="mt-1 flex flex-col gap-1">
           {actions.map((action, index) => (
             <div
-              className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 rounded-md bg-gold-bg/50 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
+              className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 rounded-md bg-muted/35 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
               key={action.idx ?? index}
             >
               <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
@@ -718,7 +718,7 @@ function PlanCard({ data }: { data: PlanCardData }) {
           {facts.formula}
         </div>
       ) : null}
-      <div className="mt-2 flex flex-col gap-1 rounded-lg bg-gold-bg/50 px-2 py-1.5 dark:bg-gold-card-dark">
+      <div className="mt-2 flex flex-col gap-1 rounded-lg bg-muted/35 px-2 py-1.5 dark:bg-gold-card-dark">
         <Row
           label="原预算"
           value={data.requested_budget_yuan && `¥${data.requested_budget_yuan}`}
@@ -743,7 +743,7 @@ function PlanCard({ data }: { data: PlanCardData }) {
             };
             return (
               <div
-                className="flex items-start justify-between gap-3 rounded-md bg-gold-bg/50 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
+                className="flex items-start justify-between gap-3 rounded-md bg-muted/35 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
                 key={step.idx ?? index}
               >
                 <span className="min-w-0 [overflow-wrap:anywhere]">
@@ -780,8 +780,8 @@ function PlanCard({ data }: { data: PlanCardData }) {
               <div
                 className={`rounded-md border px-2 py-1 text-[13px] ${
                   picked
-                    ? "border-gold/80 bg-gold-bg/70 dark:border-gold/40 dark:bg-gold-card-dark"
-                    : "border-transparent bg-gold-bg/40 dark:bg-gold-card-dark"
+                    ? "border-brand-red/40 bg-brand-red-soft/70 dark:border-brand-red/25 dark:bg-brand-red/10"
+                    : "border-transparent bg-muted/30 dark:bg-gold-card-dark"
                 }`}
                 key={candidate.sub_id ?? candidate.merchant ?? index}
               >
@@ -789,7 +789,7 @@ function PlanCard({ data }: { data: PlanCardData }) {
                   <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
                     {candidate.merchant}
                     {picked ? (
-                      <span className="ml-1 rounded-full bg-gold px-1.5 py-0.5 text-[10px] font-normal text-white">
+                      <span className="ml-1 rounded-full bg-brand-red-solid px-1.5 py-0.5 text-[10px] font-normal text-white">
                         计划取消
                       </span>
                     ) : null}
@@ -808,12 +808,12 @@ function PlanCard({ data }: { data: PlanCardData }) {
         </div>
       ) : null}
       {selected?.reason ? (
-        <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
+        <div className="mt-1 rounded-md bg-muted/40 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
           {selected.reason}
         </div>
       ) : null}
       {data.note ? (
-        <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
+        <div className="mt-1 rounded-md bg-muted/40 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
           {data.note}
         </div>
       ) : null}
@@ -1288,8 +1288,8 @@ function BillReportCard({ data }: { data: BillReportData }) {
     },
   ];
   return (
-    <div className="w-[min(100%,460px)] rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-50 to-indigo-50 p-4 shadow-[var(--shadow-card)] dark:border-sky-500/30 dark:from-sky-950/30 dark:to-indigo-950/20">
-      <div className="mb-0.5 flex items-center gap-2 text-[13px] font-semibold text-sky-700 dark:text-sky-300">
+    <div className="w-[min(100%,460px)] rounded-2xl border border-brand-blue/15 bg-card/90 p-4 shadow-[var(--shadow-card)] backdrop-blur-sm dark:border-white/10 dark:bg-gold-card-dark">
+      <div className="mb-0.5 flex items-center gap-2 border-l-2 border-brand-red/70 pl-2 text-[13px] font-semibold text-ink dark:text-brand-blue">
         <span aria-hidden>📊</span>
         {data.title ?? (isAnnual ? "年度账单报告" : "月度账单报告")}
       </div>
@@ -1601,7 +1601,7 @@ function SplitCard({ data }: { data: SplitCardData }) {
           <div className="text-xs text-muted-foreground">参与人分摊</div>
           {data.participants.map((p) => (
             <div
-              className="flex justify-between gap-4 rounded-md bg-gold-bg/40 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
+              className="flex justify-between gap-4 rounded-md bg-muted/30 px-2 py-1 text-[13px] dark:bg-gold-card-dark"
               key={`${p.name}-${p.share_yuan}`}
             >
               <span className="text-foreground">{p.name}</span>
@@ -1798,8 +1798,8 @@ function PrecheckCard({ data }: { data: PrecheckView }) {
   );
   const items = data.items ?? [];
   return (
-    <div className="w-[min(100%,420px)] rounded-2xl border border-gold/80 bg-gold-bg p-4 shadow-[var(--shadow-card)] dark:border-gold/40 dark:bg-gold-card-dark">
-      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-gold-ink dark:text-gold">
+    <div className="w-[min(100%,420px)] rounded-2xl border border-brand-blue/15 bg-card/90 p-4 shadow-[var(--shadow-card)] backdrop-blur-sm dark:border-white/10 dark:bg-gold-card-dark">
+      <div className="mb-2 flex items-center gap-2 border-l-2 border-brand-red/70 pl-2 text-[13px] font-semibold text-ink dark:text-brand-blue">
         <span aria-hidden>🔔</span>
         代扣预审 · 即将扣费 {items.length} 项
       </div>
@@ -1835,7 +1835,7 @@ function PrecheckCard({ data }: { data: PrecheckView }) {
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
               <button
-                className="rounded-lg bg-gold px-3 py-1 text-xs font-medium text-white transition hover:bg-[#3352b8] disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-gold px-3 py-1 text-xs font-medium text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={disabled}
                 onClick={make(item, "放行")}
                 type="button"
@@ -1929,7 +1929,7 @@ export function SubscriptionCancelCard({
         value={payPassword}
       />
       <button
-        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-[#3352b8] disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-gold px-4 py-1.5 text-sm font-medium text-white transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         disabled={!payReady}
         onClick={handleLocalConfirm}
         type="button"
@@ -1960,7 +1960,7 @@ export function SubscriptionCancelCard({
         <Row label="取消后年省" value={`¥${data.annual_yuan ?? "—"}`} />
       </div>
       {data.note ? (
-        <div className="mt-1 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
+        <div className="mt-1 rounded-md bg-muted/40 px-2 py-1 text-xs text-gold-ink dark:bg-gold-card-dark dark:text-gold">
           {data.note}
         </div>
       ) : null}
@@ -2026,7 +2026,7 @@ function AskSlot({ data }: { data: { missing?: string[]; options?: string[] } })
     }
   }, [other, reply]);
   return (
-    <div className="w-fit max-w-full rounded-xl border border-blue-200/70 bg-blue-50/60 px-3 py-2 text-[13px] text-blue-700 dark:border-blue-500/30 dark:bg-blue-950/30 dark:text-blue-300">
+    <div className="w-fit max-w-full rounded-xl border border-brand-red/20 bg-brand-red-soft/40 px-3 py-2 text-[13px] text-ink dark:border-brand-red/20 dark:bg-brand-red/10 dark:text-brand-blue">
       还差:{missing.join("、")}
       {options.length > 0 ? (
         <>
@@ -2038,7 +2038,7 @@ function AskSlot({ data }: { data: { missing?: string[]; options?: string[] } })
           <div className="mt-2 flex flex-wrap gap-1.5">
             {options.map((option) => (
               <button
-                className="rounded-full border border-blue-300/80 bg-white/80 px-3 py-1 text-[12px] transition hover:border-blue-500 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-blue-500/40 dark:bg-blue-900/30 dark:hover:bg-blue-900/60"
+                className="rounded-full border border-brand-red/25 bg-white/80 px-3 py-1 text-[12px] transition hover:border-brand-red/50 hover:bg-brand-red-soft disabled:cursor-not-allowed disabled:opacity-50 dark:border-brand-red/25 dark:bg-brand-red/10 dark:hover:bg-brand-red/20"
                 disabled={disabled}
                 key={option}
                 onClick={() => reply(option)}
@@ -2050,7 +2050,7 @@ function AskSlot({ data }: { data: { missing?: string[]; options?: string[] } })
           </div>
           <div className="mt-2 flex items-center gap-1.5">
             <input
-              className="min-w-0 flex-1 rounded-lg border border-blue-300/70 bg-white/80 px-2 py-1 text-[12px] outline-none transition placeholder:text-blue-400 focus:border-blue-500 disabled:opacity-50 dark:border-blue-500/40 dark:bg-blue-950/40"
+              className="min-w-0 flex-1 rounded-lg border border-brand-blue/15 bg-white/80 px-2 py-1 text-[12px] outline-none transition placeholder:text-muted-foreground focus:border-brand-red/50 disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
               disabled={disabled}
               onChange={(e) => setOther(e.target.value)}
               onKeyDown={(e) => {
@@ -2062,7 +2062,7 @@ function AskSlot({ data }: { data: { missing?: string[]; options?: string[] } })
               value={other}
             />
             <button
-              className="shrink-0 rounded-lg bg-blue-600 px-2.5 py-1 text-[12px] text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-lg bg-brand-red-solid px-2.5 py-1 text-[12px] text-white transition hover:bg-brand-red-deep disabled:cursor-not-allowed disabled:opacity-50"
               disabled={disabled || !other.trim()}
               onClick={sendOther}
               type="button"
@@ -2121,8 +2121,8 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
         .join("；")
     : "";
   return (
-    <div className="w-[min(100%,420px)] rounded-2xl border border-sky-200/70 bg-gradient-to-br from-sky-50 to-blue-50 p-4 shadow-[var(--shadow-card)] dark:border-sky-500/30 dark:from-sky-950/30 dark:to-blue-950/20">
-      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-sky-700 dark:text-sky-300">
+    <div className="w-[min(100%,420px)] rounded-2xl border border-brand-blue/15 bg-card/90 p-4 shadow-[var(--shadow-card)] backdrop-blur-sm dark:border-white/10 dark:bg-gold-card-dark">
+      <div className="mb-2 flex items-center gap-2 border-l-2 border-brand-red/70 pl-2 text-[13px] font-semibold text-ink dark:text-brand-blue">
         <span aria-hidden>🧭</span>
         {data.intent === "wealth" ? "理财持仓分析" : "账单分析"}
         {data.plan_version && data.plan_version > 1 ? (
@@ -2132,7 +2132,7 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
         ) : null}
       </div>
       {data.persona ? (
-        <div className="mb-2 flex items-start gap-1.5 rounded-lg border border-gold/30 bg-gold/10 px-2 py-1 text-[12px] leading-5 text-gold-ink dark:text-gold">
+        <div className="mb-2 flex items-start gap-1.5 rounded-lg border border-brand-blue/20 bg-brand-blue-soft/60 px-2 py-1 text-[12px] leading-5 text-ink dark:border-white/10 dark:bg-white/[0.04] dark:text-brand-blue">
           <span aria-hidden>🎭</span>
           <span className="min-w-0 [overflow-wrap:anywhere]">
             人设已加载：{data.persona}
@@ -2171,7 +2171,7 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
             };
             return (
               <div
-                className="flex items-start justify-between gap-3 rounded-md bg-sky-100/50 px-2 py-1 text-[13px] dark:bg-sky-900/20"
+                className="flex items-start justify-between gap-3 rounded-md bg-muted/35 px-2 py-1 text-[13px] dark:bg-white/[0.04]"
                 key={step.id ?? index}
               >
                 <span className="min-w-0 [overflow-wrap:anywhere]">
@@ -2194,7 +2194,7 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
         </div>
       ) : null}
       {diffText ? (
-        <div className="mt-2 rounded-md bg-gold-bg/60 px-2 py-1 text-xs text-gold-ink [overflow-wrap:anywhere] dark:bg-gold-card-dark dark:text-gold">
+        <div className="mt-2 rounded-md bg-muted/40 px-2 py-1 text-xs text-gold-ink [overflow-wrap:anywhere] dark:bg-gold-card-dark dark:text-gold">
           计划调整:{diffText}(已完成步骤不重跑)
         </div>
       ) : null}
@@ -2208,7 +2208,7 @@ function AnalysisPlanCard({ data }: { data: AnalysisPlanData }) {
           <span className="text-xs text-muted-foreground">上次记忆:</span>
           {memory.map((item) => (
             <span
-              className="rounded-full bg-sky-100/70 px-1.5 py-0.5 text-[11px] text-sky-700 dark:bg-sky-900/30 dark:text-sky-200"
+              className="rounded-full bg-brand-blue-soft px-1.5 py-0.5 text-[11px] text-ink dark:bg-brand-blue/10 dark:text-brand-blue"
               key={item}
             >
               {item}

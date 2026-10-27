@@ -96,7 +96,7 @@ function PayeeRow({
     >
       <span
         aria-hidden
-        className="flex size-9 shrink-0 items-center justify-center rounded-full bg-gold/10 text-[13px] font-semibold text-gold-ink dark:bg-gold/15 dark:text-gold"
+        className="flex size-9 shrink-0 items-center justify-center rounded-full bg-brand-red-soft text-[13px] font-semibold text-brand-red-deep dark:bg-brand-red/10 dark:text-brand-red"
       >
         {contact.name.slice(0, 1)}
       </span>

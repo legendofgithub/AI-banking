@@ -285,7 +285,7 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                   tooltip="AI 银行助手"
                 >
                   <Link href="/" onClick={closeMobile}>
-                    <MessageSquareIcon className="size-4 text-sidebar-foreground/50" />
+                    <MessageSquareIcon className="size-4 text-brand-red" />
                   </Link>
                 </SidebarMenuButton>
                 <Tooltip>

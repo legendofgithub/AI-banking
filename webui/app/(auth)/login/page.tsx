@@ -77,13 +77,13 @@ function DemoAccountRow({
   const handleFill = useCallback(() => onFill(account), [account, onFill]);
 
   return (
-    <li className="flex items-center gap-2 rounded-lg border border-border/40 bg-background/50 px-2.5 py-2">
+    <li className="flex items-center gap-2 rounded-lg border border-brand-blue/10 bg-white/60 px-2.5 py-2 dark:border-white/10 dark:bg-white/5">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[13px] font-medium text-foreground">
             {account.name}
           </span>
-          <span className="rounded-full bg-gold/10 px-1.5 py-0.5 text-[10px] text-gold-ink dark:text-gold">
+          <span className="rounded-full bg-brand-red-soft px-1.5 py-0.5 text-[10px] text-brand-red-deep dark:text-brand-red">
             {account.badge}
           </span>
         </div>
@@ -278,9 +278,9 @@ export default function LoginPage() {
     <>
       <div className="mb-1 flex items-center gap-2.5">
         <div className="flex flex-col">
-          <span className="text-[15px] font-semibold text-ink">AI 银行助手</span>
+          <span className="text-[15px] font-semibold text-ink dark:text-brand-blue">AI 银行助手</span>
           <span className="text-[11px] text-muted-foreground">
-            智能对话银行 · 资金安全由确认制保障
+            智能对话银行 · AI 处理常规，人负责例外
           </span>
         </div>
       </div>
@@ -310,10 +310,10 @@ export default function LoginPage() {
 
           {challenge.demo_code ? (
             <div
-              className="flex items-center justify-between gap-2 rounded-xl border border-sky-200/70 bg-sky-50/70 px-3 py-2.5 dark:border-sky-500/30 dark:bg-sky-950/30"
+              className="flex items-center justify-between gap-2 rounded-xl border border-brand-blue/20 bg-brand-blue-soft/70 px-3 py-2.5 dark:border-brand-blue/25 dark:bg-brand-blue/10"
               data-testid="demo-sms"
             >
-              <div className="min-w-0 text-[12px] leading-relaxed text-sky-800 dark:text-sky-200">
+              <div className="min-w-0 text-[12px] leading-relaxed text-ink dark:text-brand-blue">
                 <span className="mr-1" aria-hidden>
                   📱
                 </span>
@@ -346,7 +346,7 @@ export default function LoginPage() {
 
           <div className="flex items-center gap-2">
             <Button
-              className="flex-1 rounded-lg bg-ink text-white transition-colors hover:bg-ink-2 disabled:bg-muted disabled:text-muted-foreground"
+              className="sheen flex-1 rounded-lg bg-brand-red-solid text-white shadow-[0_10px_24px_-12px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
               disabled={loading || code.length !== 6}
               type="submit"
             >
@@ -412,7 +412,7 @@ export default function LoginPage() {
           ) : null}
 
           <Button
-            className="rounded-lg bg-ink text-white transition-colors hover:bg-ink-2 disabled:bg-muted disabled:text-muted-foreground"
+            className="sheen rounded-lg bg-brand-red-solid text-white shadow-[0_10px_24px_-12px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none"
             disabled={loading || !identifier.trim() || !password}
             type="submit"
           >
@@ -432,7 +432,7 @@ export default function LoginPage() {
       )}
 
       <div
-        className="mt-4 rounded-xl border border-border/60 bg-muted/30 px-3 py-3"
+        className="mt-4 rounded-xl border border-white/60 bg-white/55 px-3 py-3 backdrop-blur-sm dark:border-white/10 dark:bg-white/[0.04]"
         data-testid="demo-account-list"
       >
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-1">

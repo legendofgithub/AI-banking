@@ -198,7 +198,7 @@ export function PendingTransferBall({
       >
         <div
           className={cn(
-            "flex items-center justify-center rounded-full border border-gold/80 shadow-[0_6px_20px_rgba(30,82,165,0.45)]",
+            "flex items-center justify-center rounded-full border border-white/25 shadow-[0_10px_28px_-10px_rgba(211,46,25,0.55),0_14px_36px_-18px_rgba(30,82,165,0.6)]",
             landing && "pending-ball-land",
             dragging ? "cursor-grabbing" : "cursor-grab"
           )}
@@ -214,16 +214,19 @@ export function PendingTransferBall({
               nearCenter
                 ? {
                     background:
-                      "conic-gradient(#8FB0FF, #3E60CE, #1E52A5, #7E9CF0, #8FB0FF)",
+                      "conic-gradient(#FF8F7A, #D32E19, #7B3FA8, #3E60CE, #6C97E9, #FF8F7A)",
                   }
-                : { background: "linear-gradient(135deg,#1E52A5,#3E60CE)" }
+                : {
+                    background:
+                      "linear-gradient(135deg,#A8170C,#7B3FA8 52%,#1E52A5)",
+                  }
             }
           />
           <span className="relative text-lg font-bold text-white drop-shadow">
             ¥
           </span>
           {pending.length > 0 ? (
-            <span className="absolute -top-1 -left-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[11px] font-bold text-white shadow">
+            <span className="absolute -top-1 -left-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[11px] font-bold text-brand-red-deep shadow-[0_2px_6px_rgba(0,0,0,0.25)] ring-2 ring-brand-red/25">
               {pending.length}
             </span>
           ) : null}
@@ -234,17 +237,17 @@ export function PendingTransferBall({
       {bubbleOpen && !sheetOpen ? (
         <div
           className={cn(
-            "fixed z-50 w-56 rounded-2xl border border-gold/80 bg-gradient-to-br bg-gold-bg p-3 shadow-[var(--shadow-float)] dark:border-gold/50 dark:bg-gold-card-dark",
+            "fixed z-50 w-56 rounded-2xl border border-brand-blue/15 bg-card/95 p-3 shadow-[var(--shadow-float)] backdrop-blur-xl dark:border-white/10 dark:bg-gold-card-dark",
             atEdge && (left ? "left-4" : "right-4")
           )}
           data-testid="pending-bubble"
           style={{ top: clampY(center.y - 60) }}
         >
-          <div className="text-[13px] font-semibold text-gold-ink dark:text-gold">
+          <div className="text-[13px] font-semibold text-ink dark:text-brand-blue">
             {nickname ? `${nickname},` : ""}你有 {pending.length} 笔转账待确认
           </div>
           <Button
-            className="mt-2 h-8 w-full bg-gold text-xs text-white hover:bg-[#3352b8]"
+            className="mt-2 h-8 w-full bg-brand-red-solid text-xs text-white shadow-[0_8px_18px_-10px_rgba(211,46,25,0.7)] hover:bg-brand-red-deep"
             data-testid="pending-bubble-detail"
             onClick={openSheet}
             size="sm"
@@ -257,11 +260,11 @@ export function PendingTransferBall({
       {/* ---- 屏幕正中央确认卡(左上角朝右箭头 = 收回为悬浮球) ---- */}
       <Dialog onOpenChange={setSheetOpen} open={sheetOpen}>
         <DialogContent
-          className="max-h-[70dvh] gap-0 rounded-2xl border border-gold/70 bg-gradient-to-b bg-gold-bg p-0 ring-gold/40 dark:border-gold/40 dark:bg-gold-card-dark"
+          className="max-h-[70dvh] gap-0 rounded-2xl border border-brand-blue/15 border-t-2 border-t-brand-red/70 bg-card/95 p-0 ring-brand-blue/20 dark:border-white/10 dark:bg-gold-card-dark"
           data-testid="pending-sheet"
         >
           <DialogHeader className="px-5 pt-4 pb-1">
-            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-gold-ink dark:text-gold">
+            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-ink dark:text-brand-blue">
               <span aria-hidden>⚠️</span>
               待确认转账 · {pending.length} 笔
             </DialogTitle>
@@ -293,13 +296,13 @@ export function PendingTransferBall({
                 </div>
               ) : null}
             </div>
-            <div className="mt-2 text-[11px] text-gold-ink/80 dark:text-gold/80">
+            <div className="mt-2 text-[11px] text-muted-foreground">
               动钱等你亲自确认——需输入支付密码,此提醒不可关闭
             </div>
           </div>
           <div className="px-5 pt-1 pb-5">
             <Button
-              className="h-10 w-full bg-gold font-medium text-white hover:bg-[#3352b8]"
+              className="h-10 w-full bg-primary font-medium text-white shadow-[0_10px_22px_-12px_rgba(30,82,165,0.7)] hover:bg-primary/90"
               data-testid="pending-sheet-go"
               onClick={goConfirm}
             >

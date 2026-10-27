@@ -29,7 +29,7 @@ function HeaderActions() {
       <MobileLoginButton />
       <a
         aria-label="后台入口"
-        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-white/25 bg-white/10 px-2.5 text-[12px] text-white/90 transition-colors hover:bg-white/20 hover:text-white md:inline-flex"
+        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-brand-blue/20 bg-white/60 px-2.5 text-[12px] text-brand-blue transition-colors hover:border-brand-red/30 hover:bg-brand-red-soft hover:text-brand-red md:inline-flex dark:border-white/10 dark:bg-white/5 dark:hover:bg-brand-red/15"
         data-testid="admin-console-link"
         href="http://127.0.0.1:8789/"
         rel="noopener noreferrer"
@@ -50,18 +50,26 @@ function PureChatHeader() {
     // 折叠侧栏时原实现整条顶栏不渲染;后台入口是测试刚需,
     // 保留一条极简顶栏(只有右上角动作区,不挤占内容)。
     return (
-      <header className="sticky top-0 flex h-12 items-center bg-gradient-to-r from-ink to-ink-3 px-3 shadow-[var(--shadow-card)]">
+      <header className="glass-bar sticky top-0 flex h-12 items-center border-b border-white/60 px-3 dark:border-white/10">
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-brand-red via-brand-violet/40 to-transparent"
+        />
         <HeaderActions />
       </header>
     );
   }
 
   return (
-    <header className="sticky top-0 z-20 flex h-12 items-center border-b border-[#EBEEF2] bg-white px-1 md:h-14 md:gap-2 md:border-0 md:bg-gradient-to-r md:from-ink md:to-ink-3 md:px-3 md:shadow-[var(--shadow-card)]">
+    <header className="glass-bar sticky top-0 z-20 flex h-12 items-center border-b border-white/60 px-1 md:h-14 md:gap-2 md:px-3 dark:border-white/10">
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-brand-red via-brand-violet/40 to-transparent"
+      />
       {/* 手机端:返回银行首页(与首页「问一问」入口对称) */}
       <Link
         aria-label="返回首页"
-        className="relative z-10 flex size-9 items-center justify-center rounded-full text-[#1F2329] transition-colors active:bg-[#F0F1F3] md:hidden"
+        className="relative z-10 flex size-9 items-center justify-center rounded-full text-ink transition-colors hover:bg-brand-red-soft hover:text-brand-red active:bg-brand-red-soft dark:text-foreground md:hidden"
         href="/home"
       >
         <ChevronLeftIcon className="size-5" />
@@ -69,7 +77,7 @@ function PureChatHeader() {
 
       {/* 手机端:居中服务名(不吃点击) */}
       <div className="pointer-events-none absolute inset-x-0 flex justify-center md:hidden">
-        <span className="font-semibold text-[16px] text-[#1F2329]">
+        <span className="font-semibold text-[16px] text-ink dark:text-foreground">
           智能客服
         </span>
       </div>
@@ -78,7 +86,7 @@ function PureChatHeader() {
       <div className="ml-auto flex md:hidden">
         <Button
           aria-label="会话总览"
-          className="size-9 text-[#1F2329] hover:bg-[#F0F1F3] hover:text-[#1F2329]"
+          className="size-9 text-ink hover:bg-brand-red-soft hover:text-brand-red dark:text-foreground"
           data-testid="mobile-session-button"
           onClick={toggleSidebar}
           size="icon-sm"

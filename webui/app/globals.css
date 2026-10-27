@@ -56,6 +56,15 @@
   --color-success-bg: var(--success-bg);
   --color-warning: var(--warning);
   --color-warning-bg: var(--warning-bg);
+  --color-brand-red: var(--brand-red);
+  --color-brand-red-solid: var(--brand-red-solid);
+  --color-brand-red-deep: var(--brand-red-deep);
+  --color-brand-red-soft: var(--brand-red-soft);
+  --color-brand-red-line: var(--brand-red-line);
+  --color-brand-violet: var(--brand-violet);
+  --color-brand-blue: var(--brand-blue);
+  --color-brand-blue-soft: var(--brand-blue-soft);
+  --color-brand-wash: var(--brand-wash);
 }
 
 :root {
@@ -74,10 +83,10 @@
   --muted-foreground: oklch(0.58 0 0);
   --accent: oklch(0.965 0 0);
   --accent-foreground: oklch(0.12 0 0);
-  --destructive: #D60C1A;
+  --destructive: #B3122B;
   --border: oklch(0.9 0 0);
   --input: oklch(0.9 0 0);
-  --ring: oklch(0.5 0 0);
+  --ring: #3E60CE;
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -104,8 +113,21 @@
   --gold-card-dark: #1B2540;
   --success: #2E9E5B;
   --success-bg: #EEF8F1;
-  --warning: #D60C1A;
-  --warning-bg: #FEF2F2;
+  --warning: #B45309;
+  --warning-bg: #FEF6EC;
+
+  /* —— 红蓝双品牌层:红色只做强调,蓝色继续承担结构与功能 ——
+     品牌红用于选中线/Logo/重点 CTA/渐变暖端;危险态用 --destructive,
+     二者必须保持可分辨,错误提示一律配图标。 */
+  --brand-red: #D32E19;
+  --brand-red-solid: #D32E19;
+  --brand-red-deep: #A8170C;
+  --brand-red-soft: #FFF0EC;
+  --brand-red-line: #F6C4BA;
+  --brand-violet: #6C97E9;
+  --brand-blue: #3E60CE;
+  --brand-blue-soft: #EEF3FF;
+  --brand-wash: #F5F7FA;
 
   --shadow-card: 0 1px 3px oklch(0 0 0 / 0.05), 0 1px 1px oklch(0 0 0 / 0.03);
   --shadow-float:
@@ -136,10 +158,10 @@
   --muted-foreground: oklch(0.6 0 0);
   --accent: oklch(0.26 0 0);
   --accent-foreground: oklch(0.94 0 0);
-  --destructive: oklch(0.7 0.15 25);
+  --destructive: #FF7A90;
   --border: oklch(0.27 0 0);
   --input: oklch(0.27 0 0);
-  --ring: oklch(0.45 0 0);
+  --ring: #8FB0FF;
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -152,7 +174,7 @@
   --sidebar-accent: oklch(0.94 0 0 / 0.06);
   --sidebar-accent-foreground: oklch(0.94 0 0);
   --sidebar-border: oklch(0.25 0 0);
-  --sidebar-ring: oklch(0.45 0 0);
+  --sidebar-ring: #8FB0FF;
 
   /* 深色下品牌色改用浅蓝，避免 #3E60CE 在深底上对比不足 */
   --gold: #8FB0FF;
@@ -160,6 +182,19 @@
   --gold-bg: #1B2540;
   --gold-line: #3A4E7A;
   --gold-card-dark: #141C2E;
+
+  /* 深色品牌层:红/蓝都提亮为可读的前景色,填充仍用深底 */
+  --brand-red: #FF8F7A;
+  --brand-red-solid: #C43A24;
+  --brand-red-deep: #A82E1C;
+  --brand-red-soft: #2A1512;
+  --brand-red-line: #6B2A22;
+  --brand-violet: #9DB8FF;
+  --brand-blue: #8FB0FF;
+  --brand-blue-soft: #1B2540;
+  --brand-wash: #14161F;
+  --warning: #F0A94A;
+  --warning-bg: #2A1E12;
 
   --shadow-card:
     inset 0 1px 0 oklch(1 0 0 / 0.04), 0 1px 2px oklch(0 0 0 / 0.2),
@@ -388,10 +423,10 @@ textarea:focus-visible {
 @keyframes glow-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 oklch(0.55 0.12 250 / 0%);
+    box-shadow: 0 0 0 0 rgb(58 94 207 / 0%);
   }
   50% {
-    box-shadow: 0 0 0 3px oklch(0.55 0.12 250 / 8%);
+    box-shadow: 0 0 0 3px rgb(58 94 207 / 8%);
   }
 }
 
@@ -441,6 +476,219 @@ textarea:focus-visible {
   animation: glow-pulse 2s ease-in-out infinite;
 }
 
+/* ===== 红蓝品牌表面与光效 ===== */
+/* 页面底:粉/青/蓝紫三团柔光,替代整片平涂蓝 */
+@utility bg-aurora {
+  background-color: var(--brand-wash);
+  background-image:
+    radial-gradient(
+      52% 64% at 8% -4%,
+      rgb(255 214 224 / 0.72) 0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      44% 58% at 96% 4%,
+      rgb(188 231 255 / 0.7) 0%,
+      transparent 64%
+    ),
+    radial-gradient(
+      62% 64% at 50% 104%,
+      rgb(214 222 255 / 0.85) 0%,
+      transparent 68%
+    ),
+    linear-gradient(180deg, #fbfcff 0%, #f3f7ff 52%, #ffffff 100%);
+}
+
+/* 品牌主视觉:深红 -> 紫 -> 深蓝,白字全程可读 */
+@utility brand-surface {
+  background-color: #7b3fa8;
+  background-image:
+    radial-gradient(
+      120% 150% at 0% 0%,
+      rgb(232 80 58 / 0.92) 0%,
+      transparent 46%
+    ),
+    radial-gradient(
+      90% 120% at 100% 0%,
+      rgb(108 151 233 / 0.8) 0%,
+      transparent 52%
+    ),
+    linear-gradient(118deg, #a8170c 0%, #7b3fa8 48%, #1e52a5 100%);
+}
+
+/* 低饱和版:卡片头部/浅色容器 */
+@utility brand-surface-soft {
+  background-image:
+    radial-gradient(
+      90% 120% at 0% 0%,
+      rgb(255 224 216 / 0.92) 0%,
+      transparent 55%
+    ),
+    linear-gradient(120deg, #fff4f0 0%, #f3f6ff 52%, #eef3ff 100%);
+}
+
+/* 聊天画布:比纯灰多一层暖冷过渡,但不足以抢内容 */
+@utility bg-chat-canvas {
+  background-image: linear-gradient(
+    180deg,
+    #fbf9fc 0%,
+    #f6f7fb 42%,
+    #f2f5fb 100%
+  );
+}
+
+/* 玻璃层:导航、浮层、输入框 */
+@utility glass-panel {
+  background-color: rgb(255 255 255 / 0.72);
+  backdrop-filter: saturate(1.35) blur(18px);
+  -webkit-backdrop-filter: saturate(1.35) blur(18px);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.7),
+    0 10px 30px -18px rgb(30 82 165 / 0.28);
+}
+
+@utility glass-bar {
+  background-color: rgb(255 255 255 / 0.82);
+  backdrop-filter: saturate(1.3) blur(16px);
+  -webkit-backdrop-filter: saturate(1.3) blur(16px);
+}
+
+/* 彩色光晕:蓝负责体积,红负责温度 */
+@utility glow-brand {
+  box-shadow:
+    0 22px 48px -20px rgb(30 82 165 / 0.48),
+    0 14px 36px -22px rgb(211 46 25 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.28);
+}
+
+@utility glow-blue {
+  box-shadow: 0 10px 28px -12px rgb(30 82 165 / 0.42);
+}
+
+@utility glow-red {
+  box-shadow:
+    0 10px 24px -10px rgb(211 46 25 / 0.45),
+    0 2px 8px -2px rgb(211 46 25 / 0.24);
+}
+
+/* 极缓慢的极光漂移:只作用在装饰层 */
+@utility aurora-drift {
+  animation: aurora-drift 26s ease-in-out infinite;
+}
+
+/* 1px 渐变描边,随圆角裁切 */
+.gradient-hairline {
+  position: relative;
+}
+
+.gradient-hairline::before {
+  pointer-events: none;
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: linear-gradient(
+    135deg,
+    rgb(211 46 25 / 0.42),
+    rgb(255 255 255 / 0.14) 38%,
+    rgb(108 151 233 / 0.5)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* CTA hover 时一次高光扫过,不做常驻动画 */
+.sheen {
+  position: relative;
+  overflow: hidden;
+}
+
+.sheen::after {
+  pointer-events: none;
+  content: "";
+  position: absolute;
+  inset: -60% auto -60% -70%;
+  width: 45%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgb(255 255 255 / 0.32),
+    transparent
+  );
+  opacity: 0;
+  transform: skewX(-18deg);
+}
+
+.sheen:hover::after {
+  animation: sheen-sweep 0.7s ease-out;
+}
+
+@keyframes aurora-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -2%, 0) scale(1.04);
+  }
+}
+
+@keyframes sheen-sweep {
+  0% {
+    opacity: 0.9;
+    transform: skewX(-18deg) translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: skewX(-18deg) translateX(340%);
+  }
+}
+
+.dark .bg-aurora {
+  background-color: #12141c;
+  background-image:
+    radial-gradient(
+      52% 64% at 8% -4%,
+      rgb(211 46 25 / 0.16) 0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      44% 58% at 96% 4%,
+      rgb(108 151 233 / 0.18) 0%,
+      transparent 64%
+    ),
+    linear-gradient(180deg, #151824 0%, #101218 100%);
+}
+
+.dark .glass-panel {
+  background-color: rgb(22 25 36 / 0.72);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 10px 30px -18px rgb(0 0 0 / 0.6);
+}
+
+.dark .glass-bar {
+  background-color: rgb(18 21 30 / 0.82);
+}
+
+.dark .bg-chat-canvas {
+  background-image: linear-gradient(180deg, #141722 0%, #11131b 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-drift,
+  .sheen:hover::after {
+    animation: none !important;
+  }
+}
+
 .ProseMirror {
   outline: none;
 }
@@ -467,7 +715,7 @@ textarea:focus-visible {
 .ͼo.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
 .ͼo.cm-selectionBackground,
 .ͼo.cm-content::selection {
-  background: oklch(0.55 0.12 250 / 0.15) !important;
+  background: rgb(58 94 207 / 0.15) !important;
 }
 
 .dark
@@ -477,7 +725,7 @@ textarea:focus-visible {
   .cm-selectionBackground,
 .dark .ͼo.cm-selectionBackground,
 .dark .ͼo.cm-content::selection {
-  background: oklch(0.55 0.12 250 / 0.2) !important;
+  background: rgb(108 151 233 / 0.2) !important;
 }
 
 .cm-activeLine {
@@ -502,20 +750,20 @@ textarea:focus-visible {
 }
 
 .cm-cursor {
-  border-left-color: oklch(0.55 0.12 250) !important;
+  border-left-color: rgb(58 94 207) !important;
   border-left-width: 2px !important;
 }
 
 .cm-matchingBracket {
-  outline: 1px solid oklch(0.55 0.12 250 / 0.3);
-  background: oklch(0.55 0.12 250 / 0.12) !important;
+  outline: 1px solid rgb(58 94 207 / 0.3);
+  background: rgb(58 94 207 / 0.12) !important;
   border-radius: 2px;
 }
 
 .suggestion-highlight {
   -webkit-user-select: none;
   user-select: none;
-  @apply cursor-pointer rounded-sm bg-blue-200 transition-colors hover:bg-blue-300 dark:bg-blue-500/40 dark:text-blue-50 dark:hover:bg-blue-400/50;
+  @apply cursor-pointer rounded-sm bg-brand-blue-soft transition-colors hover:bg-brand-red-soft dark:bg-brand-blue-soft dark:hover:bg-brand-red/20;
 }
 
 @layer base {

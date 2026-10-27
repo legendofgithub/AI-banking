@@ -411,7 +411,7 @@ export function DepositDialog() {
             ) : null}
 
             <Button
-              className="rounded-lg bg-gold text-white hover:bg-[#3352b8] disabled:opacity-50"
+              className="rounded-lg bg-primary text-white shadow-[0_8px_18px_-10px_rgba(30,82,165,0.7)] hover:bg-primary/90 disabled:opacity-50"
               data-testid="deposit-submit"
               disabled={loading || accounts.length === 0}
               onClick={handleSubmit}

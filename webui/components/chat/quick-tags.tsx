@@ -65,8 +65,8 @@ export function QuickTags() {
       {QUICK_TAGS.map((tag) => (
         <button
           className={cn(
-            "shrink-0 rounded-full border border-[#E4E7EC] bg-white px-2.5 py-1.5 text-[11.5px] leading-none text-[#333A45]",
-            "transition-colors active:bg-[#EFF3FA] md:hover:border-[#C9D8F5] md:hover:text-[#1E52A5]",
+            "shrink-0 rounded-full border border-brand-blue/15 bg-white/80 px-2.5 py-1.5 text-[11.5px] leading-none text-foreground backdrop-blur-sm dark:border-white/10 dark:bg-white/5",
+            "transition-colors active:bg-brand-red-soft md:hover:border-brand-red/30 md:hover:text-brand-red",
             busy && "opacity-45"
           )}
           data-testid={`quick-tag-${tag.key}`}

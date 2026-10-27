@@ -61,7 +61,7 @@ const STATUS_CN: Record<string, string> = {
 function Stamp({ label, time }: { label: string; time?: string }) {
   return (
     <div className="flex gap-2 text-[12px]">
-      <span className="shrink-0 font-medium text-gold-ink dark:text-gold">
+      <span className="shrink-0 font-medium text-ink dark:text-brand-blue">
         {label}
       </span>
       <span className="min-w-0 break-words text-muted-foreground">
@@ -113,11 +113,11 @@ export function ReceiptButton({ orderId }: { orderId: number }) {
           data-testid="receipt-dialog"
         >
           <DialogHeader className="px-5 pt-4 pb-1">
-            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-gold-ink dark:text-gold">
+            <DialogTitle className="flex items-center gap-2 text-[15px] font-semibold text-ink dark:text-brand-blue">
               <span aria-hidden>🧾</span>
               转账凭证 · 订单号 {o?.order_id ?? orderId}
               {o?.status ? (
-                <span className="rounded-full bg-gold/10 px-1.5 py-0.5 text-[10px] text-gold-ink dark:bg-gold/15 dark:text-gold">
+                <span className="rounded-full bg-brand-red-soft px-1.5 py-0.5 text-[10px] text-brand-red-deep dark:bg-brand-red/10 dark:text-brand-red">
                   {STATUS_CN[o.status] ?? o.status}
                 </span>
               ) : null}

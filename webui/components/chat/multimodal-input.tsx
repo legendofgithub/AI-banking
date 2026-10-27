@@ -534,7 +534,7 @@ function PureMultimodalInput({
       </div>
 
       <PromptInput
-        className="[&>div]:rounded-[22px] [&>div]:border [&>div]:border-[#E6E8EC] [&>div]:bg-white [&>div]:shadow-[var(--shadow-composer)] [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:shadow-[var(--shadow-composer-focus)]"
+        className="[&>div]:rounded-[22px] [&>div]:border [&>div]:border-brand-blue/10 [&>div]:bg-card/90 [&>div]:shadow-[0_18px_44px_-28px_rgba(30,82,165,0.45),inset_0_1px_0_rgba(255,255,255,0.7)] [&>div]:backdrop-blur-xl [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:border-brand-red/25 [&>div]:focus-within:shadow-[0_0_0_1px_rgba(211,46,25,0.14),0_22px_50px_-30px_rgba(30,82,165,0.55)]"
         onSubmit={handlePromptSubmit}
       >
         {(attachments.length > 0 || uploadQueue.length > 0) && (
@@ -604,7 +604,7 @@ function PureMultimodalInput({
             {!!input && (
               <button
                 aria-label="清空输入"
-                className="flex size-7 items-center justify-center rounded-full text-muted-foreground/50 transition-colors active:bg-[#F0F1F3] md:hidden"
+                className="flex size-7 items-center justify-center rounded-full text-muted-foreground/50 transition-colors hover:text-brand-red active:bg-brand-red-soft md:hidden"
                 onClick={handleClearInput}
                 type="button"
               >
@@ -619,7 +619,7 @@ function PureMultimodalInput({
                 className={cn(
                   "h-7 w-7 rounded-xl transition-all duration-200",
                   input.trim()
-                    ? "bg-gradient-to-br from-ink to-ink-3 text-white hover:opacity-90 active:scale-95"
+                    ? "bg-gradient-to-br from-brand-red-solid to-brand-red-deep text-white shadow-[0_6px_16px_-8px_rgba(211,46,25,0.75)] hover:brightness-110 active:scale-95"
                     : "bg-muted text-muted-foreground/25 cursor-not-allowed"
                 )}
                 data-testid="send-button"

@@ -183,10 +183,10 @@ const PurePreviewMessage = ({
       return (
         <MessageContent
           className={cn("text-[13px] leading-[1.65]", {
-            "w-fit max-w-[min(80%,56ch)] overflow-hidden break-words rounded-2xl rounded-br-lg border border-ink/20 bg-gradient-to-br from-ink to-ink-3 px-3.5 py-2 text-white shadow-[var(--shadow-card)]":
+            "w-fit max-w-[min(80%,56ch)] overflow-hidden break-words rounded-2xl rounded-br-lg border border-white/20 bg-gradient-to-br from-ink via-ink-3 to-brand-violet px-3.5 py-2 text-white shadow-[0_12px_30px_-18px_rgba(30,82,165,0.55),0_4px_18px_-12px_rgba(211,46,25,0.35)]":
               message.role === "user",
             // 手机端:助手回复走白色气泡(灰底上一张卡片),桌面端保持无框排版
-            "w-fit max-w-[min(88%,60ch)] break-words rounded-2xl rounded-tl-md border border-[#EDEFF2] bg-white px-3.5 py-2.5 text-[#1F2329] shadow-[0_1px_2px_rgba(16,24,40,0.04)] md:w-auto md:max-w-full md:rounded-none md:border-0 md:bg-transparent md:px-0 md:py-0 md:text-inherit md:shadow-none":
+            "w-fit max-w-[min(88%,60ch)] break-words rounded-2xl rounded-tl-md border border-brand-blue/10 bg-card px-3.5 py-2.5 text-foreground shadow-[0_1px_2px_rgba(16,24,40,0.04)] md:w-auto md:max-w-full md:rounded-none md:border-0 md:bg-transparent md:px-0 md:py-0 md:text-inherit md:shadow-none":
               message.role === "assistant",
           })}
           data-testid="message-content"
@@ -397,7 +397,7 @@ const PurePreviewMessage = ({
       >
         {isAssistant && (
           <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-            <div className="flex size-7 items-center justify-center rounded-full bg-gradient-to-br from-ink to-ink-3 text-white shadow-[0_1px_2px_rgba(16,24,40,0.12)]">
+            <div className="brand-surface flex size-7 items-center justify-center rounded-full text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
               <Landmark size={13} />
             </div>
           </div>
@@ -422,7 +422,7 @@ export const ThinkingMessage = () => (
   >
     <div className="flex items-start gap-3">
       <div className="flex h-[calc(13px*1.65)] shrink-0 items-center">
-        <div className="flex size-7 items-center justify-center rounded-full bg-gradient-to-br from-ink to-ink-3 text-white shadow-[0_1px_2px_rgba(16,24,40,0.12)]">
+        <div className="brand-surface flex size-7 items-center justify-center rounded-full text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
           <Landmark size={13} />
         </div>
       </div>
