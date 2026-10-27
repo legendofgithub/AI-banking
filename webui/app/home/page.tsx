@@ -112,7 +112,7 @@ export default function BankHomePage() {
   const todoN = pendingN + subsN + plansN;
 
   return (
-    <div className="relative isolate flex min-h-dvh flex-col overflow-hidden bg-aurora pb-16 md:pb-0">
+    <div className="relative isolate flex min-h-dvh flex-col overflow-hidden bg-aurora">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[520px] overflow-hidden"
@@ -390,27 +390,6 @@ export default function BankHomePage() {
         )}
       </main>
 
-      {/* 手机端底部 tab:首页 / 对话(银行 App 范式) */}
-      <nav className="glass-bar fixed inset-x-0 bottom-0 z-10 flex h-16 items-stretch border-t border-white/60 dark:border-white/10 md:hidden">
-        <Link
-          className="relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-brand-red"
-          href="/home"
-        >
-          <span
-            aria-hidden="true"
-            className="absolute top-0 h-[2px] w-8 rounded-full bg-brand-red-solid"
-          />
-          <Landmark className="size-5" />
-          首页
-        </Link>
-        <Link
-          className="flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] text-muted-foreground"
-          href="/chat"
-        >
-          <SparklesIcon className="size-5" />
-          对话
-        </Link>
-      </nav>
     </div>
   );
 }
