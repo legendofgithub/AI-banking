@@ -4,7 +4,7 @@
  * 银行账号体系前端(agent 后端 :8800 /api/auth/*):
  * - 登录态 = localStorage 里的 bank-token(+昵称/用户 ID 供界面展示);
  * - 会话 token 随聊天 / 历史请求带给后端(见 use-active-chat / sidebar-history);
- * - 登出 = POST /api/auth/logout 撤销会话 → 清本地 → 刷新页面回到未登录态。
+ * - 登出 = POST /api/auth/logout 撤销会话 → 清本地 → 整页 replace 到登录页。
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -122,7 +122,11 @@ export function useBankAuth() {
       // 网络异常不阻断本地登出
     }
     clearBankAuth();
-    window.location.href = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/`;
+    // 整页 replace 到登录页:整页刷新清掉内存里的会话状态;replace 不压栈,
+    // 手机 App 上登出后按返回键不会倒回登录前的页面,再按一次即回桌面
+    window.location.replace(
+      `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/login`
+    );
   }, []);
 
   return { login, logout, ready, token: ready ? getStoredToken() : "", user };

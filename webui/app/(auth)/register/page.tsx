@@ -215,7 +215,8 @@ export default function RegisterPage() {
         return;
       }
       storeBankAuth(json.token, json);
-      router.push("/");
+      // 同登录页:replace 消费掉 /register,不留在历史栈里
+      router.replace("/");
     } catch {
       setError("无法连接服务器,请稍后重试");
     } finally {
