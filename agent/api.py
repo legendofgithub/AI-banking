@@ -38,6 +38,7 @@ UIMessageChunk(源码 packages/ai/src/ui-message-stream/ui-message-chunks.ts,
     data-transfer-confirmation  转账确认卡片(见 _transfer_card)
     data-split-confirmation     AA 收款确认卡片
     data-settle-confirmation    AA 成员结算确认卡片(评审修复后新增的闸门)
+    data-pay-request-confirmation  AA 交款单支付确认卡片(收件人视角,支付密码核验)
     data-linkage-plan           跨场景联动计划确认卡片(建计划后的预算锁定闸门)
     data-linkage-action         联动到期动作确认卡片(逐项购买闸门)
     data-plan                   生日预算计划确认卡片(普通确认不扣款;取消订阅/锁定预算另过密码闸门)
@@ -111,7 +112,6 @@ from bank_core.money import cents_to_yuan, yuan_to_cents
 from agent.llm import (RequestLLM, fetch_models_json, get_llm,
                        normalize_base_url, pick_default_model,
                        reset_request_llm, set_request_llm)
-from agent.insights_api import router as insights_router  # HACK-CX 洞察 API(M5,默认关闭)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -120,9 +120,9 @@ STREAM_HEADER_VALUE = "v1"  # 依据:ai-sdk.dev stream-protocol(自定义后端�
 
 # 播报型节点:这些节点的 AIMessage 是给用户看的最终文本。
 # 不播报其他节点的消息(如 t_gate 复放的问题文本),避免与闸门卡片重复。
-ANNOUNCE_NODES = frozenset({"t_report", "sb_report", "ss_report", "c_report",
-                            "l_report", "b_report", "w_report", "k_report",
-                            "s_report", "p_report", "chat",
+ANNOUNCE_NODES = frozenset({"t_report", "sb_report", "ss_report", "pr_report",
+                            "c_report", "l_report", "b_report", "w_report",
+                            "k_report", "s_report", "p_report", "chat",
                             # Agent Core 的收尾播报(分析卡由 a_exec/a_reflect 单独下发)
                             "a_report"})
 
@@ -1975,6 +1975,10 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         if ptype == "confirm_settle":
             return [{"type": "data-settle-confirmation",
                             "data": {**(payload.get("settle") or {}), "pay_required": bool(payload.get("pay_required"))}}]
+        if ptype == "confirm_pay_request":
+            # 交款单支付闸门(收件人视角):请求人/账单名/应付金额;pay_required=true
+            return [{"type": "data-pay-request-confirmation",
+                            "data": {**(payload.get("request") or {}), "pay_required": bool(payload.get("pay_required"))}}]
         if ptype == "pick_contact":
             return [{"type": "data-contact-choices",
                             "data": {"candidates": payload.get("candidates") or []}}]
@@ -2033,10 +2037,14 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         """SSE 帧封装；历史恢复复用同一套 data-* 映射（_interrupt_parts）。"""
         return [_frame(part) for part in await _interrupt_parts(payload, app)]
 
-    # HACK-CX 客户洞察 API(M5):AGENT_INSIGHTS_ENABLED 打开才注册,默认关闭
-    # (关闭时路由不存在,现有行为与测试完全不变;见 docs/HACK-CX迁移方案.md 第四节)
+    # 客户洞察 API(M5):AGENT_INSIGHTS_ENABLED 打开才注册,默认关闭
+    # (关闭时路由不存在,现有行为与测试完全不变)
+    # 导入也放在开关内(评审修复):默认关闭时 agent.insights_api 不参与模块
+    # 加载——它是新增可选文件,未随分支发布时不能把主应用一起拖成
+    # ModuleNotFoundError(干净检出的整站必须能起来)。
     if os.getenv("AGENT_INSIGHTS_ENABLED", "").strip().lower() \
             in ("1", "true", "yes", "on"):
+        from agent.insights_api import router as insights_router
         app.include_router(insights_router)
 
     return app

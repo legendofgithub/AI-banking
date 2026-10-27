@@ -1,4 +1,4 @@
-"""银行工具「身份证」注册表：45 个 MCP 工具的机读风险元数据（纯数据，零依赖）。
+"""银行工具「身份证」注册表：48 个 MCP 工具的机读风险元数据（纯数据，零依赖）。
 
 为什么需要这一层
 ----------------
@@ -95,6 +95,10 @@ REGISTRY: dict[str, ToolMeta] = dict([
        scenarios=("common",)),
     _t("create_split_bill", "MED", scenarios=("transfer",)),
     _t("get_split_bill", "READ", read_only=True, scenarios=("transfer",)),
+    # 交款单派发/收件箱/付款(2026-10-27):跨用户 AA 群收款
+    _t("send_split_requests", "MED", scenarios=("transfer",)),
+    _t("list_payment_requests", "READ", read_only=True, scenarios=("transfer",)),
+    _t("pay_payment_request", "LOW", scenarios=("transfer",)),
     _t("settle_split_bill_item", "LOW", scenarios=("transfer",)),
 
     # —— 3. 账单分析 ——

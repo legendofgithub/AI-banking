@@ -26,10 +26,11 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-# bank_core 实际注册 45 个 @mcp.tool(与 bank_core.tool_meta.REGISTRY 逐一对账,
+# bank_core 实际注册 48 个 @mcp.tool(与 bank_core.tool_meta.REGISTRY 逐一对账,
 # 漂移由 tests/test_tool_meta.py 在全量测试里拦下)
 # 44 → 45:2026-10-26 新增 annual_report(年度账单报告,纯只读)
-EXPECTED_TOOL_COUNT = 45
+# 45 → 48:2026-10-27 新增交款单派发/收件箱/付款三个工具(跨用户 AA 群收款)
+EXPECTED_TOOL_COUNT = 48
 
 
 def _stdio_config(db_path: str, user_id: int = 1) -> dict[str, Any]:
@@ -76,6 +77,7 @@ REQUIRED_TOOLS = (
     "get_accounts", "resolve_contact", "policy_check",
     "create_transfer_order", "confirm_transfer_order", "cancel_transfer_order",
     "create_split_bill", "get_split_bill", "settle_split_bill_item",
+    "send_split_requests", "list_payment_requests", "pay_payment_request",
 )
 
 

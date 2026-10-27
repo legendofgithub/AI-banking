@@ -29,7 +29,8 @@ from test_agent_graph import (DEFAULT_BALANCE, _AgentSession, _balance, _count,
 # bank_core 会写库/动钱的工具(用于审计链断言;READ 类不算)
 WRITE_TOOLS = frozenset({
     "create_transfer_order", "confirm_transfer_order", "cancel_transfer_order",
-    "create_split_bill", "settle_split_bill_item", "cancel_subscription",
+    "create_split_bill", "send_split_requests", "pay_payment_request",
+    "settle_split_bill_item", "cancel_subscription",
     "subscribe_product", "redeem_product", "apply_card", "set_card_limits",
     "set_card_status", "set_risk_profile", "add_event", "schedule_reminder",
     "run_due_tasks",
@@ -277,12 +278,17 @@ def test_e2e_e_split_bill_create_and_settle(tmp_path):
             assert bill["status"] == "collecting"           # 还差"我"自己
             assert _balance(db) == DEFAULT_BALANCE
 
-            # 审计链:AA 写操作 = 发起一笔 + 两次结算(老王、小刘)各留一笔;
-            # settle_split_bill_item 的 audit 痕(P1 修复补上,risk=LOW)
-            # 与上面的 paid 位互相印证。
+            # 审计链:AA 写操作 = 发起一笔 + 派发交款单一次 + 两次结算(老王、小刘);
+            # send_split_requests 是 MED 写痕,settle_split_bill_item 是 LOW
+            # (P1 修复补上),与上面的 paid 位互相印证。
             assert _write_sequence(db) == ["create_split_bill",
+                                           "send_split_requests",
                                            "settle_split_bill_item",
                                            "settle_split_bill_item"]
+            send_rows = _tool_rows(db, "send_split_requests")
+            assert len(send_rows) == 1 and send_rows[0]["risk"] == "MED"
+            # 本次参与人都不是注册用户 → 零投递,但工具链与审计痕必须在
+            assert send_rows[0]["result"]["sent_count"] == 0
             assert len(_tool_rows(db, "get_split_bill")) >= 2  # 每次结算后都查了进度
 
     import asyncio

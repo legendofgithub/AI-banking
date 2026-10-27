@@ -117,8 +117,9 @@ class AgentState(TypedDict, total=False):
     """整图共享状态。全部键可选:LangGraph 按键覆盖,不重建 dict。"""
     # ---- 对话 ----
     messages: Annotated[list[AnyMessage], add_messages]
-    intent: str | None                 # transfer | split_bill | split_settle | contact_add |
-                                       # linkage | plan | bill_analysis | wealth | card | chat
+    intent: str | None                 # transfer | split_bill | split_settle |
+                                       # split_payment | contact_add | linkage |
+                                       # plan | bill_analysis | wealth | card | chat
     auth_user_id: int | None           # 登录用户 id(api 按 token 注入;None=观光模式,
                                        # 业务意图统一被 auth_guard 拦截引导登录)
 
@@ -137,6 +138,13 @@ class AgentState(TypedDict, total=False):
     split_missing: list[str]           # AA 待补/待纠正项
     bill: dict | None                  # create_split_bill 返回的账单
     settle: dict | None                # 结算上下文 {"bill_id": int, "contact_name": str}
+    # 交款单(收件人视角):payment 是抽取结果,requests 是收件箱/候选,
+    # request 是用户选定并送进闸门的那一张(视图字段见 pr_gate)。
+    payment: dict | None
+    payment_missing: list[str]         # ["request"] → pr_clarify
+    payment_candidates: list[dict] | None  # 多张待付时列给用户挑
+    requests: list[dict] | None        # list_payment_requests 返回的待付单
+    request: dict | None
 
     # ---- 收款人录入 ----
     contact_draft: ContactDraft        # 录入槽位(姓名/手机号/备注)
@@ -203,6 +211,7 @@ class AgentState(TypedDict, total=False):
     bank_calls: Annotated[list[dict], operator.add]   # agent 侧银行调用轨迹
     turn_text: str                     # 本轮触发指令原文(转账幂等键组成)
     clarify_round: int                 # 缺槽反问轮次(封顶 MAX_CLARIFY_ROUNDS)
+    clarify_last: list[str]            # 上一轮反问问过哪些缺项(判断"是否同一问题")
     gate_round: int                    # 人工闸门追问轮次(封顶 MAX_GATE_ASKS)
     pick_round: int                    # 同名消歧追问轮次(封顶 MAX_GATE_ASKS)
 

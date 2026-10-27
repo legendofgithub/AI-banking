@@ -131,7 +131,7 @@ async def load_bank_tools_inprocess(db_path: Any = None, user_id: int = 1) -> Ba
 
     工具清单必须从 FastMCP 注册表取（`mcp.list_tools()`），**不能**扫模块的
     public callable：`bank_core/mcp_server.py` 里还有非工具的公有函数（如 `main`），
-    扫 `dir()` 会多认出一个，`/health` 报 45 个工具、`test_health_and_validation`
+    扫 `dir()` 会多认出一个，`/health` 报 48 个工具、`test_health_and_validation`
     随即失败（踩过一次）。注册表还自带真实工具名，比函数名更准。
     """
     from bank_core import mcp_server

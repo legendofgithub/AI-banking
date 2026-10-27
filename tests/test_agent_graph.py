@@ -199,14 +199,15 @@ class _AgentSession:
     """
 
     def __init__(self, db: Path, tmp_path: Path, responses: list[str],
-                 llm=None):
+                 llm=None, user_id: int = 1):
         self._db, self._tmp, self._resp = db, tmp_path, responses
         self._llm = llm
+        self._user_id = user_id
         self.graph = None
         self._conn = None
 
     async def __aenter__(self):
-        tools = await load_bank_tools(self._db)
+        tools = await load_bank_tools(self._db, user_id=self._user_id)
         saver, self._conn = await make_sqlite_checkpointer(
             self._tmp / "agent_ckpt.sqlite")
         self.graph = build_agent_graph(
@@ -318,6 +319,66 @@ def test_transfer_missing_amount_clarify(tmp_path):
 
 
 # ----------------------------------------------------------------- 同名消歧
+
+def test_transfer_four_slot_clarify_not_cut_off(tmp_path):
+    """转账逐项补槽不应被反问封顶误杀(2026-10-27 同类问题排查)。
+
+    收款人 → 金额 → 时机 → 定时时刻 是四个**不同**的追问;旧实现共用同一个
+    clarify_round 3 次额度,第 4 问会被 clarify_gaveup 直接截断。现在缺项集合
+    一变就清零,四个问题都能问到,最终正常进闸门。
+    """
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "transfer"}',
+            _slots_json(),                                  # 1) 问收款人
+            _slots_json(payee="张三"),                      # 2) 问金额
+            _slots_json(payee="张三", amount_yuan="500"),   # 3) 问时机
+            _slots_json(payee="张三", amount_yuan="500",
+                        when="scheduled"),                  # 4) 问定时时刻
+            _slots_json(payee="张三", amount_yuan="500",
+                        when="scheduled",
+                        scheduled_at="2026-11-01T09:00"),   # 齐 → 闸门
+            "定时转账单已创建。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "t-4slot"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("我要转账")]}, cfg)
+            p1 = _interrupt_payload(r1)
+            assert "payee" in p1["missing"]
+            r2 = await graph.ainvoke(Command(resume="张三"), cfg)
+            p2 = _interrupt_payload(r2)
+            assert "amount_yuan" in p2["missing"]
+            r3 = await graph.ainvoke(Command(resume="500"), cfg)
+            p3 = _interrupt_payload(r3)
+            assert "when" in p3["missing"] and p3["options"] == ["立即转", "定时转"]
+            r4 = await graph.ainvoke(Command(resume="定时转"), cfg)
+            # 第 4 问:旧实现到这里已经是 clarify_gaveup
+            p4 = _interrupt_payload(r4)
+            assert p4["type"] == "ask_slot"
+            assert p4["missing"] == ["scheduled_at"]
+            assert not p4.get("notice")
+            # 补齐时刻 → 正常进确认闸门(定时单,不动钱)
+            r5 = await graph.ainvoke(Command(resume="2026-11-01 09:00"), cfg)
+            p5 = _interrupt_payload(r5)
+            assert p5["type"] == "confirm_transfer"
+            assert p5["order"]["scheduled_at"]
+            assert _balance(db) == DEFAULT_BALANCE  # 确认前不动钱
+
+    run(scenario())
+
+
+def test_clarify_reset_semantics():
+    """_clarify_reset:同一问句才累计;缺项集合变化/有新信息即清零(纯函数)。"""
+    from agent.graph import _clarify_reset as r
+    # 基准是"上一轮问过什么"(clarify_last),不是会被 clarify 清空的 missing
+    assert r({"clarify_last": ["when"]}, "m", ["when"]) == {}
+    assert r({"clarify_last": ["when"]}, "m", ["scheduled_at"]) ==         {"clarify_round": 0}
+    assert r({"clarify_last": ["a", "b"]}, "m", ["a"]) == {"clarify_round": 0}
+    assert r({"clarify_last": ["a"]}, "m", ["a"], progressed=True) ==         {"clarify_round": 0}
+    assert r({}, "m", ["a"]) == {"clarify_round": 0}  # 首轮不累计
+
 
 def test_transfer_ambiguous_contact_disambiguation(tmp_path):
     """同名联系人 ≥2:反问 → 用户答"尾号2222" → 选定后继续,转账落到选中的 contact。"""
@@ -493,6 +554,198 @@ def test_split_bill_gate_cancel(tmp_path):
             assert _balance(db) == DEFAULT_BALANCE
 
     run(scenario())
+
+
+# ----------------------------------------------------------------- AA 交款单(收件人视角)
+
+def _mk_multi_user_db(tmp_path: Path) -> Path:
+    """在标准夹具上追加用户 2(李四,可登录),用于跨用户交款单剧本。"""
+    db = _mk_db(tmp_path)
+    from bank_core.auth_core import hash_password
+    c = sqlite3.connect(db)
+    c.execute("INSERT INTO users (id,name,phone,created_at) "
+              "VALUES (2,'李四','13900001111','2026-01-01T00:00:00')")
+    c.execute("INSERT INTO accounts (id,user_id,type,name,balance_cents,opened_at) "
+              "VALUES (2,2,'checking','工资卡',?,'2026-01-01T00:00:00')",
+              (DEFAULT_BALANCE,))
+    c.execute("INSERT INTO contacts (id,user_id,name,phone,relation,note) "
+              "VALUES (4,1,'李四','13900001111','friend','')")
+    c.execute(
+        "INSERT INTO auth_users (user_id, identifier, identifier_type, "
+        "password_hash, pay_hash, created_at) VALUES "
+        "(2,'13900001111','phone',?,?,'2026-01-01T00:00:00')",
+        (hash_password("Demo@12345"), hash_password("888888")))
+    c.commit()
+    c.close()
+    return db
+
+
+def _payment_requests(db: Path) -> list[dict]:
+    conn = _ro(db)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM payment_requests ORDER BY id").fetchall()]
+    finally:
+        conn.close()
+
+
+def _dispatch_bill(db: Path, title: str, total_cents: int,
+                   participants: list[dict]) -> int:
+    """直接走账本建单+派发(收件人剧本的布景),避开发起人侧的 LLM 闸门。"""
+    from bank_core.ledger import LedgerService
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        bill = LedgerService(conn, 1).create_split_bill(title, total_cents, participants)
+        LedgerService(conn, 1).send_split_requests(bill["bill_id"])
+        return int(bill["bill_id"])
+    finally:
+        conn.close()
+
+
+def test_split_bill_dispatch_creates_request_for_registered_user(tmp_path):
+    """发起 AA 后,能解析到注册用户的参与人立刻收到交款单(Agent 收件箱)。"""
+    db = _mk_multi_user_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "split_bill"}',
+            json.dumps({"title": "火锅", "total_yuan": "200", "even": True,
+                        "participants": [{"name": "我"}, {"name": "李四"}]},
+                       ensure_ascii=False),
+            "AA 已发起,已发给李四。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "pr1"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("发起AA,火锅200,我和李四均摊")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "confirm_split"
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            assert "李四" in _ai_text(r2)
+
+            reqs = _payment_requests(db)
+            assert len(reqs) == 1
+            assert reqs[0]["to_user_id"] == 2
+            assert reqs[0]["from_user_id"] == 1
+            assert reqs[0]["amount_cents"] == 10_000
+            assert reqs[0]["status"] == "pending"
+            assert "send_split_requests" in _audited_tools(db)
+
+    run(scenario())
+
+
+def test_payment_request_list_and_pay_flow(tmp_path):
+    """收件人 Agent:查看待付交款单 → 确认支付(支付密码闸门)→ 账单推进。"""
+    db = _mk_multi_user_db(tmp_path)
+    bill_id = _dispatch_bill(db, "火锅", 20_000, [
+        {"name": "我", "share_cents": 10_000},
+        {"name": "李四", "share_cents": 10_000},
+    ])
+
+    async def scenario():
+        # 1) 查看:只读,不弹闸门
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "split_payment"}',
+            json.dumps({"action": "list"}, ensure_ascii=False),
+            "你有 1 张待付交款单:发起人的火锅 100 元。",
+        ], user_id=2) as graph:
+            cfg = {"configurable": {"thread_id": "pr-list"}}
+            r = await graph.ainvoke(
+                {"auth_user_id": 2,
+                 "messages": [HumanMessage("我有没有交款单")]}, cfg)
+            assert "__interrupt__" not in r
+            assert "交款单" in _ai_text(r)
+            snap = await graph.aget_state(cfg)
+            assert [c["tool"] for c in snap.values.get("bank_calls", [])] == [
+                "list_payment_requests"]
+
+        # 2) 支付:闸门复述金额 → 支付密码确认 → 账本置已付
+        (tmp_path / "pay").mkdir()
+        async with _AgentSession(db, tmp_path / "pay", [
+            '{"intent": "split_payment"}',
+            json.dumps({"action": "pay", "from_name": "测试用户",
+                        "title": "火锅"}, ensure_ascii=False),
+            "已支付火锅交款单 100 元。",
+        ], user_id=2) as graph:
+            cfg = {"configurable": {"thread_id": "pr-pay"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 2,
+                 "messages": [HumanMessage("把火锅那单交款单付掉")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "confirm_pay_request"
+            assert payload["pay_required"] is True
+            assert payload["request"]["amount_yuan"] == "100.00"
+            assert payload["request"]["from_name"] == "测试用户"
+            # 闸门前:分文未动
+            assert _payment_requests(db)[0]["status"] == "pending"
+
+            r2 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert "已支付" in _ai_text(r2)
+            req = _payment_requests(db)[0]
+            assert req["status"] == "paid" and req["paid_at"]
+            bill = _split_bill(db, bill_id)
+            assert bill["status"] == "collecting"
+            assert [i["paid"] for i in bill["items"]] == [0, 1]  # 李四是第 2 项
+            assert "pay_payment_request" in _audited_tools(db)
+
+    run(scenario())
+
+
+def test_payment_request_multiple_pending_clarify_then_pay(tmp_path):
+    """多张待付:先反问列候选,用户指认后再走支付闸门。"""
+    db = _mk_multi_user_db(tmp_path)
+    _dispatch_bill(db, "火锅", 20_000, [
+        {"name": "李四", "share_cents": 10_000}, {"name": "我", "share_cents": 10_000}])
+    _dispatch_bill(db, "奶茶", 20_000, [
+        {"name": "李四", "share_cents": 10_000}, {"name": "我", "share_cents": 10_000}])
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "split_payment"}',
+            json.dumps({"action": "pay"}, ensure_ascii=False),      # 未指认
+            json.dumps({"action": "pay", "title": "奶茶"}, ensure_ascii=False),
+            "已支付奶茶交款单 100 元。",
+        ], user_id=2) as graph:
+            cfg = {"configurable": {"thread_id": "pr-multi"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 2,
+                 "messages": [HumanMessage("把我的交款单付掉")]}, cfg)
+            ask = _interrupt_payload(r1)
+            assert ask["type"] == "ask_slot"
+            assert "火锅" in ask["question"] and "奶茶" in ask["question"]
+
+            r2 = await graph.ainvoke(Command(resume="奶茶那单"), cfg)
+            gate = _interrupt_payload(r2)
+            assert gate["type"] == "confirm_pay_request"
+            assert gate["request"]["title"] == "奶茶"
+
+            r3 = await graph.ainvoke(Command(resume="888888"), cfg)
+            assert "已支付" in _ai_text(r3)
+            paid = [r for r in _payment_requests(db) if r["status"] == "paid"]
+            assert len(paid) == 1 and paid[0]["title"] == "奶茶"
+
+    run(scenario())
+
+
+def test_pick_payment_request_matching_rules():
+    """纯函数:单张直选/id/发起人/账单名/序号/歧义。"""
+    reqs = [
+        {"request_id": 1, "from_name": "张三", "title": "火锅"},
+        {"request_id": 2, "from_name": "王五", "title": "奶茶"},
+    ]
+    assert graph_mod.pick_payment_request(reqs[:1], {"action": "pay"}, "")[0]["request_id"] == 1
+    assert graph_mod.pick_payment_request(
+        reqs, {"request_id": 2}, "")[0]["request_id"] == 2
+    assert graph_mod.pick_payment_request(
+        reqs, {"title": "火锅"}, "")[0]["request_id"] == 1
+    assert graph_mod.pick_payment_request(
+        reqs, {"action": "pay"}, "王五那单")[0]["request_id"] == 2
+    assert graph_mod.pick_payment_request(
+        reqs, {"action": "pay"}, "第二张")[0]["request_id"] == 2
+    chosen, candidates = graph_mod.pick_payment_request(
+        reqs, {"action": "pay"}, "随便")
+    assert chosen is None and len(candidates) == 2
 
 
 # ----------------------------------------------------------------- 会话恢复与兜底
@@ -2979,6 +3232,85 @@ def test_linkage_clarify_offers_clickable_options(tmp_path):
             assert plan["event"]["date"] == next_sat.isoformat()
 
     run(scenario())
+
+
+def test_linkage_unpriced_items_get_common_sense_reply(tmp_path):
+    """用户只报清单、不报金额(实测「两辆凯迪拉克、一辆奔驰 + 预算 5000」):
+    不再重复三轮"请列出每样东西和金额"然后机械放弃,而是让模型用常识回应一次
+    (接住清单 → 指出预算明显不够 → 给务实方向),且反问仍停在原地可继续。
+    全程零建单零动钱。
+
+    按真实四轮复现:预算 → 日期 → 清单 是三次不同追问,第 4 轮必须先出
+    常识回应,不能被 MAX_CLARIFY_ROUNDS 提前截断(2026-10-27 实测 bug)。"""
+    db = _mk_linkage_db(tmp_path)
+    check_remember = "记下了:两辆凯迪拉克、一辆奔驰。"
+    check_gap = "这类车常见价位在百万元级,5000 元预算远远不够。"
+    check_ask = "要不要调整预算或换成可实现的清单?"
+    check_text = f"{check_remember} {check_gap} {check_ask}"
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "linkage"}',
+            '{}',                                              # 第 1 轮:问预算
+            '{"budget_yuan": "5000"}',                          # 点/答预算
+            json.dumps({"event_date": LINK_BIRTHDAY},           # 第 3 轮:问日期
+                       ensure_ascii=False),
+            json.dumps({"actions": [{"what": "凯迪拉克", "amount_yuan": None},
+                                    {"what": "奔驰", "amount_yuan": None}]},
+                       ensure_ascii=False),                    # 第 4 轮:报车没金额
+            json.dumps({"remember": check_remember, "required_yuan": 1_000_000,
+                        "gap_hint": check_gap, "ask_short": check_ask,
+                        "ask_ok": "每样大概想花多少?"}, ensure_ascii=False),
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "l-budget"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("帮我准备生日")]}, cfg)
+            p1 = _interrupt_payload(r1)                     # 问预算
+            assert p1["type"] == "ask_slot" and "budget_yuan" in p1["missing"]
+
+            r2 = await graph.ainvoke(Command(resume="5000元"), cfg)
+            p2 = _interrupt_payload(r2)                     # 问日期
+            assert "event_date" in p2["missing"]
+
+            r3 = await graph.ainvoke(Command(resume="后天"), cfg)
+            p3 = _interrupt_payload(r3)                     # 问清单(默认问句)
+            assert p3["missing"] == ["actions"]
+            assert "每样东西和对应金额" in p3["question"]
+
+            # 第 4 轮:这里正是原来被 clarify_gaveup 截断的地方
+            r4 = await graph.ainvoke(
+                Command(resume="两辆凯迪拉克,一辆奔驰"), cfg)
+            p4 = _interrupt_payload(r4)
+            assert p4["type"] == "ask_slot"                 # 仍在可继续的反问态
+            assert p4["question"] == check_text
+            assert "凯迪拉克" in p4["question"] and check_gap in p4["question"]
+            assert p4["missing"] == ["actions"]
+            # 清单留档:即便条目没金额,也要记住用户说了什么
+            snap = await graph.aget_state(cfg)
+            assert (snap.values.get("linkage") or {}).get("items_listed") == \
+                ["凯迪拉克", "奔驰"]
+            # 零动钱:没有建计划、没有锁定单、余额不变
+            assert _count(db, "linkage_plans") == 0
+            assert _balance(db) == DEFAULT_BALANCE
+
+    run(scenario())
+
+
+def test_linkage_listed_items_and_state_question():
+    """无金额条目提取 + 问句覆盖条件(纯函数,不依赖 LLM)。"""
+    from agent.graph import (_linkage_listed_items, _linkage_state_question)
+    # 各种歪形都能捞出"东西本身";重复项去重;最多 6 条
+    assert _linkage_listed_items([
+        {"what": "凯迪拉克", "amount_yuan": None},
+        {"what": "奔驰"}, "两辆凯迪拉克", "鲜花 300",
+    ]) == ["凯迪拉克", "奔驰", "两辆凯迪拉克", "鲜花"]
+    assert _linkage_listed_items(None) == []
+    assert _linkage_listed_items([{"amount_yuan": "300"}]) == []
+    # 问句覆盖只在"只差动作金额"时生效(预算/日期还缺时用默认问句)
+    st = {"linkage": {"ask_override": "记下了,5000 元很难买这些"}}
+    assert _linkage_state_question(st, ["actions"]) == "记下了,5000 元很难买这些"
+    assert _linkage_state_question(st, ["actions", "budget_yuan"]) == ""
+    assert _linkage_state_question({"linkage": {}}, ["actions"]) == ""
 
 
 # ----------------------------- 多单并行挂起(2026-10-26 陈朵朵/老王实测反馈)

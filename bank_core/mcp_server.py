@@ -144,17 +144,41 @@ def verify_pay_password(pay_password: str) -> dict:
 @mcp.tool
 def create_split_bill(title: str, total_yuan: str,
                       participants: list[dict]) -> dict:
-    """[MED] 发起 AA 收款。participants=[{"name":"老王","share_yuan":"88.5"},...]，
-    分摊合计必须等于总额。返回账单与各人应付。"""
-    parts = [{"name": p["name"], "share_cents": _yuan(p["share_yuan"])}
+    """[MED] 发起 AA 收款。participants=[{"name":"老王","phone":"138…","share_yuan":"88.5"},...]，
+    分摊合计必须等于总额。phone 选填：给了就能把交款单精确投递给对应注册用户。
+    返回账单与各人应付。"""
+    parts = [{"name": p["name"], "phone": str(p.get("phone") or "").strip(),
+              "share_cents": _yuan(p["share_yuan"])}
              for p in participants]
     return _ledger.create_split_bill(title, _yuan(total_yuan), parts)
 
 
 @mcp.tool
 def get_split_bill(bill_id: int) -> dict:
-    """[READ] 查询 AA 收款进度（谁已付谁未付）。"""
+    """[READ] 查询 AA 收款进度（谁已付谁未付、交款单是否已送达）。"""
     return _ledger.get_split_bill(bill_id)
+
+
+@mcp.tool
+def send_split_requests(bill_id: int) -> dict:
+    """[MED] 把 AA 账单逐个参与人投递成「交款单」到对方 Agent 收件箱。
+    幂等：同一分摊项只投一次；未解析到注册用户的参与人保留为普通记账项，
+    返回逐人投递结果（delivered/self/ambiguous/not_found/already_sent）。"""
+    return _ledger.send_split_requests(bill_id)
+
+
+@mcp.tool
+def list_payment_requests(status: str = "pending") -> dict:
+    """[READ] 当前用户的交款单收件箱。status=pending|paid|all；
+    返回 requests 明细与 pending_count（待付张数）。"""
+    return _ledger.list_payment_requests(status)
+
+
+@mcp.tool
+def pay_payment_request(request_id: int) -> dict:
+    """[LOW] 收件人确认支付一张交款单（置已付并推进账单状态，幂等）。
+    演示边界：只标记已付，不产生真实入账流水。"""
+    return _ledger.pay_payment_request(request_id)
 
 
 @mcp.tool

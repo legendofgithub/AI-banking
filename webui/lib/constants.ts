@@ -14,7 +14,7 @@ export const DUMMY_PASSWORD = generateDummyPassword();
 
 export const suggestions = [
   "我要转账",
-  "帮我准备生日",
+  "联动计划",
   "账单分析",
   "理财操作",
   "卡片管理",

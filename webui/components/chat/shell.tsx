@@ -16,6 +16,7 @@ import { submitEditedMessage } from "./message-editor";
 import { Messages } from "./messages";
 import { MultimodalInput } from "./multimodal-input";
 import { PendingTransferToast } from "./pending-transfer-toast";
+import { QuickTags } from "./quick-tags";
 import { ReminderBanner } from "./reminder-banner";
 
 export function ChatShell() {
@@ -108,7 +109,7 @@ export function ChatShell() {
           {/* 悬空转账强制提醒(右下角,无法关闭;确认完自动消失) */}
           <PendingTransferToast />
 
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background md:rounded-tl-[12px] md:border-t md:border-l md:border-border/40">
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[#F4F5F7] md:rounded-tl-[12px] md:border-t md:border-l md:border-border/40 md:bg-background">
             <Messages
               addToolApprovalResponse={addToolApprovalResponse}
               chatId={chatId}
@@ -124,27 +125,35 @@ export function ChatShell() {
               votes={votes}
             />
 
-            <div className="sticky bottom-0 z-1 mx-auto flex w-full max-w-4xl gap-2 border-t-0 bg-background px-2 pb-1.5 md:px-4 md:pb-2">
-              {!isReadonly && (
-                <MultimodalInput
-                  attachments={attachments}
-                  chatId={chatId}
-                  editingMessage={editingMessage}
-                  input={input}
-                  isLoading={isLoading}
-                  messages={messages}
-                  onCancelEdit={handleCancelEdit}
-                  onRequestTransfer={openPayeePicker}
-                  sendMessage={
-                    editingMessage ? handleSendEditedMessage : sendMessage
-                  }
-                  setAttachments={setAttachments}
-                  setInput={setInput}
-                  setMessages={setMessages}
-                  status={status}
-                  stop={stop}
-                />
+            <div className="sticky bottom-0 z-1 w-full bg-[#F4F5F7] pb-1.5 md:bg-background md:pb-2">
+              {/* 四个高频能力的常驻入口:手机端常驻,不随消息增减消失 */}
+              {!isReadonly && !editingMessage && (
+                <div className="mx-auto w-full max-w-4xl md:hidden">
+                  <QuickTags />
+                </div>
               )}
+              <div className="mx-auto flex w-full max-w-4xl gap-2 px-2 md:px-4">
+                {!isReadonly && (
+                  <MultimodalInput
+                    attachments={attachments}
+                    chatId={chatId}
+                    editingMessage={editingMessage}
+                    input={input}
+                    isLoading={isLoading}
+                    messages={messages}
+                    onCancelEdit={handleCancelEdit}
+                    onRequestTransfer={openPayeePicker}
+                    sendMessage={
+                      editingMessage ? handleSendEditedMessage : sendMessage
+                    }
+                    setAttachments={setAttachments}
+                    setInput={setInput}
+                    setMessages={setMessages}
+                    status={status}
+                    stop={stop}
+                  />
+                )}
+              </div>
             </div>
           </div>
         </div>

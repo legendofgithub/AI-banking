@@ -3,7 +3,7 @@
 > 2026 深圳国际金融科技大赛 · AI Banking Agent 赛道 ｜ 研发计划见 [docs/AI-Banking-Agent-产品研发计划.md](docs/AI-Banking-Agent-产品研发计划.md)
 
 `bank_core` 是整套系统的**银行能力层**：一间随时可重置的沙箱银行，含账本、卡片、
-理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 44 个工具，
+理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 48 个工具，
 供 LangGraph 编排层（或任何 MCP 客户端）调用。
 
 ## 快速开始
@@ -98,7 +98,7 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
         │ MCP (stdio / http)
         ▼
 ┌──────────────────────────────────────────────┐
-│ mcp_server.py   44 个工具，标注 READ/LOW/MED/HIGH │
+│ mcp_server.py   48 个工具，标注 READ/LOW/MED/HIGH │
 ├──────────────────────────────────────────────┤
 │ ledger.py 账本·转账两步走·AA·卡片                │
 │ analysis.py 分类统计·月报·异常检测·订阅挖掘       │
@@ -140,7 +140,7 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 540 个用例全绿(2026-10-26 实测)
+.venv/Scripts/python.exe -m pytest tests -q      # 609 个用例全绿(2026-10-27 实测)
 .venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
 
 # 用例数不写固定值,一律以 --collect-only 实测为准(历史文档里的 205/245/133/413/481 均已过期)

@@ -91,7 +91,7 @@ def new_plan_id() -> str:
 
 @dataclass(frozen=True)
 class SkillSpec:
-    """技能目录里的一项：Core 只看这一层，不看 44 个底层 MCP 工具。
+    """技能目录里的一项：Core 只看这一层，不看 48 个底层 MCP 工具。
 
     Attributes:
         name:        技能唯一名，计划步骤用它引用。

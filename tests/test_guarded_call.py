@@ -27,7 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DIRECT_CALLS = {
     # graph.py 48→51(2026-10-26 理财中心入口:w_entry 拉等级+全量产品 2 处,
     # w_query 未测评分支列 R1 产品 1 处;与周边 w_* 节点同款直接调用)
-    "agent/graph.py": (r"tools\.call\(", 51),
+    # 51→55(2026-10-27 AA 交款单:sb_create 派发 1 + pr_extract 查收件箱 1
+    # + pr_pay 付款/刷新进度 2;与 sb_*/ss_* 同款直接调用)
+    "agent/graph.py": (r"tools\.call\(", 55),
     "agent/skills.py": (r"tools\.call\(", 8),
     "agent/api.py": (r"\.call\(", 4),
 }

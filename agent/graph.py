@@ -122,12 +122,13 @@ MAX_GATE_ASKS = 2
 #    所有调用点第一参数都应是纯常量标识符(契约见 tests/test_prompt_channels.py)。
 
 ROUTER_SYS = """你是银行智能助手的意图分类器。只输出一个 JSON 对象,不要任何多余文字:
-{"intent": "transfer | split_bill | split_settle | contact_add | linkage | bill_analysis | wealth | card | subscription | chat"}
+{"intent": "transfer | split_bill | split_settle | split_payment | contact_add | linkage | bill_analysis | wealth | card | subscription | chat"}
 
 判定规则:
 - 转账/汇款/付钱/打款/定时转 → transfer
 - 发起 AA/均摊/拼单收款/向大家收钱 → split_bill
-- 某人已把 AA 的钱付了/转来了 → split_settle
+- 我发起的 AA 里,某人已把钱付了/转来了(发起人视角,去标记到账) → split_settle
+- 收到/查看/支付别人发来的交款单、待付的 AA、我该付的 AA(付款人视角) → split_payment
 - 添加/新增/录入/保存 联系人或收款人(必须带添加/录入/保存等显式动作词,信息项是姓名、手机号、备注) → contact_add
 - 生日/纪念日/联动/预留/锁定/到期/提醒处理(帮我准备生日、准备礼物、到期了该处理) → linkage
 - 泛"计划"请求(做计划/要个计划/生日计划/纪念日计划),且不含转账/理财/存钱语境 → linkage
@@ -193,8 +194,9 @@ def extract_self_intro_name(text: str) -> str:
 
 _TIMELINE_INTENT_LABEL = {
     "transfer": "转账", "split_bill": "AA记账", "split_settle": "AA结算",
-    "contact_add": "联系人", "linkage": "联动", "bill_analysis": "账单",
-    "wealth": "理财", "card": "卡片", "subscription": "订阅", "chat": "闲聊",
+    "split_payment": "交款单", "contact_add": "联系人", "linkage": "联动",
+    "bill_analysis": "账单", "wealth": "理财", "card": "卡片",
+    "subscription": "订阅", "chat": "闲聊",
 }
 
 # 提炼对象的通用形状:懒匹配到第一个标点/空白/句尾(偏好/忌讳的宾语)
@@ -418,16 +420,29 @@ EXTRACT_SYS = """你是转账信息抽取器。结合【已有槽位】与【对
 
 SB_EXTRACT_SYS = """你是 AA 收款信息抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
 {"title": "账单标题|null", "total_yuan": "总金额,纯数字字符串,单位元|null",
- "participants": [{"name": "参与人姓名"}], "even": true|false}
+ "participants": [{"name": "参与人姓名", "phone": "11位手机号|null"}], "even": true|false}
 
 规则:
 - 用户说"均摊/AA"且没给每人份额 → even=true,participants 只填姓名,不要自己算份额;
 - 用户给了每人份额 → even=false,participants 每项加 "share_yuan": "纯数字字符串";
+- 用户为某位参与人报了手机号 → 该参与人加 "phone"(只留数字);没报则 phone 填 null;
+  手机号用于把交款单精确投递给对方的 Agent,不要臆造;
 - 最新消息覆盖已有槽位;未知填 null。"""
 
 SS_EXTRACT_SYS = """你是 AA 收款结算抽取器。从【对话】最新一条用户消息中抽取,输出 JSON,不要任何多余文字:
 {"contact_name": "刚付款的参与人姓名|null", "bill_id": 整数|null}
 只看"某人付了钱"这件事;用户提到是哪张账单(如"火锅那单")时 bill_id 若不知道具体数值就填 null,由系统按最近账单匹配。"""
+
+# 收件人视角:查看/支付别人发来的交款单(与 ss_* 的发起人视角互为镜像)
+PAYMENT_EXTRACT_SYS = """你是 AA 交款单处理抽取器。从【对话】最新一条用户消息中抽取,输出 JSON,不要任何多余文字:
+{"action": "list|pay", "request_id": 整数|null, "from_name": "发起人姓名|null", "title": "账单名称|null"}
+
+规则:
+- 查看/有哪些/待付/谁让我付款/有没有交款单/我该付什么 → list;
+- 付掉/支付/交掉/结清/确认支付某张交款单 → pay,能定位就填 from_name 或 title;
+- 用户答"第一张/第二个/火锅那单"时:有对应账单名就填 title,否则按序号留 null,
+  由系统按上一轮列出的候选顺序解析;
+- 无法判断时 action 填 list,其余字段填 null。"""
 
 CONTACT_EXTRACT_SYS = """你是收款人信息抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
 {"name": "联系人姓名|null", "phone": "11位手机号|null", "note": "备注|null"}
@@ -457,6 +472,23 @@ LINKAGE_EXTRACT_SYS = """你是跨场景联动计划抽取器(生日/纪念日�
 - 用户一次列举多样东西时每样一条;金额必须落在 amount_yuan(纯数字),
   绝不能拼进 what 或带"元"字;
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
+
+# 「预算常识」回应(2026-10-27 用户实测):用户列了清单却没给金额时,原流程把
+# 条目全丢掉 → 三轮重复问"请列出每样东西和金额" → clarify_gaveup 机械收尾
+# (「两辆凯迪拉克、一辆奔驰 + 5000 元」被答成"无法识别明细")。这里改由模型用
+# 自己的世界常识回应:先接住清单,再判断预算是否明显不够(几千元买多辆汽车),
+# 明显不够就直说并给务实替代方向——不在代码里硬编码车型/品类词表。
+LINKAGE_BUDGET_CHECK_SYS = """你是银行助手的"预算常识"把关人。结合【事实】(清单 items、预算 budget_yuan、
+日期),用你的世界常识估计清单的**量级**,只输出 JSON,不要任何多余文字:
+{"remember": "复述你记住的清单,一句话(如:记下了:两辆凯迪拉克、一辆奔驰。)",
+ "required_yuan": 这清单大致需要的金额,整数,单位元(如一百万元填 1000000),
+ "gap_hint": "预算明显不够时给用户看的一句话,说明量级差距(如:这类车常见价位在百万元级,5000 元预算远远不够。);预算够时填空串",
+ "ask_short": "预算明显不够时接着问的一句(如:要不要调整预算或换成可实现的清单?)",
+ "ask_ok": "预算够时接着问的一句(如:每样大概想花多少?)"}
+要求:
+- 只给量级估计,不必精确报价;汽车/房产/名表等大额标的按常识给数量级;
+- 严禁"无法识别""识别不到金额""请重新列出"这类系统腔,不要让用户重填表单;
+- 不承诺任何资金操作;全部字段合计 2-3 句。"""
 
 BILL_EXTRACT_SYS = """你是账单分析抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
 {"ask": "monthly_report|annual_report|category_summary|top_merchants|anomaly_scan|null",
@@ -508,7 +540,9 @@ REPORT_SYS = """你是银行助手播报员。严格依据【事实】用 1-3 �
 业务办结后,用一句自然的追问收尾,引导继续办同类业务:
 - 转账执行成功 → 问是否还需要给其他人转账;
 - 取消订阅/关闭自动续费成功 → 问是否还需要取消其他订阅。
-查询、被拦截、用户取消、失败等情况不要追问;追问只问一句,不堆叠多个问题。"""
+查询、被拦截、用户取消、失败等情况不要追问;追问只问一句,不堆叠多个问题。
+因缺信息放弃本轮(notice.kind=clarify_gaveup)时,不要播报"询问了几次""系统未能识别"这类内部过程,
+直接说明还差哪类信息、可以怎么继续;用户明明说清了想准备什么,就先接住他的清单再谈条件。"""
 
 SUB_EXTRACT_SYS = """你是订阅/代扣业务抽取器。结合【已有槽位】与【对话】,输出 JSON,不要任何多余文字:
 {"action": "list|cancel|precheck|allow|skip|null", "merchant": "商户/会员名称|null"}
@@ -523,13 +557,14 @@ SUB_EXTRACT_SYS = """你是订阅/代扣业务抽取器。结合【已有槽位�
 - 跳过/这期不扣/缓一期某个订阅(点预审卡「跳过本期」按钮)→ skip,merchant=XX;
 - 最新一条用户消息里给出的信息覆盖已有槽位;未提及的沿用已有值;确实未知填 null。"""
 
-CHAT_SYS = """你是"练功假银行"的智能助手(大赛演示沙箱)。当前版本(M2)支持:
+CHAT_SYS = """你是"练功假银行"的智能客服「小小微」(大赛演示沙箱)。被问到你叫什么/是谁时,
+答"我是智能客服小小微"。当前版本(M2)支持:
 智能转账(含定时)、AA 收款、收款人录入(引导用户提供姓名+手机号+备注,每组存一行)、
 跨场景联动(生日/纪念日准备:预留预算、提前订购提醒、到期逐项确认)、
 账单分析(月报/分类统计/消费Top/异常检测)、理财(推荐/风险测评/申购/赎回,动钱必经确认)、
 卡片管理(查询/办卡/限额/锁定解锁挂失,挂失需双重确认)、
 订阅/代扣管理(查订阅清单与年化成本、取消自动扣费)。
-想体验联动可以说「帮我准备生日」。你不得执行或承诺任何未经确认的资金操作。"""
+想体验联动可以说「联动计划」(或直接说「帮我准备生日」)。你不得执行或承诺任何未经确认的资金操作。"""
 
 # ===================================================================== 播报兜底文案(确定性,LLM 失效时用)
 
@@ -549,8 +584,13 @@ _FALLBACK_TEXT = {
     "split_cancelled": "已取消,本次未发起 AA 收款。",
     "split_progress": "AA 收款进度已更新。",
     "no_bill_context": "当前会话里没有可结算的 AA 账单,或没听清是谁付的款。",
+    # ---- AA 交款单(收件人视角) ----
+    "no_payment_requests": "目前没有待付的交款单。",
+    "payment_requests_listed": "交款单已列出。",
+    "pay_request_cancelled": "好的,这张交款单没有支付。",
+    "pay_request_paid": "交款单已确认支付。",
     "duplicate_order": "这笔转账之前已经处理过了,本次没有重复建单、没有重复扣款。",
-    "clarify_gaveup": "问了几轮还是没集齐必要信息,这次先不办理,请想好收款人、金额和时间再说。",
+    "clarify_gaveup": "这次先把信息放一放,不继续办了。想继续时把关键要素一次说清楚就行。",
     "clarify_cancel": "好的,这次先不办理,需要的时候再说一声。",
     "settle_cancelled": "好的,没有标记该成员已付。",
     "contact_added": "收款人已保存,之后可以直接按姓名给 ta 转账。",
@@ -652,6 +692,23 @@ def _fallback_announcement(notice: dict | None) -> str:
         if ask == "monthly_report":
             return ("月度账单报告已生成:收支总览、分类占比与消费 Top 商户"
                     "都在下方卡片里。")
+    if kind == "split_created":
+        sent = int(n.get("sent_count") or 0)
+        if sent:
+            return f"AA 收款已发起,已向 {sent} 位用户的 Agent 发送交款单。"
+    if kind == "payment_requests_listed":
+        reqs = n.get("requests") or []
+        if reqs:
+            return f"你有 {len(reqs)} 张待付交款单,详情见上。"
+        return "目前没有待付的交款单。"
+    if kind == "pay_request_paid":
+        req = n.get("request") or {}
+        if req.get("already_paid"):
+            return "这张交款单此前已经支付过了,本次没有重复支付。"
+        pending = n.get("pending_count")
+        tail = f",还剩 {pending} 张待付。" if isinstance(pending, int) and pending else "。"
+        return (f"已支付{req.get('from_name')}发起的「{req.get('title')}」"
+                f"交款单 {req.get('amount_yuan')} 元{tail}")
     return _FALLBACK_TEXT.get(kind, "处理完成。")
 
 
@@ -791,6 +848,66 @@ def even_split(total_cents: int, names: list[str]) -> list[dict]:
             for i, name in enumerate(names)]
 
 
+_CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _cn_index(text: str) -> int | None:
+    """解析「第一张/第二个/第3笔」里的序号(1 起);解析不到返回 None。"""
+    m = re.search(r"第\s*([一二三四五六七八九十]|\d{1,2})\s*[张个条笔份单]", str(text or ""))
+    if not m:
+        return None
+    raw = m.group(1)
+    if raw.isdigit():
+        return int(raw)
+    return _CN_NUM.get(raw)
+
+
+def pick_payment_request(requests: list[dict], payment: dict | None,
+                         latest_text: str) -> tuple[dict | None, list[dict]]:
+    """从待付交款单里确定用户要付哪一张。
+
+    优先级:交款单编号 > 发起人/账单名 > 最新原文字面命中 > 序号。
+    返回 (选中项, 候选列表);选中为 None 时候选供反问。只有一张待付单时
+    直接选中,不让用户再指认一次。
+    """
+    reqs = [r for r in (requests or []) if isinstance(r, dict)]
+    if not reqs:
+        return None, []
+    if len(reqs) == 1:
+        return reqs[0], []
+    payment = payment or {}
+    rid = payment.get("request_id")
+    if rid is not None:
+        for r in reqs:
+            if str(r.get("request_id")) == str(rid):
+                return r, []
+    name = str(payment.get("from_name") or "").strip()
+    title = str(payment.get("title") or "").strip()
+
+    def _hit(r: dict, n: str, t: str) -> bool:
+        return bool((n and n in str(r.get("from_name") or ""))
+                    or (t and t in str(r.get("title") or "")))
+
+    hits = [r for r in reqs if _hit(r, name, title)]
+    if len(hits) == 1:
+        return hits[0], []
+    if hits:
+        return None, hits
+    text = str(latest_text or "")
+    hits = [r for r in reqs
+            if (str(r.get("title") or "") and str(r["title"]) in text)
+            or (str(r.get("from_name") or "") and str(r["from_name"]) in text)]
+    if len(hits) == 1:
+        return hits[0], []
+    if hits:
+        return None, hits
+    idx = _cn_index(text)
+    if idx is not None and 1 <= idx <= len(reqs):
+        return reqs[idx - 1], []
+    return None, reqs
+
+
 def json_from_content(content: Any) -> dict | None:
     """从 LLM 文本输出解析 JSON 对象;容忍 ```json 围栏与前后缀噪声。"""
     if not isinstance(content, str):
@@ -821,6 +938,22 @@ def _cents(yuan: Any) -> int | None:
         return yuan_to_cents(str(yuan))
     except ValueError:
         return None
+
+
+def _yuan_number(v: Any) -> Any:
+    """模型给的数量级金额 → 纯数字元字符串(容忍千分位与"万"单位)。纯函数。
+
+    只做"读法归一",不改变模型给出的量级:800000 / "800,000" / "80万" 都还原
+    成 800000 元,供 _cents 做确定性比较。
+    """
+    if v is None or isinstance(v, (int, float)):
+        return v
+    s = str(v).strip().replace(",", "").replace("，", "")
+    m = re.search(r"(\d+(?:\.\d+)?)\s*万", s)
+    if m:
+        return format(float(m.group(1)) * 10000, ".0f")
+    m = re.search(r"\d+(?:\.\d+)?", s)
+    return m.group(0) if m else None
 
 
 def _valid_date(s: Any) -> bool:
@@ -955,6 +1088,28 @@ _ACTION_MIX_RE = re.compile(
     r"\s*(\d+(?:\.\d+)?)\s*[元块]?\s*$")
 
 
+def _linkage_listed_items(acts: Any, limit: int = 6) -> list[str]:
+    """把 actions 里"只说了东西、没说金额"的条目名捞出来(纯函数)。
+
+    2026-10-27 用户实测:「两辆凯迪拉克、一辆奔驰 + 预算 5000」原先被规整层
+    整条丢弃(缺金额),反问三轮后机械放弃。这里只负责"记住用户说了什么",
+    是否买得起交给模型用常识判断(见 LINKAGE_BUDGET_CHECK_SYS)。
+    """
+    out: list[str] = []
+    for a in acts if isinstance(acts, list) else []:
+        name = ""
+        if isinstance(a, str):
+            m = _ACTION_STR_RE.match(a) or _ACTION_MIX_RE.match(a)
+            name = (m.group(1) if m else a).strip()
+        elif isinstance(a, dict):
+            name = str(a.get("what") or "").strip()
+        if name and name not in out:
+            out.append(name[:20])
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _normalize_linkage_actions(acts: Any) -> list[dict] | None:
     """LLM 输出的 actions 容错规整(2026-10-26 实测兜底:口语化列举
     "门票600、快速通道1000"曾被抽成歪形,导致同一缺槽问题反复追问)。
@@ -992,6 +1147,62 @@ def _normalize_linkage_actions(acts: Any) -> list[dict] | None:
     return out or None
 
 
+async def _linkage_budget_check(ask_llm_fn, history: list, listed: list[str],
+                                draft: dict) -> str:
+    """让模型用世界常识回应"只报了清单、没报金额"的情形。
+
+    只生成给用户看的问句文本(见 LINKAGE_BUDGET_CHECK_SYS),不产生金额结论、
+    不建单、不动钱;模型失败或空返回 → 返回空串,反问回落到确定性文案,
+    办理能力不受影响(常识回应属体验增强,不是必经闸门)。
+
+    注意:这里**不带对话历史**——实测带着先前"请补金额"的反问历史时,模型会
+    顺着追问模式输出散文而不给 JSON;只给事实反而稳定输出结构化判断。
+    用户原话由 listed/预算复述,信息不丢。
+    """
+    facts = {"items": listed, "item_count": len(listed),
+             "budget_yuan": draft.get("budget_yuan"),
+             "event_date": draft.get("event_date"),
+             "event_title": draft.get("event_title"),
+             "today": date.today().isoformat()}
+    try:
+        # temperature=0:这是结构化判断,不是写作——实测默认温度下模型会偶尔
+        # 顺着对话历史输出散文而不给 JSON,判断就丢了
+        text = await ask_llm_fn(LINKAGE_BUDGET_CHECK_SYS, [],
+                                "【事实】" + json.dumps(facts, ensure_ascii=False),
+                                temperature=0.0)
+    except Exception:  # noqa: BLE001 —— 常识回应失败不该阻断业务
+        return ""
+    parsed = json_from_content(text) or {}
+    remember = str(parsed.get("remember") or "").strip()
+    gap = str(parsed.get("gap_hint") or "").strip()
+    ask_short = str(parsed.get("ask_short") or "").strip()
+    ask_ok = str(parsed.get("ask_ok") or "").strip()
+    # 是否够,由代码按"模型给的量级估计 vs 预算"确定性命中,不让模型自己
+    # 用一句"够不够"的好脾气结论糊过去;模型只提供世界知识(required_yuan)。
+    budget = _cents(draft.get("budget_yuan"))
+    required = _cents(_yuan_number(parsed.get("required_yuan")))
+    if remember and budget is not None and required:
+        if required > budget:
+            # 量级判断成立:即使模型漏写 gap_hint/问句,也必须把"预算不够"
+            # 说清楚——这句话只由预算数字与模型量级结论推出,不编价格
+            gap = gap or f"按 {cents_to_yuan(budget)} 元预算,这份清单很难实现。"
+            ask_short = ask_short or "要不要调整预算,或者换成更实际的清单?"
+            return f"{remember} {gap} {ask_short}".strip()[:320]
+        if ask_ok:
+            return f"{remember} {ask_ok}".strip()[:320]
+    return str(text or "").strip()[:240]
+
+
+def _linkage_state_question(state: AgentState, missing: list[str]) -> str:
+    """l_clarify 的问句覆盖:仅在"只差动作金额"且模型已给出常识回应时生效。
+
+    预算/日期还缺时仍用确定性默认问句(先补齐要素,再谈清单可行性)。
+    """
+    if missing != ["actions"]:
+        return ""
+    return str((state.get("linkage") or {}).get("ask_override") or "")
+
+
 def _linkage_slot_question(missing: list[str]) -> str:
     # 联动缺槽反问:预算 → 日期 → 动作(与任务书文案顺序一致);
     # 动作是千人千面的物料清单,引导自由列举,不给死选项(2026-10-26 用户反馈)
@@ -1000,9 +1211,9 @@ def _linkage_slot_question(missing: list[str]) -> str:
     if "event_date" in missing:
         return "是哪一天?请说明具体日期(如:10月1日 或 2026-10-01)。"
     if "actions" in missing:
-        return ("想准备些什么?请直接列出每样东西和金额,"
-                "每样一句或用逗号隔开(如:鲜花 300、蛋糕 200;"
-                "或:门票 600、快速通行 1000)。")
+        # 用户反馈(2026-10-27):带示例的括号读起来像模板、打断对话节奏,
+        # 去掉举例,只留下"要什么"本身;格式靠抽取器容错,不靠用户照抄格式。
+        return "想准备些什么?把每样东西和对应金额告诉我就行。"
     return "请补充事件日期、预算和要准备的东西。"
 
 
@@ -1957,7 +2168,30 @@ _CLARIFY_CANCEL_WORDS = ("不办", "不弄", "不做", "不用", "不搞", "算�
                          "暂不", "取消", "不想要")
 
 
-def _make_clarify_node(missing_key: str, question_of, options_of=None):
+def _clarify_reset(state: AgentState, missing_key: str, missing: list[str],
+                   progressed: bool = False) -> dict:
+    """缺槽反思扰封顶(2026-10-27 实测修复,各 *_extract 共用)。
+
+    MAX_CLARIFY_ROUNDS 的本意是"同一问题反复问不答才放弃",但轮次计数是全局
+    一个 clarify_round:转账的收款人→金额→时机、联动预算→日期→清单这类
+    **不同**追问会共用同一份 3 次额度,用户逐项配合回答反而在第 4 轮被判定
+    "连续询问 3 次"直接放弃(联动实测:模型已算出回话却没能展示)。
+
+    规则:缺项**集合变了**(= 问句要换,说明上一答生效),或调用方声明另有新
+    信息(progressed),就把轮次清零;只有缺项一字不变(同一问句被反复问)才
+    继续累计——这才对得上"同一问题反复问不答才放弃"的本意。用集合而非数量
+    比较,是因为转账"时机"答成"定时"后缺项由 [when] 变成 [scheduled_at],
+    数量没少但已经是新问题。
+    返回可直接并入节点 update 的字典(无进展时为空)。
+    """
+    prev = state.get("clarify_last") or []
+    if progressed or set(missing) != set(prev):
+        return {"clarify_round": 0}
+    return {}
+
+
+def _make_clarify_node(missing_key: str, question_of, options_of=None,
+                       state_question_of=None):
     """缺槽反问节点工厂(t/sb/c 三份 clarify 共用),控制流与原三份逐行等价。
 
     踩坑(评审修复):递归上限对 interrupt-resume 循环无效,每次 resume 重新
@@ -1966,6 +2200,9 @@ def _make_clarify_node(missing_key: str, question_of, options_of=None):
     options_of(missing) → list[str]:枚举型反问附带可点选的选项按钮
     (前端 AskSlot 渲染,点击即以该选项文本回话,免打字);自由输入型反问
     不传 options_of,载荷不带 options 键,前端只显示文本框。
+    state_question_of(state, missing) → str:可选,按轮内状态覆盖问句
+    (2026-10-27 联动"预算常识"用:问句要带上用户列的清单与模型的常识判断,
+    纯函数 question_of 拿不到这些;返回空串即回落到默认问句)。
     """
 
     async def clarify(state: AgentState) -> dict:
@@ -1974,6 +2211,10 @@ def _make_clarify_node(missing_key: str, question_of, options_of=None):
             return {"notice": {"kind": "clarify_gaveup", "asked": round_no}}
         missing = state.get(missing_key) or []
         question = question_of(missing)
+        if state_question_of is not None:
+            override = str(state_question_of(state, missing) or "").strip()
+            if override:
+                question = override
         payload: dict = {"type": "ask_slot", "question": question,
                          "missing": missing}
         if options_of is not None:
@@ -1992,7 +2233,10 @@ def _make_clarify_node(missing_key: str, question_of, options_of=None):
                     "notice": {"kind": "clarify_cancel"}}
         return {"messages": [AIMessage(content=question),
                              HumanMessage(content=answer_text)],
-                missing_key: [], "clarify_round": round_no + 1}
+                missing_key: [], "clarify_round": round_no + 1,
+                # 记下本轮问过哪些缺项:下一轮抽取据此判断"是不是同一个问题"
+                # (missing_key 已在上面清空,不能拿来当上一轮的快照)
+                "clarify_last": list(missing)}
 
     return clarify
 
@@ -2299,8 +2543,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         parsed = json_from_content(await ask_llm(ROUTER_SYS, state["messages"]))
         intent = (parsed or {}).get("intent")
         if intent not in ("transfer", "split_bill", "split_settle",
-                          "contact_add", "linkage", "bill_analysis", "wealth",
-                          "card", "subscription", "chat"):
+                          "split_payment", "contact_add", "linkage",
+                          "bill_analysis", "wealth", "card", "subscription",
+                          "chat"):
             intent = "chat"  # 解析失败/未知 → 安全兜底,不碰银行
         # 本轮触发指令原文:幂等键的组成部分(同文本重放=同一笔;换说法=新一笔)
         turn_text = next((m.content for m in reversed(state["messages"])
@@ -2416,7 +2661,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             missing.append("when")
         if slots.get("when") == "scheduled" and not slots.get("scheduled_at"):
             missing.append("scheduled_at")
-        return {"slots": slots, "missing": missing}
+        update: dict = {"slots": slots, "missing": missing}
+        update.update(_clarify_reset(state, "missing", missing))
+        return update
 
     def _t_slot_options(missing: list[str]) -> list[str]:
         # 枚举型反问:时机未定 → 点选「立即转/定时转」免打字;点「定时转」
@@ -2610,10 +2857,18 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                 if "shares" not in missing and sum(s["share_cents"] for s in shares) != total_cents:
                     missing.append("shares")  # 合计≠总额,交 sb_clarify 纠正
             if not missing and shares:
-                split["participants"] = [{"name": s["name"],
-                                          "share_yuan": cents_to_yuan(s["share_cents"])}
-                                         for s in shares]
-        return {"split": split, "split_missing": missing}
+                merged = []
+                for s, p in zip(shares, parts):
+                    row = {"name": s["name"],
+                           "share_yuan": cents_to_yuan(s["share_cents"])}
+                    phone = str(p.get("phone") or "").strip()
+                    if phone:  # 选填:交款单按手机号精确投递到对方 Agent
+                        row["phone"] = phone
+                    merged.append(row)
+                split["participants"] = merged
+        update: dict = {"split": split, "split_missing": missing}
+        update.update(_clarify_reset(state, "split_missing", missing))
+        return update
 
     sb_clarify = _make_clarify_node("split_missing", _sb_slot_question)
 
@@ -2630,8 +2885,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         split = state.get("split") or {}
         args = {"title": str(split.get("title")),
                 "total_yuan": str(split.get("total_yuan")),
-                "participants": [{"name": p["name"], "share_yuan": str(p["share_yuan"])}
-                                 for p in split.get("participants", [])]}
+                "participants": [
+                    {"name": p["name"], "share_yuan": str(p["share_yuan"])}
+                    | ({"phone": str(p["phone"])} if p.get("phone") else {})
+                    for p in split.get("participants", [])]}
         bill = await tools.call("create_split_bill", **args)
         calls = [_jr("create_split_bill", args, bill)]
         err = _has_error(bill)
@@ -2639,8 +2896,20 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             return {"bank_calls": calls,
                     "notice": {"kind": "bank_error", "where": "create_split_bill",
                                "error": err}}
-        return {"bank_calls": calls, "bill": bill,
-                "notice": {"kind": "split_created", "bill": bill}}
+        # 建单成功后立刻派发交款单:能解析到注册用户的参与人,
+        # 其 Agent 收件箱会收到一张待付单(幂等;未解析到的保留纯记账)
+        bill_id = bill.get("bill_id") if isinstance(bill, dict) else None
+        delivery = await tools.call("send_split_requests", bill_id=bill_id)
+        calls.append(_jr("send_split_requests", {"bill_id": bill_id}, delivery))
+        derr = _has_error(delivery)
+        notice = {"kind": "split_created", "bill": bill}
+        if derr:
+            notice.update({"deliveries": [], "sent_count": 0,
+                           "delivery_error": derr})
+        else:
+            notice.update({"deliveries": delivery.get("deliveries", []),
+                           "sent_count": delivery.get("sent_count", 0)})
+        return {"bank_calls": calls, "bill": bill, "notice": notice}
 
     async def sb_report(state: AgentState) -> dict:
         return await _announce(state)
@@ -2702,6 +2971,95 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
     async def ss_report(state: AgentState) -> dict:
         return await _announce(state)
 
+    # ------------------------------------------------------ AA 交款单(收件人视角)
+    #
+    # 与 ss_*(发起人标记某人已付)互为镜像:这里是收到交款单的人,
+    # 查看自己的待付单并确认支付。付款走支付密码闸门(与转账同款);
+    # 演示账本只标记已付、不产生真实入账流水(边界见产品说明)。
+
+    async def pr_extract(state: AgentState) -> dict:
+        parsed = json_from_content(
+            await ask_llm(PAYMENT_EXTRACT_SYS, state["messages"])) or {}
+        payment = {k: parsed.get(k)
+                   for k in ("action", "request_id", "from_name", "title")}
+        inbox = await tools.call("list_payment_requests", status="pending")
+        calls = [_jr("list_payment_requests", {"status": "pending"}, inbox)]
+        err = _has_error(inbox)
+        if err:
+            return {"bank_calls": calls, "requests": [], "request": None,
+                    "notice": {"kind": "bank_error",
+                               "where": "list_payment_requests", "error": err}}
+        reqs = inbox.get("requests") if isinstance(inbox, dict) else []
+        reqs = reqs or []
+        update: dict = {"bank_calls": calls, "requests": reqs, "payment": payment}
+        if not reqs:
+            return {**update, "request": None,
+                    "notice": {"kind": "no_payment_requests"}}
+        if str(payment.get("action") or "list") != "pay":
+            return {**update, "request": None,
+                    "notice": {"kind": "payment_requests_listed",
+                               "requests": reqs,
+                               "pending_count": int(
+                                   inbox.get("pending_count") or len(reqs))}}
+        chosen, candidates = pick_payment_request(
+            reqs, payment, _latest_human(state))
+        if chosen:
+            return {**update, "request": chosen, "payment_missing": [],
+                    "notice": None}
+        return {**update, "request": None, "payment_missing": ["request"],
+                "payment_candidates": candidates or reqs}
+
+    def _pr_slot_question(missing: list[str]) -> str:
+        return "要把哪一张交款单付掉?告诉我发起人或账单名就行。"
+
+    def _pr_state_question(state: AgentState, missing: list[str]) -> str:
+        reqs = state.get("payment_candidates") or state.get("requests") or []
+        if not reqs:
+            return ""
+        lines = [f"{i}. {r.get('from_name')} 发起的「{r.get('title')}」 "
+                 f"{r.get('amount_yuan')} 元"
+                 for i, r in enumerate(reqs[:5], 1)]
+        return "你有几张待付交款单,要付哪一张?\n" + "\n".join(lines)
+
+    pr_clarify = _make_clarify_node("payment_missing", _pr_slot_question,
+                                    state_question_of=_pr_state_question)
+
+    pr_gate = _make_gate_node(
+        "confirm_pay_request", "request", "request",
+        lambda req: (f"确认支付{req.get('from_name')}发起的"
+                     f"「{req.get('title')}」交款单,"
+                     f"金额 {req.get('amount_yuan')} 元?"),
+        view_of=lambda req: {k: req.get(k) for k in
+                             ("request_id", "from_name", "title", "amount_yuan")},
+        notice_of_no=lambda subject, view: {"kind": "pay_request_cancelled",
+                                            "request": view},
+        notice_of_giveup=lambda subject: {
+            "kind": "pay_request_cancelled",
+            "request": {k: subject.get(k) for k in
+                        ("request_id", "from_name", "title", "amount_yuan")}},
+        pay_required=True, tools=tools)
+
+    async def pr_pay(state: AgentState) -> dict:
+        req = state.get("request") or {}
+        args = {"request_id": int(req.get("request_id") or 0)}
+        res = await tools.call("pay_payment_request", **args)
+        calls = [_jr("pay_payment_request", args, res)]
+        err = _has_error(res)
+        if err:
+            return {"bank_calls": calls,
+                    "notice": {"kind": "bank_error",
+                               "where": "pay_payment_request", "error": err}}
+        inbox = await tools.call("list_payment_requests", status="pending")
+        calls.append(_jr("list_payment_requests", {"status": "pending"}, inbox))
+        pending = (inbox.get("pending_count")
+                   if isinstance(inbox, dict) and not _has_error(inbox) else None)
+        return {"bank_calls": calls,
+                "notice": {"kind": "pay_request_paid", "request": res,
+                           "pending_count": pending}}
+
+    async def pr_report(state: AgentState) -> dict:
+        return await _announce(state)
+
     # ---------------------------------------------------------------- 收款人录入
 
     async def c_extract(state: AgentState) -> dict:
@@ -2725,7 +3083,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             missing.append("phone")
         if "note" not in draft:
             missing.append("note")
-        return {"contact_draft": draft, "contact_missing": missing}
+        update: dict = {"contact_draft": draft, "contact_missing": missing}
+        update.update(_clarify_reset(state, "contact_missing", missing))
+        return update
 
     c_clarify = _make_clarify_node("contact_missing", _contact_slot_question)
 
@@ -2772,6 +3132,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         for key in ("event_title", "event_date", "budget_yuan", "actions"):
             if parsed.get(key) is not None:
                 draft[key] = parsed[key]
+        # 规整前先"记住用户说了什么"(2026-10-27):只要提到过东西,条目名就留档,
+        # 哪怕没给金额——后面由模型用常识回应,而不是当没听见。
+        listed = _linkage_listed_items(draft.get("actions"))
         # actions 容错规整:歪形(字符串条目/金额带单位/what 混金额)救回来,
         # 救不回置 None → 走缺槽反问,不硬造
         if draft.get("actions") is not None:
@@ -2784,15 +3147,42 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         if _cents(draft.get("budget_yuan")) is None:
             missing.append("budget_yuan")
         acts = draft.get("actions") or []
-        if (not isinstance(acts, list) or not acts
-                or not all(isinstance(a, dict) and a.get("what")
-                           and _cents(a.get("amount_yuan")) is not None
-                           for a in acts)):
+        priced = bool(isinstance(acts, list) and acts
+                      and all(isinstance(a, dict) and a.get("what")
+                              and _cents(a.get("amount_yuan")) is not None
+                              for a in acts))
+        # 只报了东西、没报金额:不再重复问三轮"请列出每样东西和金额"
+        # (2026-10-27 实测「两辆凯迪拉克、一辆奔驰 + 5000 元」被答成
+        # "无法识别明细")。改为让模型用世界常识回应一次:接住清单 →
+        # 判断预算是否明显不够(几千元买多辆车) → 给务实方向;问句存进
+        # draft.ask_override,由 l_clarify 的 state_question_of 取用。
+        prev_listed = list(draft.get("items_listed") or [])
+        if not priced and listed:
+            draft["items_listed"] = listed
+            # 每轮都重新生成:用户这条消息可能已经改变诉求("那就买花吧"),
+            # 回应要跟着最新清单走,而不是复读上一轮的判断
+            draft["ask_override"] = await _linkage_budget_check(
+                ask_llm, history, listed, draft)
             missing.append("actions")
-        return {"linkage": draft, "linkage_missing": missing}
+        else:
+            draft.pop("ask_override", None)
+            if priced:
+                draft.pop("items_listed", None)
+            if not priced:
+                missing.append("actions")
+        update: dict = {"linkage": draft, "linkage_missing": missing}
+        # 有进展就重置反问计数(2026-10-27 实测修复):预算 → 日期 → 清单是三次
+        # **不同**的追问,不该被"同一问题反复问不答才放弃"的封顶(3)误杀——
+        # 实际第 4 轮刚要说清单就被 clarify_gaveup 截断,用户只看到"连续询问
+        # 3 次仍未获得可识别明细"。缺项变少、或新捞到清单条目,都算进展。
+        update.update(_clarify_reset(
+            state, "linkage_missing", missing,
+            progressed=bool(listed and listed != prev_listed)))
+        return update
 
     l_clarify = _make_clarify_node("linkage_missing", _linkage_slot_question,
-                                   _linkage_slot_options)
+                                   _linkage_slot_options,
+                                   state_question_of=_linkage_state_question)
 
     async def l_plan(state: AgentState) -> dict:
         draft = state.get("linkage") or {}
@@ -3058,7 +3448,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             draft.pop("period_parsed", None)
         else:
             draft["period_parsed"] = parsed_period
-        return {"bill_slots": draft, "bill_missing": missing}
+        update: dict = {"bill_slots": draft, "bill_missing": missing}
+        update.update(_clarify_reset(state, "bill_missing", missing))
+        return update
 
     b_clarify = _make_clarify_node("bill_missing", _bill_slot_question,
                                _bill_options)
@@ -3670,7 +4062,10 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         if action == "status" and draft.get("status_target") not in (
                 "locked", "active", "lost"):
             missing.append("status_target")
-        return {"card": draft, "card_missing": missing, "bank_calls": calls}
+        update: dict = {"card": draft, "card_missing": missing,
+                        "bank_calls": calls}
+        update.update(_clarify_reset(state, "card_missing", missing))
+        return update
 
     k_clarify = _make_clarify_node("card_missing", _card_slot_question,
                                _card_options)
@@ -3833,7 +4228,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             missing.append("action")
         if action in ("cancel", "allow", "skip") and not draft.get("merchant"):
             missing.append("merchant")
-        return {"sub": draft, "sub_missing": missing}
+        update: dict = {"sub": draft, "sub_missing": missing}
+        update.update(_clarify_reset(state, "sub_missing", missing))
+        return update
 
     s_clarify = _make_clarify_node("sub_missing", _sub_slot_question,
                                _sub_options)
@@ -4037,6 +4434,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             missing.append("budget_yuan")
 
         update: dict = {"plan_slots": slots, "plan_missing": missing}
+        update.update(_clarify_reset(state, "plan_missing", missing))
         # 记忆驱动(迭代计划 §6.4):上次用户在支付密码闸门前保留了订阅,
         # 本次默认不再推荐取消它——默认值因记忆而变,而不是每次从零开始。
         if slots.get("wants_cut") and not state.get("plan_force_no_cut") \
@@ -4899,6 +5297,27 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
             return "ss_report"
         return "ss_gate"
 
+    def after_pr_extract(state: AgentState) -> str:
+        if state.get("notice"):
+            return "pr_report"
+        if state.get("request"):
+            return "pr_gate"
+        return "pr_clarify"
+
+    def after_pr_clarify(state: AgentState) -> str:
+        return "pr_report" if state.get("notice") else "pr_extract"
+
+    def after_pr_gate(state: AgentState) -> str:
+        # 取消/超限的 notice 由闸门自给;decision=yes 才真正支付
+        if state.get("notice"):
+            return "pr_report"
+        decision = state.get("decision")
+        if decision == "yes":
+            return "pr_pay"
+        if decision == "no":
+            return "pr_report"
+        return "pr_gate"
+
     def after_c_extract(state: AgentState) -> str:
         return "c_clarify" if state.get("contact_missing") else "c_gate"
 
@@ -5152,6 +5571,9 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                      ("sb_gate", sb_gate), ("sb_create", sb_create), ("sb_report", sb_report),
                      ("ss_extract", ss_extract), ("ss_gate", ss_gate),
                      ("ss_settle", ss_settle), ("ss_report", ss_report),
+                     ("pr_extract", pr_extract), ("pr_clarify", pr_clarify),
+                     ("pr_gate", pr_gate), ("pr_pay", pr_pay),
+                     ("pr_report", pr_report),
                      ("c_extract", c_extract), ("c_clarify", c_clarify),
                      ("c_gate", c_gate), ("c_create", c_create), ("c_report", c_report),
                      ("l_extract", l_extract), ("l_clarify", l_clarify),
@@ -5197,7 +5619,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
     g.add_conditional_edges("router", route_intent, {
         "auth_guard": "auth_guard",
         "transfer": "t_extract", "split_bill": "sb_extract",
-        "split_settle": "ss_extract", "contact_add": "c_extract",
+        "split_settle": "ss_extract", "split_payment": "pr_extract",
+        "contact_add": "c_extract",
         "l_extract": "l_extract", "l_due": "l_due",
         "bill_analysis": "b_extract", "wealth": "w_extract",
         "card": "k_extract", "subscription": "s_extract",
@@ -5241,6 +5664,14 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                             ["ss_settle", "ss_report", "ss_gate"])
     g.add_edge("ss_settle", "ss_report")
     g.add_edge("ss_report", END)
+    g.add_conditional_edges("pr_extract", after_pr_extract,
+                            ["pr_clarify", "pr_gate", "pr_report"])
+    g.add_conditional_edges("pr_clarify", after_pr_clarify,
+                            ["pr_extract", "pr_report"])
+    g.add_conditional_edges("pr_gate", after_pr_gate,
+                            ["pr_pay", "pr_report", "pr_gate"])
+    g.add_edge("pr_pay", "pr_report")
+    g.add_edge("pr_report", END)
     g.add_conditional_edges("c_extract", after_c_extract, ["c_clarify", "c_gate"])
     g.add_conditional_edges("c_clarify", after_c_clarify, ["c_extract", "c_report"])
     g.add_conditional_edges("c_gate", after_c_gate,

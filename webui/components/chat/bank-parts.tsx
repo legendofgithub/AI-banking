@@ -18,6 +18,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *   data-transfer-confirmation  转账确认卡(确认闸门)
  *   data-split-confirmation     AA 收款确认卡
  *   data-settle-confirmation    AA 成员结算确认卡
+ *   data-pay-request-confirmation AA 交款单支付确认卡(收件人视角,支付密码核验)
  *   data-contact-confirmation   收款人录入确认卡(姓名/手机号/备注)
  *   data-contact-choices        同名联系人选择(卡片式消歧)
  *   data-linkage-plan           跨场景联动计划确认卡(预算锁定闸门,确认卡)
@@ -1570,6 +1571,14 @@ const SETTLE_LABELS: Record<string, string> = {
   title: "账单名称",
 };
 
+// 交款单支付闸门(收件人视角):字段见后端 pr_gate 的 view_of 冻结口径
+const PAY_REQUEST_LABELS: Record<string, string> = {
+  request_id: "交款单编号",
+  from_name: "发起人",
+  title: "账单名称",
+  amount_yuan: "应付金额(元)",
+};
+
 interface SplitCardData {
   participants?: { name?: string; share_yuan?: string }[];
   pay_required?: boolean;
@@ -2240,6 +2249,15 @@ export function BankDataPart({ type, data }: { type: string; data?: unknown }) {
         data={(data ?? {}) as Record<string, unknown>}
         labelMap={SETTLE_LABELS}
         title="AA 结算确认"
+      />
+    );
+  }
+  if (type === "data-pay-request-confirmation") {
+    return (
+      <GenericConfirmCard
+        data={(data ?? {}) as Record<string, unknown>}
+        labelMap={PAY_REQUEST_LABELS}
+        title="AA 交款单确认"
       />
     );
   }

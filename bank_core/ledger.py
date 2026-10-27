@@ -477,7 +477,11 @@ class LedgerService:
 
     def create_split_bill(self, title: str, total_cents: int,
                           participants: list[dict]) -> dict:
-        """发起 AA：participants=[{name, share_cents}]，金额总和必须等于总额。"""
+        """发起 AA：participants=[{name, phone?, share_cents}]，金额总和必须等于总额。
+
+        phone 选填：给了手机号，交款单就能精确投递给对应的注册用户；
+        不给则只在派发时按姓名/联系人手机号反查（见 send_split_requests）。
+        """
         share_sum = sum(p["share_cents"] for p in participants)
         if share_sum != total_cents:
             raise LedgerError(
@@ -488,13 +492,16 @@ class LedgerService:
         bill_id = cur.lastrowid
         for p in participants:
             self.conn.execute(
-                "INSERT INTO split_bill_items (bill_id, contact_name, share_cents) VALUES (?,?,?)",
-                (bill_id, p["name"], p["share_cents"]))
+                "INSERT INTO split_bill_items "
+                "(bill_id, contact_name, phone, share_cents) VALUES (?,?,?,?)",
+                (bill_id, p["name"], str(p.get("phone") or "").strip(),
+                 p["share_cents"]))
         self.conn.commit()
         result = {"bill_id": bill_id, "title": title,
                   "total_yuan": cents_to_yuan(total_cents),
                   "participants": [
                       {"name": p["name"], "share_yuan": cents_to_yuan(p["share_cents"])}
+                      | ({"phone": str(p["phone"]).strip()} if p.get("phone") else {})
                       for p in participants]}
         audit(self.conn, "create_split_bill", {"bill_id": bill_id, "title": title},
               result, risk="MED")
@@ -511,7 +518,11 @@ class LedgerService:
         if not bill:
             raise LedgerError("AA 单不存在")
         items = self.conn.execute(
-            "SELECT * FROM split_bill_items WHERE bill_id=?", (bill_id,)).fetchall()
+            """SELECT i.*, pr.id AS request_id, pr.to_user_id,
+                      pr.status AS request_status
+               FROM split_bill_items i
+               LEFT JOIN payment_requests pr ON pr.item_id = i.id
+               WHERE i.bill_id=? ORDER BY i.id""", (bill_id,)).fetchall()
         paid = sum(1 for i in items if i["paid"])
         result = {
             "bill_id": bill_id, "title": bill["title"],
@@ -520,10 +531,208 @@ class LedgerService:
             "paid_count": paid, "total_count": len(items),
             "items": [{"name": i["contact_name"],
                        "share_yuan": cents_to_yuan(i["share_cents"]),
-                       "paid": bool(i["paid"])} for i in items],
+                       "paid": bool(i["paid"]),
+                       "request_status": i["request_status"]} for i in items],
         }
         audit(self.conn, "get_split_bill", {"bill_id": bill_id}, {"status": result["status"]})
         return result
+
+    # ---------------------------------------------------- AA 交款单（跨用户）
+
+    _SELF_NAMES = frozenset({"我", "本人", "自己", "我的", "我本人"})
+
+    def _resolve_payee(self, item: sqlite3.Row) -> dict:
+        """把一个分摊项解析成「投递给谁」。
+
+        解析顺序（只做确定性匹配，不做模糊猜测）：
+        1. 参与人手机号（发起时显式给出）→ users.phone 精确命中；
+        2. 发起人的联系人里同名者的手机号 → users.phone 精确命中；
+        3. users.name 精确同名（仅当命中恰好 1 人）。
+        返回 {"status": delivered|self|not_found|ambiguous, "to_user_id", "candidates"}。
+        """
+        name = str(item["contact_name"] or "").strip()
+        phone = str(item["phone"] or "").strip()
+        if not phone and name in self._SELF_NAMES:
+            return {"status": "self", "to_user_id": None, "candidates": []}
+        if phone:
+            rows = self.conn.execute(
+                "SELECT id, name FROM users WHERE phone=?", (phone,)).fetchall()
+            if len(rows) == 1:
+                return self._payee_hit(int(rows[0]["id"]))
+            return {"status": "not_found", "to_user_id": None, "candidates": []}
+
+        hits: dict[int, dict] = {}
+        contacts = self.conn.execute(
+            "SELECT phone FROM contacts WHERE user_id=? AND name=?",
+            (self.user_id, name)).fetchall()
+        for c in contacts:
+            for u in self.conn.execute(
+                    "SELECT id, name FROM users WHERE phone=?", (c["phone"],)):
+                hits[int(u["id"])] = {"user_id": int(u["id"]), "name": u["name"]}
+        for u in self.conn.execute(
+                "SELECT id, name FROM users WHERE name=?", (name,)):
+            hits[int(u["id"])] = {"user_id": int(u["id"]), "name": u["name"]}
+
+        if len(hits) == 1:
+            return self._payee_hit(next(iter(hits)))
+        if len(hits) > 1:
+            return {"status": "ambiguous", "to_user_id": None,
+                    "candidates": list(hits.values())}
+        return {"status": "not_found", "to_user_id": None, "candidates": []}
+
+    def _payee_hit(self, user_id: int) -> dict:
+        if user_id == self.user_id:
+            return {"status": "self", "to_user_id": user_id, "candidates": []}
+        return {"status": "delivered", "to_user_id": user_id, "candidates": []}
+
+    def send_split_requests(self, bill_id: int) -> dict:
+        """把 AA 账单逐个参与人投递成「交款单」（幂等：同一分摊项只投一次）。
+
+        未匹配到注册用户的参与人保留为普通记账项，不阻塞整单；
+        返回逐人投递结果，供 Agent 如实播报“已送达谁 / 谁未注册”。
+        """
+        bill = self.conn.execute(
+            "SELECT * FROM split_bills WHERE id=? AND user_id=?",
+            (bill_id, self.user_id)).fetchone()
+        if not bill:
+            raise LedgerError("AA 单不存在")
+        items = self.conn.execute(
+            "SELECT * FROM split_bill_items WHERE bill_id=? ORDER BY id",
+            (bill_id,)).fetchall()
+        deliveries: list[dict] = []
+        sent = 0
+        for item in items:
+            existing = self.conn.execute(
+                "SELECT * FROM payment_requests WHERE item_id=?",
+                (item["id"],)).fetchone()
+            if existing:
+                deliveries.append({"name": item["contact_name"],
+                                   "status": "already_sent",
+                                   "request_id": int(existing["id"]),
+                                   "to_user_id": int(existing["to_user_id"])})
+                continue
+            resolved = self._resolve_payee(item)
+            if resolved["status"] != "delivered":
+                deliveries.append({"name": item["contact_name"],
+                                   "status": resolved["status"],
+                                   "candidates": resolved["candidates"]})
+                continue
+            cur = self.conn.execute(
+                """INSERT INTO payment_requests
+                   (bill_id, item_id, from_user_id, to_user_id, title,
+                    amount_cents, status, created_at)
+                   VALUES (?,?,?,?,?,?,'pending',?)""",
+                (bill_id, item["id"], self.user_id, resolved["to_user_id"],
+                 bill["title"], item["share_cents"], now_iso()))
+            sent += 1
+            deliveries.append({"name": item["contact_name"],
+                               "status": "delivered",
+                               "request_id": int(cur.lastrowid),
+                               "to_user_id": resolved["to_user_id"]})
+        self.conn.commit()
+        result = {"bill_id": bill_id, "title": bill["title"],
+                  "sent_count": sent, "deliveries": deliveries}
+        audit(self.conn, "send_split_requests", {"bill_id": bill_id},
+              result, risk="MED")
+        record_change(self.conn, self.user_id, category="aa", action="send_requests",
+                      target=bill["title"],
+                      detail={"bill_id": bill_id, "sent": sent,
+                              "deliveries": len(deliveries)})
+        return result
+
+    def list_payment_requests(self, status: str = "pending") -> dict:
+        """当前用户的交款单收件箱（对方 Agent 投递进来的待付/已付记录）。
+
+        status: pending（默认）| paid | all。pending_count 始终返回，
+        便于 Agent 在任意查询里顺带提醒“你还有 N 张待付”。
+        """
+        if status not in ("pending", "paid", "all"):
+            raise LedgerError("status 不合法（pending/paid/all）")
+        sql = """SELECT pr.*, u.name AS from_name, sb.status AS bill_status
+                 FROM payment_requests pr
+                 JOIN users u ON u.id = pr.from_user_id
+                 JOIN split_bills sb ON sb.id = pr.bill_id
+                 WHERE pr.to_user_id=?"""
+        args: list = [self.user_id]
+        if status != "all":
+            sql += " AND pr.status=?"
+            args.append(status)
+        rows = self.conn.execute(sql + " ORDER BY pr.id DESC", args).fetchall()
+        pending_count = self.conn.execute(
+            "SELECT COUNT(*) c FROM payment_requests "
+            "WHERE to_user_id=? AND status='pending'", (self.user_id,)).fetchone()["c"]
+        requests = [{
+            "request_id": int(r["id"]), "bill_id": int(r["bill_id"]),
+            "title": r["title"], "from_name": r["from_name"],
+            "from_user_id": int(r["from_user_id"]),
+            "amount_yuan": cents_to_yuan(r["amount_cents"]),
+            "status": r["status"], "created_at": r["created_at"],
+            "paid_at": r["paid_at"], "bill_status": r["bill_status"],
+        } for r in rows]
+        result = {"count": len(requests), "pending_count": pending_count,
+                  "requests": requests}
+        audit(self.conn, "list_payment_requests", {"status": status},
+              {"count": len(requests), "pending_count": pending_count})
+        return result
+
+    def pay_payment_request(self, request_id: int) -> dict:
+        """收件人确认支付一张交款单：置付款位并推进账单状态（幂等）。
+
+        演示边界与既有 AA 结算一致：只标记已付，不产生真实入账流水；
+        生产环境应替换为支付/清算回调（见 docs/产品功能说明.md）。
+        """
+        row = self.conn.execute(
+            """SELECT pr.*, u.name AS from_name
+               FROM payment_requests pr JOIN users u ON u.id = pr.from_user_id
+               WHERE pr.id=? AND pr.to_user_id=?""",
+            (request_id, self.user_id)).fetchone()
+        if not row:
+            raise LedgerError("交款单不存在或不属于当前用户")
+        if row["status"] == "paid":
+            progress = self._bill_progress(int(row["bill_id"]))
+            result = {"request_id": int(row["id"]), "bill_id": int(row["bill_id"]),
+                      "title": row["title"], "from_name": row["from_name"],
+                      "amount_yuan": cents_to_yuan(row["amount_cents"]),
+                      "status": "paid", "already_paid": True, **progress}
+            audit(self.conn, "pay_payment_request", {"request_id": request_id},
+                  result, risk="LOW")
+            return result
+        if row["status"] != "pending":
+            raise LedgerError("交款单已失效，不能支付")
+
+        paid_at = now_iso()
+        self.conn.execute(
+            "UPDATE payment_requests SET status='paid', paid_at=? WHERE id=?",
+            (paid_at, request_id))
+        self.conn.execute(
+            "UPDATE split_bill_items SET paid=1, paid_at=? WHERE id=? AND paid=0",
+            (paid_at, row["item_id"]))
+        progress = self._bill_progress(int(row["bill_id"]))
+        self.conn.execute("UPDATE split_bills SET status=? WHERE id=?",
+                          (progress["bill_status"], row["bill_id"]))
+        self.conn.commit()
+        result = {"request_id": int(row["id"]), "bill_id": int(row["bill_id"]),
+                  "title": row["title"], "from_name": row["from_name"],
+                  "amount_yuan": cents_to_yuan(row["amount_cents"]),
+                  "status": "paid", "already_paid": False, **progress}
+        audit(self.conn, "pay_payment_request", {"request_id": request_id},
+              result, risk="LOW")
+        record_change(self.conn, self.user_id, category="aa", action="pay_request",
+                      target=row["title"],
+                      detail={"request_id": request_id,
+                              "bill_id": int(row["bill_id"]),
+                              "amount_yuan": cents_to_yuan(row["amount_cents"])})
+        return result
+
+    def _bill_progress(self, bill_id: int) -> dict:
+        total = self.conn.execute(
+            "SELECT COUNT(*) c FROM split_bill_items WHERE bill_id=?",
+            (bill_id,)).fetchone()["c"]
+        paid = self.conn.execute(
+            "SELECT COUNT(*) c FROM split_bill_items WHERE bill_id=? AND paid=1",
+            (bill_id,)).fetchone()["c"]
+        return {"bill_status": "settled" if total and paid >= total else "collecting",
+                "paid_count": paid, "total_count": total}
 
     def settle_split_bill_item(self, bill_id: int, contact_name: str) -> dict:
         """标记某人参账已付（演示中模拟对方付款回调）。"""
@@ -533,9 +742,14 @@ class LedgerService:
         if not row:
             raise LedgerError("分摊项不存在")
         if not row["paid"]:
+            paid_at = now_iso()
             self.conn.execute(
                 "UPDATE split_bill_items SET paid=1, paid_at=? WHERE id=?",
-                (now_iso(), row["id"]))
+                (paid_at, row["id"]))
+            # 收件箱同步:发起人手动标记已付时,对应交款单不再显示为待付
+            self.conn.execute(
+                "UPDATE payment_requests SET status='paid', paid_at=? "
+                "WHERE item_id=? AND status='pending'", (paid_at, row["id"]))
         remain = self.conn.execute(
             "SELECT COUNT(*) c FROM split_bill_items WHERE bill_id=? AND paid=0",
             (bill_id,)).fetchone()["c"]

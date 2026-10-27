@@ -284,6 +284,116 @@ def test_split_bill_math(tmp_path):
         led.create_split_bill("错账", 10000, [{"name": "A", "share_cents": 4000}])
 
 
+# ------------------------------------------------- 交款单:跨用户派发/收件箱/付款
+
+def _mk_payment_users(conn: sqlite3.Connection) -> None:
+    """发起人 1 + 可解析收款人 2/3/6 + 同名用户 4/5。"""
+    rows = [(1, "发起人", "13800000001"), (2, "李四", "13800000002"),
+            (3, "王五", "13800000003"), (4, "同名", "13800000004"),
+            (5, "同名", "13800000005"), (6, "赵六", "13800000006")]
+    for uid, name, phone in rows:
+        conn.execute("INSERT INTO users (id,name,phone,created_at) "
+                     "VALUES (?,?,?,'2026-01-01T00:00:00')", (uid, name, phone))
+    # 1 的联系人「王五」手机号 = 用户 3 → 按联系人手机号可解析
+    conn.execute("INSERT INTO contacts (user_id,name,phone,relation,note) "
+                 "VALUES (1,'王五','13800000003','friend','')")
+    conn.commit()
+
+
+def test_split_request_dispatch_resolves_by_phone_and_name(tmp_path):
+    """派发:显式手机号/同名解析/联系人手机号/自我/歧义/未注册逐项正确,且幂等。"""
+    conn = init_db(tmp_path / "t.db")
+    _mk_payment_users(conn)
+    led = LedgerService(conn, 1)
+    bill = led.create_split_bill("火锅", 30000, [
+        {"name": "我", "share_cents": 5000},
+        {"name": "李四", "share_cents": 5000},
+        {"name": "王五", "share_cents": 5000},
+        {"name": "赵六", "phone": "13800000006", "share_cents": 5000},
+        {"name": "同名", "share_cents": 5000},
+        {"name": "路人", "share_cents": 5000},
+    ])
+    disp = led.send_split_requests(bill["bill_id"])
+    assert disp["sent_count"] == 3
+    by_name = {d["name"]: d for d in disp["deliveries"]}
+    assert by_name["我"]["status"] == "self"
+    assert by_name["李四"]["status"] == "delivered"
+    assert by_name["李四"]["to_user_id"] == 2
+    assert by_name["王五"]["status"] == "delivered"       # 联系人手机号解析
+    assert by_name["王五"]["to_user_id"] == 3
+    assert by_name["赵六"]["status"] == "delivered"       # 显式手机号解析
+    assert by_name["赵六"]["to_user_id"] == 6
+    assert by_name["同名"]["status"] == "ambiguous"       # 两个注册用户同名
+    assert len(by_name["同名"]["candidates"]) == 2
+    assert by_name["路人"]["status"] == "not_found"
+
+    # 幂等:重复派发零新增,已投递项标记 already_sent
+    again = led.send_split_requests(bill["bill_id"])
+    assert again["sent_count"] == 0
+    assert sum(1 for d in again["deliveries"] if d["status"] == "already_sent") == 3
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM payment_requests").fetchone()["c"] == 3
+
+    # 发起人视角能看出每个分摊项的投递状态
+    view = led.get_split_bill(bill["bill_id"])
+    status_by_name = {i["name"]: i["request_status"] for i in view["items"]}
+    assert status_by_name["李四"] == "pending"
+    assert status_by_name["我"] is None
+    assert status_by_name["路人"] is None
+
+
+def test_payment_request_inbox_isolated_and_pay_idempotent(tmp_path):
+    """收件箱按用户隔离;收款人付款推进分摊项;重复付款幂等;不能付别人的单。"""
+    conn = init_db(tmp_path / "t.db")
+    _mk_payment_users(conn)
+    alice = LedgerService(conn, 1)
+    bill = alice.create_split_bill("火锅", 30000, [
+        {"name": "李四", "share_cents": 10000},
+        {"name": "王五", "share_cents": 10000},
+        {"name": "我", "share_cents": 10000},
+    ])
+    alice.send_split_requests(bill["bill_id"])
+
+    bob = LedgerService(conn, 2)
+    wang = LedgerService(conn, 3)
+    inbox_b = bob.list_payment_requests()
+    assert inbox_b["count"] == 1 and inbox_b["pending_count"] == 1
+    req_b = inbox_b["requests"][0]
+    assert req_b["from_name"] == "发起人" and req_b["amount_yuan"] == "100.00"
+    assert wang.list_payment_requests()["requests"][0]["request_id"] != req_b["request_id"]
+    assert alice.list_payment_requests()["count"] == 0  # 发起人自己的收件箱为空
+
+    # 不能替别人付款
+    with pytest.raises(LedgerError):
+        bob.pay_payment_request(wang.list_payment_requests()["requests"][0]["request_id"])
+
+    paid = bob.pay_payment_request(req_b["request_id"])
+    assert paid["status"] == "paid" and paid["already_paid"] is False
+    assert paid["paid_count"] == 1 and paid["total_count"] == 3
+
+    # 幂等:再付一次不重复推进
+    again = bob.pay_payment_request(req_b["request_id"])
+    assert again["already_paid"] is True and again["paid_count"] == 1
+    assert bob.list_payment_requests()["count"] == 0
+    assert bob.list_payment_requests(status="paid")["count"] == 1
+
+    # 发起人手动标记已付时,收件箱同步为 paid
+    wang_req = wang.list_payment_requests()["requests"][0]
+    alice.settle_split_bill_item(bill["bill_id"], "王五")
+    assert wang.list_payment_requests()["count"] == 0
+    assert wang.list_payment_requests(status="paid")["requests"][0]["request_id"] == wang_req["request_id"]
+
+
+def test_payment_request_rejects_bad_status_and_missing_request(tmp_path):
+    conn = init_db(tmp_path / "t.db")
+    _mk_payment_users(conn)
+    led = LedgerService(conn, 1)
+    with pytest.raises(LedgerError, match="status"):
+        led.list_payment_requests(status="bogus")
+    with pytest.raises(LedgerError, match="交款单不存在"):
+        led.pay_payment_request(999)
+
+
 def test_card_lost_irreversible(tmp_path):
     conn = init_db(tmp_path / "t.db")
     conn.execute("INSERT OR IGNORE INTO users (id,name,phone,created_at) "
