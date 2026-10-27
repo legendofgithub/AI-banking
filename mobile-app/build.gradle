@@ -1,0 +1,4 @@
+// 根构建脚本:只声明 AGP 版本,App 本体零第三方依赖
+plugins {
+    id "com.android.application" version "8.5.2" apply false
+}

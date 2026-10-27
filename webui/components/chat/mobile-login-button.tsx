@@ -31,8 +31,8 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 拼手机可访问的落地页 URL:桌面用 127.0.0.1 打开时换成局域网 IP */
-async function buildPhoneUrl(ticket: string): Promise<string> {
+/** 拼手机可访问的 origin:桌面用 127.0.0.1 打开时换成局域网 IP */
+async function lanOrigin(): Promise<string> {
   const { protocol, hostname, port } = window.location;
   let host = hostname;
   if (LOCAL_HOSTS.has(hostname)) {
@@ -47,7 +47,12 @@ async function buildPhoneUrl(ticket: string): Promise<string> {
       // 探测失败就用原主机(手机与电脑同机调试时仍可用)
     }
   }
-  return `${protocol}//${host}${port ? `:${port}` : ""}/qr-login?ticket=${encodeURIComponent(ticket)}`;
+  return `${protocol}//${host}${port ? `:${port}` : ""}`;
+}
+
+/** 拼手机可访问的落地页 URL:桌面用 127.0.0.1 打开时换成局域网 IP */
+async function buildPhoneUrl(ticket: string): Promise<string> {
+  return `${await lanOrigin()}/qr-login?ticket=${encodeURIComponent(ticket)}`;
 }
 
 export function MobileLoginButton() {
@@ -58,6 +63,28 @@ export function MobileLoginButton() {
   const [error, setError] = useState("");
   const [needLogin, setNeedLogin] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const [appUrl, setAppUrl] = useState("");
+
+  // App 下载页二维码:不需要登录票据,弹窗打开时算一次局域网地址即可
+  useEffect(() => {
+    if (!open) {
+      setAppUrl("");
+      return;
+    }
+    let cancelled = false;
+    lanOrigin()
+      .then((origin) => {
+        if (!cancelled) {
+          setAppUrl(`${origin}/download`);
+        }
+      })
+      .catch(() => {
+        // 下载区不展示也不影响主流程
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   /** 拉一张新票并展示;返回有效期(秒),失败返回 0(展示错误/登录引导)。 */
   const loadTicket = useCallback(async (): Promise<number> => {
@@ -151,10 +178,10 @@ export function MobileLoginButton() {
   return (
     <>
       <button
-        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-white/25 bg-white/10 px-2.5 text-[12px] text-white/90 transition-colors hover:bg-white/20 hover:text-white md:inline-flex"
+        className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg border border-brand-blue/20 bg-white/60 px-2.5 text-[12px] text-brand-blue transition-colors hover:border-brand-red/30 hover:bg-brand-red-soft hover:text-brand-red md:inline-flex dark:border-white/10 dark:bg-white/5 dark:hover:bg-brand-red/15"
         data-testid="mobile-login-button"
         onClick={openDialog}
-        title="生成二维码,手机扫码直接登录手机端"
+        title="生成二维码,手机扫码直接登录手机端;弹窗内可扫码下载手机 App"
         type="button"
       >
         <SmartphoneIcon className="size-3.5" />
@@ -235,6 +262,38 @@ export function MobileLoginButton() {
               </p>
             )}
           </div>
+
+          {/* App 下载区:与接力登录并列,扫码打开 /download 页装 APK */}
+          {appUrl ? (
+            <div
+              className="border-t border-border/50 px-5 py-4"
+              data-testid="app-download-section"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[13px] font-semibold text-ink dark:text-brand-blue">
+                    下载手机 App
+                  </p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    安装后 App 直连本机演示,数据与电脑实时同步;装过一次
+                    无需再扫,登录态保留 7 天。
+                  </p>
+                </div>
+                <div
+                  className="shrink-0 rounded-lg border border-border/60 bg-white p-1.5 shadow-[var(--shadow-card)]"
+                  data-testid="app-download-qr"
+                  data-url={appUrl}
+                >
+                  {/* biome-ignore lint/performance/noImgElement: 8800 动态生成的跨端口 PNG,next/image 不代理动态远端图 */}
+                  <img
+                    alt="手机 App 下载二维码"
+                    className="size-20"
+                    src={`${bankAgentBase()}/api/qr?data=${encodeURIComponent(appUrl)}`}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
     </>

@@ -62,6 +62,8 @@ AI-Banking-Agent-答辩演示-*.pptx
 AGENTS.md
 # 前端/ 为设计期高保真原型(墨刀施工图),产品本体是 webui/,原型仅本地留存
 前端/
+# APK 为 GitHub Actions 构建产物(见 mobile-app/README),按材料惯例本地落盘不入库
+webui/public/app/*.apk
 # ZCode 本地工具配置(非项目本体)
 .zcodeignore
 # Vercel 模板残留(本项目不做 Vercel 部署)
