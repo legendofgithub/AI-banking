@@ -318,7 +318,8 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                     data-testid="sidebar-home"
                     onClick={() => {
                       setOpenMobile(false);
-                      router.push("/home");
+                      // 门户页是展示首页(/home 仅手机扫码/登录落地),聊天返回统一回门户
+                      router.push("/portal");
                     }}
                     tooltip="银行首页"
                   >
