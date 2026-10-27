@@ -137,7 +137,12 @@ try {
     timeout: 15_000,
   });
   await phone.getByRole("button", { name: /验证并登录/ }).click();
-  // 移动端(<768px)登录后应自动落到电脑端当前会话(而不是停在首页)
+  // 2026-10-27 产品改版:登录统一落 /home(首页),不再自动跳电脑会话;
+  // 加入同一会话的路径 = 会话列表点开(这里等效为直接进线程 URL)
+  await phone.waitForURL(/\/home/, { timeout: 30_000 });
+  await phone.goto(`${BASE}/chat/${desktopThreadId}`, {
+    waitUntil: "domcontentloaded",
+  });
   await phone.waitForURL(new RegExp(`/chat/${desktopThreadId}`), {
     timeout: 30_000,
   });
@@ -161,7 +166,7 @@ try {
   }
   await phone.screenshot({ path: shot("t2_手机登录并加入电脑端会话") });
   console.log(
-    `T2 手机登录后自动加入电脑端会话(昵称=${nickname},看到「${desktopToken}」): 通过`
+    `T2 手机登录后从会话列表进入电脑会话(昵称=${nickname},看到「${desktopToken}」): 通过`
   );
 
   // ---- T4 反向同步:手机输入 → 电脑端看到;桌面留在同一会话 ----
