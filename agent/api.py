@@ -194,6 +194,11 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     identifier: str = Field(min_length=5, max_length=120)
     password: str = Field(min_length=8, max_length=64)
+    # 登录二次校验(2026-10-27):第一步只传账号密码(响应 otp_required+挑战),
+    # 第二步带上 challenge_id+code 换会话。两字段均可缺省——AGENT_LOGIN_OTP=0
+    # 时单步登录照旧,旧客户端最多多收到一步 otp_required。
+    challenge_id: int | None = None
+    code: str | None = Field(default=None, min_length=0, max_length=6)
 
 
 class TokenIn(BaseModel):
@@ -624,12 +629,45 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
 
     @app.post("/api/auth/login")
     async def auth_login(req: LoginIn):
+        """两步登录(2026-10-27,AGENT_LOGIN_OTP=0 回退单步):
+
+        ① 只带账号密码 → 校验密码后**不发会话**,签发验证码挑战:
+           {otp_required, challenge_id, phone_masked, expires_in, demo_code?}
+           (demo_code 是演示"模拟短信",仅 AGENT_OTP_ECHO 开启时返回);
+        ② 带 challenge_id+code → 校验验证码(即焚),通过后发 7 天会话,
+           载荷与旧单步登录完全一致(token/user_id/nickname/identifier)。
+        """
+        otp_on = os.environ.get("AGENT_LOGIN_OTP", "1") \
+            not in ("0", "false", "False")
+        # 第二步:验证码换会话
+        if otp_on and (req.challenge_id is not None or req.code):
+            if req.challenge_id is None or not (req.code or "").strip():
+                return JSONResponse(
+                    status_code=400, content={"error": "请输入短信验证码"})
+            try:
+                u = auth_mod.verify_login_code(
+                    app.state.auth_conn, identifier=req.identifier,
+                    challenge_id=req.challenge_id, code=req.code or "")
+            except auth_mod.AuthError as e:
+                return JSONResponse(status_code=400, content={"error": str(e)})
+            sess = auth_mod.issue_session(app.state.auth_conn, u["user_id"])
+            return {"token": sess["token"], "user_id": sess["user_id"],
+                    "nickname": sess["nickname"],
+                    "identifier": auth_mod.mask_identifier(sess["identifier"])}
+        # 第一步:密码 + 发码(或 OTP 关闭时的单步登录)
         try:
+            if otp_on:
+                return auth_mod.send_login_code(
+                    app.state.auth_conn, identifier=req.identifier,
+                    password=req.password)
             sess = auth_mod.login(app.state.auth_conn,
                                   identifier=req.identifier,
                                   password=req.password)
         except auth_mod.AuthError as e:
-            return JSONResponse(status_code=400, content={"error": str(e)})
+            msg = str(e)
+            # 发码冷却单独给 429,前端可据此提示倒计时而非"密码错误"
+            status = 429 if "太频繁" in msg else 400
+            return JSONResponse(status_code=status, content={"error": msg})
         return {"token": sess["token"], "user_id": sess["user_id"],
                 "nickname": sess["nickname"],
                 "identifier": auth_mod.mask_identifier(sess["identifier"])}

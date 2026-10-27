@@ -425,3 +425,32 @@ def test_users_expose_demo_credentials(rec_env, tmp_path):
     assert custom["identifier"] == "13900007777"
     assert custom["login_password"] == ""               # 非演示口令:空串,前端显示"—"
     assert rows[1]["auth"] is None                      # 纯档案用户:无 auth 行
+
+
+def test_otp_codes_endpoint_lists_masked(tmp_path):
+    """短信记录端点(2026-10-27 登录二次校验):列出验证码发送记录,
+    手机号脱敏、不含明文码;表尚未初始化时返回空列表不 500。"""
+    from agent import auth as _auth
+
+    db = tmp_path / "bank.db"
+    conn = init_db(db)  # SCHEMA 建 users/login_otps(auth 需要 users 行)
+    conn.execute(
+        "INSERT INTO users (id,name,phone,created_at) "
+        "VALUES (1,'陈明','13800000000','2026-01-01T00:00:00')")
+    conn.commit()
+    _auth.init_auth(conn)
+    _auth.ensure_demo_auth(conn)
+    ch = _auth.send_login_code(conn, identifier="13800000000",
+                               password="Demo@12345")
+    conn.close()
+    app = create_admin_app(db)
+    with TestClient(app) as c:
+        r = c.get("/api/otp-codes")
+        assert r.status_code == 200
+        items = r.json()["otp_codes"]
+        assert items and items[0]["phone_masked"].startswith("138****")
+        assert items[0]["status"] == "待使用"
+        raw = sqlite3.connect(db).execute(
+            "SELECT code_hash FROM login_otps").fetchall()
+        for (h,) in raw:
+            assert ch["demo_code"] not in h

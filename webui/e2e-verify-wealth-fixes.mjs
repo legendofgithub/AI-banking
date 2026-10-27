@@ -47,6 +47,9 @@ async function login(page, cred) {
   await page.fill("#identifier", cred.id);
   await page.fill("#password", cred.pw);
   await page.getByRole("button", { name: "登录", exact: true }).click();
+  // 两步登录(2026-10-27):第二步验证码——模拟短信卡「填入」→「验证并登录」
+  await page.locator('[data-testid="demo-sms-fill"]').click({ timeout: 15_000 });
+  await page.getByRole("button", { name: /验证并登录/ }).click();
   await page.waitForSelector("textarea", { timeout: 60000 });
   await sleep(3500); // 等水合 + bank-token 落地
 }

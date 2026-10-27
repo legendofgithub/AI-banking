@@ -142,10 +142,31 @@ CREATE TABLE IF NOT EXISTS split_bill_items (
     id          INTEGER PRIMARY KEY,
     bill_id     INTEGER NOT NULL REFERENCES split_bills(id),
     contact_name TEXT NOT NULL,
+    -- 参与人手机号(选填):发起人显式给出时,交款单可按手机号精确投递给对应注册用户
+    phone       TEXT NOT NULL DEFAULT '',
     share_cents INTEGER NOT NULL CHECK (share_cents > 0),
     paid        INTEGER NOT NULL DEFAULT 0,
     paid_at     TEXT
 );
+
+-- AA 交款单(跨用户 Agent 收件箱):发起人建单后逐个参与人投递,
+-- 收款人登录自己的 Agent 即可查看并确认付款。item_id 唯一保证重复派发幂等。
+CREATE TABLE IF NOT EXISTS payment_requests (
+    id           INTEGER PRIMARY KEY,
+    bill_id      INTEGER NOT NULL REFERENCES split_bills(id),
+    item_id      INTEGER NOT NULL UNIQUE REFERENCES split_bill_items(id),
+    from_user_id INTEGER NOT NULL REFERENCES users(id),
+    to_user_id   INTEGER NOT NULL REFERENCES users(id),
+    title        TEXT NOT NULL,
+    amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+    status       TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending', 'paid', 'declined', 'cancelled')),
+    created_at   TEXT NOT NULL,
+    read_at      TEXT,
+    paid_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pr_to_user
+    ON payment_requests(to_user_id, status);
 
 CREATE TABLE IF NOT EXISTS wealth_products (
     id                    INTEGER PRIMARY KEY,
@@ -272,6 +293,21 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
+
+-- 登录短信验证码（2026-10-27 登录二次校验）。只存 PBKDF2 哈希，库中无明文；
+-- 演示回显码只活在 API 响应与内存。追加建表：老库 executescript 自愈。
+CREATE TABLE IF NOT EXISTS login_otps (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    phone       TEXT NOT NULL,
+    code_hash   TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,   -- 校验失败次数，>=5 作废挑战
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    consumed_at TEXT                          -- 成功即焚时间；NULL=未用
+);
+CREATE INDEX IF NOT EXISTS idx_login_otps_phone
+    ON login_otps(phone, created_at);
 """
 
 
@@ -305,6 +341,12 @@ def init_db(db_path: str | os.PathLike | None = None) -> sqlite3.Connection:
     if subs_cols and "precheck_ack_date" not in subs_cols:
         conn.execute("ALTER TABLE subscriptions ADD COLUMN "
                      "precheck_ack_date TEXT NOT NULL DEFAULT ''")
+    # AA 交款单(2026-10-27):老库的 split_bill_items 没有 phone 列,
+    # CREATE TABLE IF NOT EXISTS 不会补列,这里显式迁移。
+    item_cols = {r[1] for r in conn.execute("PRAGMA table_info(split_bill_items)")}
+    if item_cols and "phone" not in item_cols:
+        conn.execute("ALTER TABLE split_bill_items ADD COLUMN "
+                     "phone TEXT NOT NULL DEFAULT ''")
     conn.commit()
     return conn
 

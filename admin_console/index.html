@@ -296,6 +296,7 @@ input.mono{font-family:var(--mono)}
   <button class="tab" data-tab="plans">联动计划</button>
   <button class="tab" data-tab="orders">转账订单</button>
   <button class="tab" data-tab="adjust">调账</button>
+  <button class="tab" data-tab="otp">短信记录</button>
 </nav>
 
 <main>
@@ -532,6 +533,20 @@ input.mono{font-family:var(--mono)}
       <table>
         <thead><tr><th>时间</th><th class="num">金额(元)</th><th class="num">调账前(元)</th><th class="num">调账后(元)</th><th>原因</th></tr></thead>
         <tbody id="adjRecentBody"><tr><td colspan="5" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 10. 短信记录(登录验证码) ================= -->
+<section id="tab-otp" class="panel">
+  <div class="card">
+    <h3>短信记录（登录验证码）</h3>
+    <p class="form-note">演示环境不发送真实短信；验证码经登录第二步的“模拟短信”卡片送达用户。库中只存哈希，此处仅展示发送/核销记录。</p>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>#</th><th>用户</th><th>手机号</th><th>状态</th><th class="num">尝试</th><th>发送时间</th><th>过期时间</th></tr></thead>
+        <tbody id="otpBody"></tbody>
       </table>
     </div>
   </div>
@@ -1200,6 +1215,30 @@ function adjLogRow(r){
   </tr>`;
 }
 
+function otpBadge(s){
+  // 已使用=绿 / 待使用=橙 / 过期与作废=灰
+  const cls = s === '已使用' ? 'os-exec' : (s === '待使用' ? 'os-pending' : 'st-cancel');
+  return `<span class="badge ${cls}">${esc(s)}</span>`;
+}
+
+async function loadOtp(){
+  $('#otpBody').innerHTML = loadingRow(7);
+  const d = await api('/api/otp-codes?limit=50');
+  $('#otpBody').innerHTML = (d.otp_codes || []).map(o => {
+    const cls = o.status === '已使用' ? 'ok' : (o.status === '待使用' ? 'warn' : 'muted');
+    return `
+    <tr>
+      <td class="mono">${esc(o.id)}</td>
+      <td>${esc(o.nickname || '')} <span class="muted">(ID:${esc(o.user_id)})</span></td>
+      <td class="mono">${esc(o.phone_masked)}</td>
+      <td>${otpBadge(o.status)}</td>
+      <td class="num">${esc(o.attempts)}</td>
+      <td class="ts">${esc(fmtTime(o.created_at))}</td>
+      <td class="ts">${esc(fmtTime(o.expires_at))}</td>
+    </tr>`;
+  }).join('') || emptyRow(7);
+}
+
 async function loadAdjustLog(){
   $('#adjustLogBody').innerHTML = loadingRow(9);
   const qs = new URLSearchParams({
@@ -1240,6 +1279,7 @@ const TAB_LOADERS = {
   plans:    safe(loadPlans),
   orders:   safe(loadOrders),
   adjust:   safe(loadAdjust),
+  otp:      safe(loadOtp),
 };
 function switchTab(key){
   currentTab = key;

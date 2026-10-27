@@ -56,6 +56,9 @@ try {
   await page.getByRole("textbox", { name: /账号/ }).fill(PHONE);
   await page.getByRole("textbox", { name: /登录密码/ }).fill(PASSWORD);
   await page.getByRole("button", { exact: false, name: /登录/ }).click();
+  // 两步登录(2026-10-27):第二步验证码——模拟短信卡「填入」→「验证并登录」
+  await page.locator('[data-testid="demo-sms-fill"]').click({ timeout: 15_000 });
+  await page.getByRole("button", { name: /验证并登录/ }).click();
   await page.waitForSelector("textarea", { timeout: 30_000 });
   // 手机登录会自动加入电脑端当前会话;本用例专门从首页走建议胶囊,主动回首页
   await page.waitForTimeout(1200);

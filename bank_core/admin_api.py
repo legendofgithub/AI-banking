@@ -121,6 +121,9 @@ def _day_bound(value: str, *, end: bool) -> str:
 def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
     """构造管理后台应用。db_path=None 走 BANK_CORE_DB/默认库（生产）。"""
     conn = connect(db_path)
+    # 验证码记录等跨连接只读要拿库文件路径(connect 不回传,这里另开一次解析)
+    from bank_core.db import default_db_path as _ddp
+    _db_file = Path(db_path) if db_path else Path(_ddp())
     # users.id_card/email 老库补列(管理台 connect 直连,不经 init_db)
     migrate_users_kyc(conn)
     migrate_cards_bound(conn)  # 演示绑卡列
@@ -735,6 +738,35 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
                 "net_yuan": cents_to_yuan(added - deducted),
             },
         }
+
+    # ------------------------------------------------------------ 短信记录(登录验证码)
+    @app.get("/api/otp-codes")
+    def otp_codes(limit: int = 30) -> dict:
+        """登录短信验证码发送记录(2026-10-27 登录二次校验)。
+
+        只读;表由 init_db/init_auth 建,老演示库首启前可能还没有——空列表兜底。
+        展示脱敏:手机号走 mask_identifier;库中本就无明文码(code_hash)。
+        """
+        from bank_core.auth_core import mask_identifier as _mask
+        from bank_core.db import now_iso as _now
+
+        n = max(1, min(int(limit or 30), 100))
+        rows = _rec_rows(
+            _db_file,
+            """SELECT o.id, o.user_id, o.phone, o.attempts, o.created_at,
+                      o.expires_at, o.consumed_at, u.name
+               FROM login_otps o LEFT JOIN users u ON u.id=o.user_id
+               ORDER BY o.id DESC LIMIT ?""", (n,))
+        items = [{
+            "id": r["id"], "user_id": r["user_id"], "nickname": r["name"],
+            "phone_masked": _mask(r["phone"]), "attempts": r["attempts"],
+            "created_at": r["created_at"], "expires_at": r["expires_at"],
+            "status": ("已使用" if r["consumed_at"]
+                       else ("已过期" if r["expires_at"] < _now()
+                             else ("已作废" if r["attempts"] >= 5
+                                   else "待使用"))),
+        } for r in rows]
+        return {"otp_codes": items}
 
     # ------------------------------------------------------------ 静态管理页
     admin_dir = Path(__file__).resolve().parent.parent / "admin_console"

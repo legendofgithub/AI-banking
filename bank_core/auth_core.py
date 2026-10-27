@@ -65,6 +65,19 @@ def init_auth_tables(conn: sqlite3.Connection) -> None:
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS login_otps (
+        -- 登录短信验证码：与 db.py SCHEMA 同款双写（agent 直连路径不走 init_db）
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id     INTEGER NOT NULL REFERENCES users(id),
+        phone       TEXT NOT NULL,
+        code_hash   TEXT NOT NULL,
+        attempts    INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL,
+        expires_at  TEXT NOT NULL,
+        consumed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_login_otps_phone
+        ON login_otps(phone, created_at);
     """)
     conn.commit()
 

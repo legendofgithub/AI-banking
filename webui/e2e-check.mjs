@@ -29,6 +29,9 @@ try {
   await page.getByRole("textbox", { name: /账号/ }).fill("13800002233");
   await page.getByRole("textbox", { name: /登录密码/ }).fill("Demo@12345");
   await page.getByRole("button", { exact: false, name: /登录/ }).click();
+  // 两步登录(2026-10-27):第二步验证码——模拟短信卡「填入」→「验证并登录」
+  await page.locator('[data-testid="demo-sms-fill"]').click({ timeout: 15_000 });
+  await page.getByRole("button", { name: /验证并登录/ }).click();
   await page.waitForSelector("textarea", { timeout: 30_000 });
 
   await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });

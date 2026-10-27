@@ -3,7 +3,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import type { UIMessage } from "ai";
 import equal from "fast-deep-equal";
-import { ArrowUpIcon } from "lucide-react";
+import { ArrowUpIcon, MicIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { ModelSelectorLogo } from "@/components/ai-elements/model-selector";
 import { useChatModel } from "@/hooks/use-chat-model";
+import { useSpeechInput } from "@/hooks/use-speech-input";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -115,6 +116,31 @@ function PureMultimodalInput({
       setInput(prefill);
     }
   }, [setInput]);
+
+  // 语音输入(2026-10-27,Web Speech API):转写以"开始录音时的输入"为前缀
+  // 覆盖合并(识别器对当前语句发的是最新累积文本,不能追加),不自动发送
+  const speechBaseRef = useRef("");
+  const handleTranscript = useCallback(
+    (text: string) => {
+      setInput(speechBaseRef.current + text);
+    },
+    [setInput]
+  );
+  const speech = useSpeechInput(handleTranscript);
+  const canListen = speech.status !== "unsupported" &&
+    (status === "ready" || status === "error");
+  const handleMicClick = useCallback(() => {
+    if (speech.status === "idle") {
+      speechBaseRef.current = input;
+    }
+    speech.toggle();
+    textareaRef.current?.focus();
+  }, [input, speech]);
+  useEffect(() => {
+    if (speech.error) {
+      toast.error(speech.error);
+    }
+  }, [speech.error]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<string[]>([]);
@@ -410,6 +436,13 @@ function PureMultimodalInput({
     setLocalStorageInput,
   ]);
 
+  // 只清输入框与本地草稿,不动会话记录
+  const handleClearInput = useCallback(() => {
+    setInput("");
+    setLocalStorageInput("");
+    textareaRef.current?.focus();
+  }, [setInput, setLocalStorageInput]);
+
   const handleTextareaKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (slashOpen) {
@@ -469,12 +502,15 @@ function PureMultimodalInput({
         </div>
       ) : null}
 
+      {/* 建议胶囊只在桌面端保留;手机端的四个高频入口由 QuickTags + 首屏相关问题卡承担 */}
       {!editingMessage &&
         !isLoading &&
         messages.length === 0 &&
         attachments.length === 0 &&
         uploadQueue.length === 0 && (
-          <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
+          <div className="hidden md:block">
+            <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
+          </div>
         )}
 
       <input
@@ -498,7 +534,7 @@ function PureMultimodalInput({
       </div>
 
       <PromptInput
-        className="[&>div]:rounded-2xl [&>div]:border [&>div]:border-border/30 [&>div]:bg-card/70 [&>div]:shadow-[var(--shadow-composer)] [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:shadow-[var(--shadow-composer-focus)]"
+        className="[&>div]:rounded-[22px] [&>div]:border [&>div]:border-[#E6E8EC] [&>div]:bg-white [&>div]:shadow-[var(--shadow-composer)] [&>div]:transition-shadow [&>div]:duration-300 [&>div]:focus-within:shadow-[var(--shadow-composer-focus)]"
         onSubmit={handlePromptSubmit}
       >
         {(attachments.length > 0 || uploadQueue.length > 0) && (
@@ -529,12 +565,12 @@ function PureMultimodalInput({
           </div>
         )}
         <PromptInputTextarea
-          className="min-h-9 max-h-40 text-[13px] leading-relaxed px-3 py-2 placeholder:text-muted-foreground/35"
+          className="min-h-9 max-h-40 px-4 py-2.5 text-[13px] leading-relaxed placeholder:text-muted-foreground/40"
           data-testid="multimodal-input"
           onChange={handleInput}
           onKeyDown={handleTextareaKeyDown}
           placeholder={
-            editingMessage ? "Edit your message..." : "Ask anything..."
+            editingMessage ? "编辑你的消息…" : "请输入您的问题"
           }
           ref={textareaRef}
           value={input}
@@ -542,27 +578,59 @@ function PureMultimodalInput({
         <PromptInputFooter className="px-3 pb-1.5">
           <PromptInputTools>
             <AttachmentsButton fileInputRef={fileInputRef} status={status} />
+            {speech.status !== "unsupported" ? (
+              <button
+                aria-label={speech.status === "listening" ? "停止语音输入" : "语音输入"}
+                className={cn(
+                  "flex size-7 items-center justify-center rounded-lg border border-border/40 p-1 transition-all",
+                  speech.status === "listening"
+                    ? "border-red-300/60 text-red-500 animate-pulse dark:border-red-500/40"
+                    : "text-muted-foreground hover:border-border/70 hover:text-foreground"
+                )}
+                data-testid="mic-button"
+                disabled={!canListen}
+                onClick={handleMicClick}
+                title="语音输入：点击开始说话，再点结束；说完手动回车发送"
+                type="button"
+              >
+                <MicIcon className="size-4" />
+              </button>
+            ) : null}
             <ConnectedModelInfo />
           </PromptInputTools>
 
-          {status === "submitted" ? (
-            <StopButton setMessages={setMessages} stop={stop} />
-          ) : (
-            <PromptInputSubmit
-              className={cn(
-                "h-7 w-7 rounded-xl transition-all duration-200",
-                input.trim()
-                  ? "bg-gradient-to-br from-ink to-ink-3 text-white hover:opacity-90 active:scale-95"
-                  : "bg-muted text-muted-foreground/25 cursor-not-allowed"
-              )}
-              data-testid="send-button"
-              disabled={!input.trim() || uploadQueue.length > 0}
-              status={status}
-              variant="secondary"
-            >
-              <ArrowUpIcon className="size-4" />
-            </PromptInputSubmit>
-          )}
+          <div className="flex items-center gap-1.5">
+            {/* 清空输入(手机端):只清输入框文字,不删会话记录 */}
+            {!!input && (
+              <button
+                aria-label="清空输入"
+                className="flex size-7 items-center justify-center rounded-full text-muted-foreground/50 transition-colors active:bg-[#F0F1F3] md:hidden"
+                onClick={handleClearInput}
+                type="button"
+              >
+                <XIcon className="size-4" />
+              </button>
+            )}
+
+            {status === "submitted" ? (
+              <StopButton setMessages={setMessages} stop={stop} />
+            ) : (
+              <PromptInputSubmit
+                className={cn(
+                  "h-7 w-7 rounded-xl transition-all duration-200",
+                  input.trim()
+                    ? "bg-gradient-to-br from-ink to-ink-3 text-white hover:opacity-90 active:scale-95"
+                    : "bg-muted text-muted-foreground/25 cursor-not-allowed"
+                )}
+                data-testid="send-button"
+                disabled={!input.trim() || uploadQueue.length > 0}
+                status={status}
+                variant="secondary"
+              >
+                <ArrowUpIcon className="size-4" />
+              </PromptInputSubmit>
+            )}
+          </div>
         </PromptInputFooter>
       </PromptInput>
     </div>

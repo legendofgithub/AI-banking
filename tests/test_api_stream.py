@@ -47,9 +47,15 @@ def _client(tmp_path: Path, responses: list[str]) -> tuple[TestClient, Path]:
                      checkpoint_path=tmp_path / "api_ckpt.sqlite",
                      threads_path=tmp_path / "api_threads.sqlite")
     with TestClient(app) as probe:  # lifespan 起来才能登录(auth_conn)
+        # 登录两步(2026-10-27 二次校验):密码 → 挑战(演示回显码) → 会话
+        c1 = probe.post("/api/auth/login",
+                        json={"identifier": "13800000000",
+                              "password": "Demo@12345"}).json()
         tok = probe.post("/api/auth/login",
                          json={"identifier": "13800000000",
-                               "password": "Demo@12345"}).json()["token"]
+                               "password": "Demo@12345",
+                               "challenge_id": c1["challenge_id"],
+                               "code": c1["demo_code"]}).json()["token"]
     return TestClient(app), db, tok
 
 

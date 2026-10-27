@@ -86,6 +86,9 @@ async function login() {
     throw new Error("登录按钮始终不可用(表单未完成水合?)");
   }
   await loginBtn.click();
+  // 两步登录(2026-10-27):第二步验证码——模拟短信卡「填入」→「验证并登录」
+  await page.locator('[data-testid="demo-sms-fill"]').click({ timeout: 15_000 });
+  await page.getByRole("button", { name: /验证并登录/ }).click();
   await page.waitForSelector("textarea", { timeout: 30_000 });
   await page.waitForTimeout(1500);
 }
