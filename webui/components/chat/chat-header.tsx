@@ -13,12 +13,18 @@
  * 真实公开入口、也依赖并不存在的 NextAuth 会话,是纯 UI 假象。
  */
 
-import { ChevronLeftIcon, PanelLeftIcon, ShieldCheckIcon } from "lucide-react";
+import {
+  ChevronLeftIcon,
+  PanelLeftIcon,
+  SettingsIcon,
+  ShieldCheckIcon,
+} from "lucide-react";
 import Link from "next/link";
 import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
 import { MobileLoginButton } from "./mobile-login-button";
+import { SettingsDropdownButton } from "./sidebar-settings";
 
 /* 右上角动作区:手机 App 下载二维码(位于后台入口左边) + 管理台。
    均仅 PC 端显示——前者是"电脑演示 → 手机装 App 直连"的入口,手机端自己没有
@@ -66,11 +72,11 @@ function PureChatHeader() {
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-brand-red via-brand-violet/40 to-transparent"
       />
-      {/* 手机端:返回银行首页(与首页「问一问」入口对称) */}
+      {/* 手机端:返回门户首页(/home 仍是手机扫码/登录落地页,聊天返回统一回门户) */}
       <Link
         aria-label="返回首页"
         className="relative z-10 flex size-9 items-center justify-center rounded-full text-ink transition-colors hover:bg-brand-red-soft hover:text-brand-red active:bg-brand-red-soft dark:text-foreground md:hidden"
-        href="/home"
+        href="/portal#services"
       >
         <ChevronLeftIcon className="size-5" />
       </Link>
@@ -82,8 +88,14 @@ function PureChatHeader() {
         </span>
       </div>
 
-      {/* 手机端:会话总览(原左侧入口,让位给返回后移到右侧) */}
-      <div className="ml-auto flex md:hidden">
+      {/* 手机端:设置 + 会话总览(设置菜单与桌面侧栏左下角同款) */}
+      <div className="ml-auto flex items-center md:hidden">
+        <SettingsDropdownButton
+          aria-label="设置"
+          className="size-9 text-ink hover:bg-brand-red-soft hover:text-brand-red dark:text-foreground"
+        >
+          <SettingsIcon className="size-4" />
+        </SettingsDropdownButton>
         <Button
           aria-label="会话总览"
           className="size-9 text-ink hover:bg-brand-red-soft hover:text-brand-red dark:text-foreground"

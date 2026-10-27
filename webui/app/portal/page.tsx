@@ -21,6 +21,7 @@ import {
   PiggyBankIcon,
   RepeatIcon,
   SendIcon,
+  SettingsIcon,
   ShieldCheckIcon,
   SparklesIcon,
   TrendingDownIcon,
@@ -33,7 +34,9 @@ import {
   bankAgentBase,
   bankAuthHeaders,
   getStoredToken,
+  useBankAuth,
 } from "@/hooks/use-bank-auth";
+import { SettingsDropdownButton } from "@/components/chat/sidebar-settings";
 
 type HomeData = {
   nickname: string;
@@ -209,6 +212,7 @@ function MomDelta({ pct }: { pct: number | null }) {
 
 export default function PortalPage() {
   const router = useRouter();
+  const { user } = useBankAuth();
   const [data, setData] = useState<HomeData | null>(null);
   const [products, setProducts] = useState<WealthProduct[] | null>(null);
   const [report, setReport] = useState<MonthlyReport | null>(null);
@@ -293,22 +297,37 @@ export default function PortalPage() {
               账单统计
             </a>
           </nav>
-          {guest ? (
-            <Link
-              className="sheen ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-4 text-[13px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
-              href="/login"
+          {/* 账号/设置下拉:与聊天页设置菜单同款(账号区+充钱/绑卡/记忆/人设/模型/主题/缩放) */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            <SettingsDropdownButton
+              aria-label="账号与设置"
+              className="size-9 rounded-full text-ink hover:bg-brand-red-soft hover:text-brand-red dark:text-foreground"
             >
-              登录
-            </Link>
-          ) : (
-            <Link
-              className="sheen ml-auto inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-4 text-[13px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
-              href="/chat"
-            >
-              <SparklesIcon className="size-3.5" />
-              进入对话
-            </Link>
-          )}
+              {user ? (
+                <span className="brand-surface flex size-7 items-center justify-center rounded-full text-[12px] font-semibold text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
+                  {user.nickname?.trim() ? user.nickname[0] : "客"}
+                </span>
+              ) : (
+                <SettingsIcon className="size-4" />
+              )}
+            </SettingsDropdownButton>
+            {guest ? (
+              <Link
+                className="sheen inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-4 text-[13px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
+                href="/login"
+              >
+                登录
+              </Link>
+            ) : (
+              <Link
+                className="sheen inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-4 text-[13px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
+                href="/chat"
+              >
+                <SparklesIcon className="size-3.5" />
+                进入对话
+              </Link>
+            )}
+          </div>
         </div>
       </header>
 
