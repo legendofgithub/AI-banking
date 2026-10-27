@@ -60,7 +60,9 @@ const QUICK_ACTIONS: { label: string; icon: React.ReactNode; q: string }[] = [
 ];
 
 function goChat(router: ReturnType<typeof useRouter>, q: string) {
-  sessionStorage.setItem("bank-prefill", q);
+  // 首页快捷入口统一「点击即执行」:autosend 让对话页直发,
+  // agent 直接开跑并出结果,不再要求用户补一次发送
+  sessionStorage.setItem("bank-autosend", q);
   router.push("/chat");
 }
 
@@ -379,7 +381,7 @@ export default function BankHomePage() {
                 className="mt-2 inline-flex items-center gap-1 text-[12px] text-gold-ink hover:underline"
                 href="/chat"
                 onClick={() =>
-                  sessionStorage.setItem("bank-prefill", "看下最近的账单")
+                  sessionStorage.setItem("bank-autosend", "看下最近的账单")
                 }
               >
                 查看账单分析
