@@ -194,7 +194,7 @@ def build_frontend() -> bool:
     )
     rc = subprocess.run(npx_cmd, cwd=str(WEBUI), env=env).returncode
     if rc != 0:
-        print("[警告] 前端构建失败,将尝试用上一次的产物启动。")
+        print("[错误] 前端构建失败。")
         return False
     return True
 
@@ -340,8 +340,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.skip_build and not (WEBUI / ".next" / "BUILD_ID").exists():
         print("[提示] --skip-build 但没有上次构建产物,改为执行构建。")
         args.skip_build = False
-    if not args.skip_build:
-        build_frontend()
+    if not args.skip_build and not build_frontend():
+        # 失败的 next build 已把 .next 写成半成品,继续 next start 只会让 3000
+        # 端口起不来、白等满 90 秒(实测),这时中止比假装还能用上次产物更清楚。
+        print()
+        print("[错误] 前端构建失败,已中止启动(后端服务已在后台运行)。")
+        print("       修复编译错误后重新双击;若怀疑是残留产物,先删除 webui\\.next。")
+        return 1
 
     start_hidden(
         "webui",
