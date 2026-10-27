@@ -122,7 +122,7 @@ export default function BankHomePage() {
       </div>
 
       {/* 顶栏:玻璃白底 + 深蓝文字 + 红色品牌点,对齐参考图的导航语言 */}
-      <header className="glass-bar sticky top-0 z-10 flex h-14 items-center gap-2 border-b border-white/60 px-4 shadow-[0_1px_0_rgba(255,255,255,0.7),0_8px_24px_-20px_rgba(30,82,165,0.45)]">
+      <header className="glass-bar safe-area-top sticky top-0 z-10 flex min-h-14 items-center gap-2 border-b border-white/60 px-4 shadow-[0_1px_0_rgba(255,255,255,0.7),0_8px_24px_-20px_rgba(30,82,165,0.45)]">
         <div className="flex size-8 items-center justify-center rounded-xl bg-brand-red-solid text-white shadow-[0_6px_16px_-6px_rgba(211,46,25,0.7)]">
           <Landmark className="size-4" />
         </div>

@@ -21,7 +21,9 @@ export const metadata: Metadata = {
 };
 
 export const viewport = {
+  // cover:让 env(safe-area-inset-*) 在 App 内 WebView/刘海屏下返回真实安全区
   maximumScale: 1,
+  viewportFit: "cover",
 };
 
 const LIGHT_THEME_COLOR = "hsl(0 0% 100%)";

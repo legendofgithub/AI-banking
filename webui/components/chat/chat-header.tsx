@@ -20,8 +20,8 @@ import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
 import { MobileLoginButton } from "./mobile-login-button";
 
-/* 右上角动作区:手机端登录(扫码,位于后台入口左边) + 管理台。
-   均仅 PC 端显示——前者是"电脑演示 → 手机接力"的入口,手机端自己没有
+/* 右上角动作区:手机 App 下载二维码(位于后台入口左边) + 管理台。
+   均仅 PC 端显示——前者是"电脑演示 → 手机装 App 直连"的入口,手机端自己没有
    扫码刚需;管理台 8789 只绑 127.0.0.1,新标签打开的是本机地址。 */
 function HeaderActions() {
   return (
@@ -50,7 +50,7 @@ function PureChatHeader() {
     // 折叠侧栏时原实现整条顶栏不渲染;后台入口是测试刚需,
     // 保留一条极简顶栏(只有右上角动作区,不挤占内容)。
     return (
-      <header className="glass-bar sticky top-0 flex h-12 items-center border-b border-white/60 px-3 dark:border-white/10">
+      <header className="glass-bar safe-area-top sticky top-0 flex min-h-12 items-center border-b border-white/60 px-3 dark:border-white/10">
         <span
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-brand-red via-brand-violet/40 to-transparent"
@@ -61,7 +61,7 @@ function PureChatHeader() {
   }
 
   return (
-    <header className="glass-bar sticky top-0 z-20 flex h-12 items-center border-b border-white/60 px-1 md:h-14 md:gap-2 md:px-3 dark:border-white/10">
+    <header className="glass-bar safe-area-top sticky top-0 z-20 flex min-h-12 items-center border-b border-white/60 px-1 md:h-14 md:gap-2 md:px-3 dark:border-white/10">
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-brand-red via-brand-violet/40 to-transparent"

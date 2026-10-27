@@ -289,6 +289,16 @@ textarea:focus-visible {
   }
 }
 
+/* 手机端顶栏让出状态栏空间:优先系统安全区(App 内 WebView edge-to-edge 时
+   env() 返回状态栏高度),取不到时兜底 12px 呼吸间距;桌面端无状态栏,归零 */
+@utility safe-area-top {
+  padding-top: max(env(safe-area-inset-top, 0px), 12px);
+
+  @media (min-width: 768px) {
+    padding-top: 0;
+  }
+}
+
 /* ===== 手机端待确认转账悬浮球(pending-transfer-ball.tsx) ===== */
 /* 拖到屏幕中心:整球动态渐变旋转 */
 @keyframes pending-ball-spin {
