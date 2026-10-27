@@ -48,6 +48,15 @@
                 android:textSize="13sp"
                 android:visibility="gone" />
 
+            <TextView
+                android:id="@+id/status_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:textColor="#3E60CE"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
             <EditText
                 android:id="@+id/input_url"
                 android:layout_width="match_parent"

@@ -101,6 +101,19 @@ try {
   }
   await page.screenshot({ path: shot("t1_电脑端App下载码") });
   console.log(`T1 电脑端出码(直指 APK + PNG ${naturalWidth}px): 通过`);
+
+  // T1c 配对码:深链直指 App,server 参数必须还原出局域网 origin
+  const pairBox = page.locator('[data-testid="pair-qr"]');
+  await pairBox.waitFor({ timeout: 10_000 });
+  const pairUrl = await pairBox.getAttribute("data-url");
+  if (!pairUrl || !pairUrl.startsWith("aibanking://pair?server=")) {
+    throw new Error(`T1c: 配对码 URL 异常: ${pairUrl}`);
+  }
+  const decoded = decodeURIComponent(pairUrl.split("server=")[1] ?? "");
+  if (/127\.0\.0\.1|localhost/.test(decoded)) {
+    throw new Error(`T1c: 配对码 server 仍是本机回环地址: ${decoded}`);
+  }
+  console.log(`T1c 配对码就绪(${decoded}): 通过`);
   // 关掉二维码弹窗,让电脑端回到可交互状态(后续还要在这里看同步消息/切会话)
   await page.keyboard.press("Escape");
   await page

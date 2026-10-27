@@ -10,6 +10,9 @@ for %%p in (8800 8789 8788 3000) do (
     )
 )
 
+rem 手机发现应答器只占 UDP,按命令行特征补杀
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'discover_responder' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+
 echo.
 echo 全部服务已停止。
 pause

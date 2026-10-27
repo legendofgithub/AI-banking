@@ -130,6 +130,35 @@ def stop_old_services(rounds: int = 2) -> None:
                 )
         if index + 1 < rounds:
             time.sleep(1.5)
+    stop_stale_responder()
+
+
+def stop_stale_responder() -> None:
+    """手机发现应答器只占 UDP,端口清理杀不到;按命令行特征补杀。
+
+    应答器启动时记住了当时的局域网 IP,DHCP 换地址后会回错值,
+    所以每次全量重启都必须换新的。
+    """
+    try:
+        if IS_WINDOWS:
+            ps = (
+                "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine "
+                "-match 'discover_responder' } | ForEach-Object { Stop-Process "
+                "-Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+            )
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True,
+                timeout=30,
+            )
+        else:
+            subprocess.run(
+                ["pkill", "-f", "discover_responder.py"],
+                capture_output=True,
+                timeout=15,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"  [警告] 清理旧发现应答器失败: {exc}")
 
 
 def load_env_subset(path: Path) -> dict[str, str]:
@@ -287,6 +316,7 @@ def print_summary(ok: bool) -> None:
     host = lan_host()
     if host:
         print(f"  手机端:     http://{host}:3000 (手机连同一 Wi-Fi)")
+        print("  手机 App:   打开即自动发现电脑;失败可用弹窗「配对码」扫码连接")
     health = http_get(8800, "/health")
     if health and health[0] == 200:
         try:
@@ -336,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
     start_hidden("agent-api", [str(PY), "-m", "agent.api"], ROOT)
     start_hidden("admin-api", [str(PY), "-m", "bank_core.admin_api"], ROOT)
     start_hidden("web-api", [str(PY), "-m", "bank_core.web_api"], ROOT)
+    # 手机 App 的局域网自动发现:UDP 广播应答(见 scripts/discover_responder.py)
+    start_hidden("discover-responder", [str(PY), "scripts/discover_responder.py"], ROOT)
 
     if args.skip_build and not (WEBUI / ".next" / "BUILD_ID").exists():
         print("[提示] --skip-build 但没有上次构建产物,改为执行构建。")

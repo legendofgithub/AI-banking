@@ -27,8 +27,9 @@ const STEPS: { title: string; detail: string }[] = [
     title: "1 · 允许安装",
   },
   {
-    detail: "打开 App,输入下面显示的电脑地址(只需一次,App 会记住)。",
-    title: "2 · 打开 App 填地址",
+    detail:
+      "App 会自动搜索同一 Wi-Fi 下的电脑;没搜到就扫电脑端弹窗的「配对码」,或手动输入下面地址。",
+    title: "2 · 连接电脑",
   },
   {
     detail: "登录页点「一键填入」演示账号,验证码点「填入」即可。",
@@ -127,6 +128,17 @@ export default function DownloadPage() {
               {pcOrigin || "电脑端未探测到局域网地址"}
             </div>
           </div>
+
+          {/* 已装 App 的手机点这里:深链拉起 App 并自动写入地址,免打字 */}
+          {pcOrigin && isAndroid ? (
+            <a
+              className="mt-3 flex h-11 items-center justify-center gap-2 rounded-xl border border-brand-blue/25 bg-white/70 text-[14px] font-medium text-brand-blue transition-colors hover:border-brand-red/30 hover:text-brand-red dark:border-white/10 dark:bg-white/5"
+              href={`aibanking://pair?server=${encodeURIComponent(pcOrigin)}`}
+            >
+              <SmartphoneIcon className="size-4" />
+              手机已装 App?点此一键连接
+            </a>
+          ) : null}
         </section>
 
         {/* 四步指引 */}

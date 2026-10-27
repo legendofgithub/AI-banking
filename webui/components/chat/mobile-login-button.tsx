@@ -75,6 +75,11 @@ export function MobileLoginButton() {
     ? `${bankAgentBase()}/api/qr?data=${encodeURIComponent(apkUrl)}`
     : "";
 
+  // 配对码:装好 App 后用系统相机扫,深链直达 App 并自动写入电脑地址(免打字)
+  const pairUrl = pcOrigin
+    ? `aibanking://pair?server=${encodeURIComponent(pcOrigin)}`
+    : "";
+
   const openDialog = () => setOpen(true);
 
   return (
@@ -130,6 +135,36 @@ export function MobileLoginButton() {
                     {pcOrigin}
                   </div>
                 </div>
+
+                {/* 配对码:App 打开在搜索/配置屏时扫这张,深链写入地址免打字 */}
+                {pairUrl ? (
+                  <div
+                    className="flex w-full items-center justify-between gap-3 rounded-xl border border-brand-blue/15 bg-brand-blue-soft/50 px-3 py-2.5 dark:border-white/10 dark:bg-white/[0.04]"
+                    data-testid="pair-qr-section"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-semibold text-ink dark:text-brand-blue">
+                        已装好 App?扫「配对码」自动连接
+                      </p>
+                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                        用手机系统相机(或微信)扫右侧二维码,App
+                        会自动打开并填好电脑地址,无需手动输入。
+                      </p>
+                    </div>
+                    <div
+                      className="shrink-0 rounded-lg border border-border/60 bg-white p-1.5 shadow-[var(--shadow-card)]"
+                      data-testid="pair-qr"
+                      data-url={pairUrl}
+                    >
+                      {/* biome-ignore lint/performance/noImgElement: 8800 动态生成的跨端口 PNG,next/image 不代理动态远端图 */}
+                      <img
+                        alt="App 配对码"
+                        className="size-20"
+                        src={`${bankAgentBase()}/api/qr?data=${encodeURIComponent(pairUrl)}`}
+                      />
+                    </div>
+                  </div>
+                ) : null}
 
                 <p className="w-full break-all rounded-lg bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
                   下载不了?确认手机与电脑同一 Wi-Fi、演示栈已启动;或手机浏览器直接访问
