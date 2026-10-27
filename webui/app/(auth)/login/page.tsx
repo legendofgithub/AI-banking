@@ -160,26 +160,13 @@ export default function LoginPage() {
   }, []);
 
   const finishLogin = useCallback(
-    async (json: LoginResponse) => {
+    (json: LoginResponse) => {
       storeBankAuth(json.token ?? "", json);
-      // 手机登录后加入电脑端当前会话(与扫码登录同一口径);电脑端正常回首页
-      let target = "/";
-      if (typeof window !== "undefined" && window.innerWidth < 768) {
-        try {
-          const syncRes = await fetch(`${bankAgentBase()}/api/sync/state`, {
-            headers: { "x-bank-token": json.token ?? "" },
-          });
-          const sync = (await syncRes.json().catch(() => null)) as {
-            thread_id?: string | null;
-          } | null;
-          if (sync?.thread_id) {
-            target = `/chat/${encodeURIComponent(sync.thread_id)}`;
-          }
-        } catch {
-          // 同步接口不可用时仍回首页,不阻断登录
-        }
-      }
-      router.push(target);
+      // 登录后第一屏统一是银行首页(余额/今日待办),对话从首页「进入对话」进;
+      // 手机端不再跳 /chat/<thread>(电脑端会话由 /chat 打开时自动恢复)。
+      // replace 而非 push:登录成功后 /login 不得留在浏览器历史栈,
+      // 手机 App 返回键(goBack)才不会从首页退回登录页;登出才是回登录页的唯一入口
+      router.replace("/home");
     },
     [router]
   );
