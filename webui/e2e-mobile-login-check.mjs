@@ -1,9 +1,10 @@
-// 手机扫码登录 + 跨设备同步端到端实测(2026-10-21):
-//   电脑端建会话并发消息 → 出二维码 → 手机扫码登录后自动加入同一会话并看到
-//   电脑消息 → 手机输入新消息 → 电脑端自动看到(反向同步)→ 旧票重扫被拒。
+// 手机 App 下载码 + 跨设备同步端到端实测(2026-10-27 改版):
+//   电脑端登录 → 出 APK 下载二维码(直指 /app/bankagent.apk,浏览器打开即下载)
+//   → 手机上下文密码登录(移动端登录会自动加入电脑当前会话)→ 手机看到电脑消息
+//   → 手机输入新消息 → 电脑端自动看到(反向同步)。
+// 原接力登录票据二维码已从弹窗下线(后端接口与 /qr-login 页保留),
+// 对应用例(免密登录/票据一次性)随之移除,同步链路验证不变。
 // 用法:cd webui && node e2e-mobile-login-check.mjs   (需 3000/8800 已起)
-// 注:真机扫码验证需手机与电脑同一 Wi-Fi,这里用第二个上下文等效覆盖
-// 「扫码打开 URL → 换 token → 存登录态 → 进首页」的完整链路。
 
 import { mkdirSync } from "node:fs";
 import { chromium } from "@playwright/test";
@@ -25,7 +26,7 @@ page.on("pageerror", (e) =>
 );
 
 try {
-  // ---- T1 电脑端登录,点「手机端登录」出二维码 ----
+  // ---- T1 电脑端登录,点「手机 App」出下载二维码 ----
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
   await page.getByRole("textbox", { name: /账号/ }).fill(PHONE);
   await page.getByRole("textbox", { name: /登录密码/ }).fill(PASSWORD);
@@ -33,8 +34,10 @@ try {
   // 两步登录(2026-10-27):第二步验证码——模拟短信卡「填入」→「验证并登录」
   await page.locator('[data-testid="demo-sms-fill"]').click({ timeout: 15_000 });
   await page.getByRole("button", { name: /验证并登录/ }).click();
+  // 桌面端登录后落在 /home(首屏,无输入框);后续用例都在 /chat 里做
+  await page.waitForURL(/\/home(\/)?$|\/chat/, { timeout: 30_000 });
+  await page.goto(`${BASE}/chat`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("textarea", { timeout: 30_000 });
-  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mobile-login-button"]', {
     timeout: 30_000,
   });
@@ -47,7 +50,7 @@ try {
   const ab = await adminLink.boundingBox();
   if (!mb || !ab || mb.x + mb.width > ab.x) {
     throw new Error(
-      `T1: 「手机端登录」按钮不在「后台入口」左边 (mobile右缘=${mb?.x ?? "?"} admin左缘=${ab?.x ?? "?"})`
+      `T1: 「手机 App」按钮不在「后台入口」左边 (mobile右缘=${mb?.x ?? "?"} admin左缘=${ab?.x ?? "?"})`
     );
   }
 
@@ -75,8 +78,8 @@ try {
   const qrBox = page.locator('[data-testid="mobile-qr"]');
   await qrBox.waitFor({ timeout: 15_000 });
   const qrUrl = await qrBox.getAttribute("data-url");
-  if (!qrUrl || !/\/qr-login\?ticket=/.test(qrUrl)) {
-    throw new Error(`T1: 二维码 URL 异常: ${qrUrl}`);
+  if (!qrUrl || !/\/app\/bankagent\.apk$/.test(qrUrl)) {
+    throw new Error(`T1: 二维码 URL 异常(应直指 APK): ${qrUrl}`);
   }
   // 电脑端用 127.0.0.1 打开时,二维码里应是局域网 IP(手机可达)
   if (/127\.0\.0\.1|localhost/.test(qrUrl)) {
@@ -96,15 +99,15 @@ try {
   if (!naturalWidth || naturalWidth < 100) {
     throw new Error(`T1: 二维码图片未加载(naturalWidth=${naturalWidth})`);
   }
-  await page.screenshot({ path: shot("t1_电脑端二维码") });
-  console.log(`T1 电脑端出码(局域网 URL + PNG ${naturalWidth}px): 通过`);
+  await page.screenshot({ path: shot("t1_电脑端App下载码") });
+  console.log(`T1 电脑端出码(直指 APK + PNG ${naturalWidth}px): 通过`);
   // 关掉二维码弹窗,让电脑端回到可交互状态(后续还要在这里看同步消息/切会话)
   await page.keyboard.press("Escape");
   await page
     .locator('[data-testid="mobile-login-dialog"]')
     .waitFor({ state: "hidden", timeout: 5000 });
 
-  // ---- T2 模拟手机扫码:375px 上下文打开二维码里的 URL → 免密登录 ----
+  // ---- T2 模拟手机(375px 上下文)密码登录:移动端登录会自动加入电脑当前会话 ----
   const phoneCtx = await browser.newContext({
     hasTouch: true,
     isMobile: true,
@@ -114,11 +117,14 @@ try {
   });
   const phone = await phoneCtx.newPage();
   phone.setDefaultTimeout(60_000);
-  await phone.goto(qrUrl, { waitUntil: "domcontentloaded" });
-  await phone.waitForSelector('[data-testid="qr-login-ok"]', {
-    timeout: 20_000,
+  await phone.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
+  await phone.locator('[data-testid="demo-fill-13800002233"]').click();
+  await phone.getByRole("button", { name: /登录/ }).click();
+  await phone.locator('[data-testid="demo-sms-fill"]').click({
+    timeout: 15_000,
   });
-  // 扫码登录后应自动落到电脑端当前会话(而不是停在首页)
+  await phone.getByRole("button", { name: /验证并登录/ }).click();
+  // 移动端(<768px)登录后应自动落到电脑端当前会话(而不是停在首页)
   await phone.waitForURL(new RegExp(`/chat/${desktopThreadId}`), {
     timeout: 30_000,
   });
@@ -140,20 +146,10 @@ try {
   if (!token || token.length < 16) {
     throw new Error("T2: 手机端没有拿到会话 token");
   }
-  await phone.screenshot({ path: shot("t2_手机扫码登录并加入电脑端会话") });
+  await phone.screenshot({ path: shot("t2_手机登录并加入电脑端会话") });
   console.log(
-    `T2 扫码登录后自动加入电脑端会话(昵称=${nickname},看到「${desktopToken}」): 通过`
+    `T2 手机登录后自动加入电脑端会话(昵称=${nickname},看到「${desktopToken}」): 通过`
   );
-
-  // ---- T3 同一张票再扫:一次性,必须被拒 ----
-  const phone2Ctx = await browser.newContext({ viewport: { width: 375, height: 812 } });
-  const phone2 = await phone2Ctx.newPage();
-  await phone2.goto(qrUrl, { waitUntil: "domcontentloaded" });
-  await phone2.waitForSelector("text=/已过期或已被使用|二维码已失效/", {
-    timeout: 20_000,
-  });
-  await phone2.screenshot({ path: shot("t3_旧票重扫被拒") });
-  console.log("T3 票据一次性(重扫被拒): 通过");
 
   // ---- T4 反向同步:手机输入 → 电脑端看到;桌面留在同一会话 ----
   await phone.fill("textarea", `请记住 ${mobileToken} 这个暗号`);
@@ -192,6 +188,10 @@ try {
   // ---- T6 手机发起转账 → 电脑端同步出现转账确认卡(含支付密码框) ----
   await phone.fill("textarea", "给张三转1元");
   await phone.keyboard.press("Enter");
+  // 2026-10-26 起转账时机缺槽必问:先点「立即转」补槽,确认卡才会出
+  await phone
+    .getByRole("button", { name: /^立即转$/ })
+    .click({ timeout: 60_000 });
   await page.waitForSelector('input[aria-label="支付密码"]', {
     timeout: 60_000,
   });
@@ -206,8 +206,7 @@ try {
   console.log("T6 手机发起转账,电脑端同步出现确认卡并可取消: 通过");
 
   await phoneCtx.close();
-  await phone2Ctx.close();
-  console.log("E2E MOBILE LOGIN + CROSS-DEVICE SYNC ALL PASSED");
+  console.log("E2E MOBILE APP QR + CROSS-DEVICE SYNC ALL PASSED");
 } finally {
   await browser.close();
 }
