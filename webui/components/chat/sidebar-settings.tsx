@@ -88,13 +88,18 @@ function SettingRow({
   );
 }
 
-/** 设置菜单内容(不含触发器):账号区 + 业务入口 + 模型/语言/主题/缩放。 */
+/** 设置菜单内容(不含触发器):账号区 + 业务入口 + 模型/语言/主题/缩放。
+ * onMouseEnter/onMouseLeave 供悬浮式触发器(门户头像)透传,控制开合。 */
 export function SettingsMenu({
   side = "top",
   align = "start",
+  onMouseEnter,
+  onMouseLeave,
 }: {
   side?: "top" | "bottom";
   align?: "start" | "end" | "center";
+  onMouseEnter?: React.MouseEventHandler<HTMLDivElement>;
+  onMouseLeave?: React.MouseEventHandler<HTMLDivElement>;
 }) {
   const router = useRouter();
   const { user, logout } = useBankAuth();
@@ -172,6 +177,8 @@ export function SettingsMenu({
       align={align}
       className="w-64 rounded-lg border border-border/60 bg-card/95 backdrop-blur-xl shadow-[var(--shadow-float)]"
       data-testid="settings-menu"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
       side={side}
     >
       {/* 账号区:登录/登出全站唯一入口(右上角胶囊已移除) */}

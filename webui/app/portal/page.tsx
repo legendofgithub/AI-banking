@@ -3,7 +3,8 @@
 /*
  * 服务门户(/portal):/home 的桌面宽屏姊妹页,参考微众银行官网排版。
  * - 手机扫码/App 用的是 /home(一行未改);本页用于电脑端展示项目全貌:
- *   横版海报 hero + 服务宫格 + 今日待办 + 理财专区 + 账单统计 + 最近交易。
+ *   横版海报 hero + 服务宫格 + 今日待办 + 理财专区 + 账单统计 + 最近交易,
+ *   页底另有普惠宣言模块(左图右文,宣传小小微与普惠金融定位)。
  * - 数据端点:GET /api/home(登录聚合)、/api/wealth/products(产品目录)、
  *   /api/analysis/monthly(上月账单),全部 x-bank-token 头、401 落游客引导。
  * - 所有可点卡片与 /home 同口径:写入 bank-autosend 后进 /chat,
@@ -29,14 +30,18 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   bankAgentBase,
   bankAuthHeaders,
   getStoredToken,
   useBankAuth,
 } from "@/hooks/use-bank-auth";
-import { SettingsDropdownButton } from "@/components/chat/sidebar-settings";
+import { SettingsMenu } from "@/components/chat/sidebar-settings";
 
 type HomeData = {
   nickname: string;
@@ -218,6 +223,59 @@ export default function PortalPage() {
   const [report, setReport] = useState<MonthlyReport | null>(null);
   const [guest, setGuest] = useState(false);
 
+  // 顶栏头像悬浮下拉:document mousemove + 几何坐标判定。Radix modal 打开时
+  // body pointer-events:none,指针在弹层外移动时 mouseover 会穿透到 html,
+  // 事件目标不可靠;因此不看事件目标,只看坐标是否落在头像或菜单矩形内——
+  // 在内即开/保持,在外 200ms 后收起(指针停止移动时不产生事件,状态即最后判定)。
+  const [accountOpen, setAccountOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const trigger = document.querySelector('[aria-label="账号与设置"]');
+      const menu = document.querySelector('[data-testid="settings-menu"]');
+      const inside = (el: Element | null) => {
+        if (!el) {
+          return false;
+        }
+        const r = el.getBoundingClientRect();
+        return (
+          e.clientX >= r.left &&
+          e.clientX <= r.right &&
+          e.clientY >= r.top &&
+          e.clientY <= r.bottom
+        );
+      };
+      if (inside(trigger) || inside(menu)) {
+        if (closeTimer.current) {
+          clearTimeout(closeTimer.current);
+          closeTimer.current = null;
+        }
+        setAccountOpen(true);
+      } else if (!closeTimer.current) {
+        closeTimer.current = setTimeout(() => {
+          closeTimer.current = null;
+          setAccountOpen(false);
+        }, 200);
+      }
+    };
+    document.addEventListener("mousemove", onMove);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      if (closeTimer.current) {
+        clearTimeout(closeTimer.current);
+        closeTimer.current = null;
+      }
+    };
+  }, []);
+  useEffect(
+    () => () => {
+      if (closeTimer.current) {
+        clearTimeout(closeTimer.current);
+      }
+    },
+    []
+  );
+
   const load = useCallback(async () => {
     if (!getStoredToken()) {
       setGuest(true);
@@ -268,65 +326,71 @@ export default function PortalPage() {
 
   return (
     <div className="min-h-dvh bg-aurora">
-      {/* 顶部导航条 */}
+      {/* 顶部导航条:字标/图标/导航放大,压缩中间留白 */}
       <header className="glass-bar sticky top-0 z-20 border-b border-white/60 dark:border-white/10">
-        <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-3 px-5">
-          <div className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-brand-red-solid text-white shadow-[0_6px_16px_-6px_rgba(211,46,25,0.7)]">
-            <Landmark className="size-4" />
+        <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-4 px-5">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-brand-red-solid text-white shadow-[0_6px_16px_-6px_rgba(211,46,25,0.7)]">
+            <Landmark className="size-5" />
           </div>
-          <span className="text-[15px] font-semibold text-ink dark:text-brand-blue">
+          <span className="text-[21px] font-bold tracking-wide text-ink dark:text-brand-blue">
             小小微银行助手
           </span>
-          <nav className="ml-6 hidden items-center gap-1 text-[13px] text-muted-foreground md:flex">
+          <nav className="ml-4 hidden items-center gap-2 text-[15px] font-medium text-muted-foreground md:flex">
             <a
-              className="rounded-lg px-2.5 py-1.5 transition-colors hover:bg-brand-blue-soft hover:text-brand-blue"
+              className="rounded-lg px-3 py-2 transition-colors hover:bg-brand-blue-soft hover:text-brand-blue"
               href="#services"
             >
               银行服务
             </a>
             <a
-              className="rounded-lg px-2.5 py-1.5 transition-colors hover:bg-brand-blue-soft hover:text-brand-blue"
+              className="rounded-lg px-3 py-2 transition-colors hover:bg-brand-blue-soft hover:text-brand-blue"
               href="#wealth"
             >
               理财专区
             </a>
             <a
-              className="rounded-lg px-2.5 py-1.5 transition-colors hover:bg-brand-blue-soft hover:text-brand-blue"
+              className="rounded-lg px-3 py-2 transition-colors hover:bg-brand-blue-soft hover:text-brand-blue"
               href="#analysis"
             >
               账单统计
             </a>
           </nav>
-          {/* 账号/设置下拉:与聊天页设置菜单同款(账号区+充钱/绑卡/记忆/人设/模型/主题/缩放) */}
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            <SettingsDropdownButton
-              aria-label="账号与设置"
-              className="size-9 rounded-full text-ink hover:bg-brand-red-soft hover:text-brand-red dark:text-foreground"
-            >
-              {user ? (
-                <span className="brand-surface flex size-7 items-center justify-center rounded-full text-[12px] font-semibold text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
-                  {user.nickname?.trim() ? user.nickname[0] : "客"}
-                </span>
-              ) : (
-                <SettingsIcon className="size-4" />
-              )}
-            </SettingsDropdownButton>
+          {/* 账号/设置下拉:悬浮头像自动弹出(点击同样可开),移出 220ms 后收起 */}
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             {guest ? (
               <Link
-                className="sheen inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-4 text-[13px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
+                className="sheen inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-5 text-[14px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
                 href="/login"
               >
                 登录
               </Link>
             ) : (
               <Link
-                className="sheen inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-4 text-[13px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
+                className="sheen inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-5 text-[14px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
                 href="/chat"
               >
-                <SparklesIcon className="size-3.5" />
+                <SparklesIcon className="size-4" />
                 进入对话
               </Link>
             )}
+            <DropdownMenu
+              onOpenChange={setAccountOpen}
+              open={accountOpen}
+            >
+              <DropdownMenuTrigger
+                aria-label="账号与设置"
+                className="flex size-10 items-center justify-center rounded-full outline-none transition-colors hover:bg-brand-red-soft focus-visible:ring-2 focus-visible:ring-brand-red/40 dark:text-foreground"
+              >
+                {user ? (
+                  <span className="brand-surface flex size-8 items-center justify-center rounded-full text-[14px] font-semibold text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
+                    {user.nickname?.trim() ? user.nickname[0] : "客"}
+                  </span>
+                ) : (
+                  <SettingsIcon className="size-5" />
+                )}
+              </DropdownMenuTrigger>
+              <SettingsMenu align="end" side="bottom" />
+            </DropdownMenu>
           </div>
         </div>
       </header>
@@ -700,6 +764,46 @@ export default function PortalPage() {
           </>
         )}
       </main>
+
+      {/* 普惠宣言:左图右文;浅蓝底板自视口约 1/3 处延伸到右缘,照片压在底板上(分层排版) */}
+      <section className="relative isolate py-14 md:py-20">
+        <div
+          aria-hidden="true"
+          className="absolute inset-y-10 left-[31%] right-0 -z-10 hidden bg-brand-blue-soft md:block dark:bg-white/[0.04]"
+        />
+        <div className="mx-auto grid w-full max-w-6xl items-center gap-8 px-5 md:grid-cols-2 md:gap-14">
+          <img
+            alt="小店店主正在制作咖啡"
+            className="aspect-[686/476] w-full object-cover shadow-[0_24px_48px_-24px_rgba(30,82,165,0.35)]"
+            loading="lazy"
+            src="/images/inclusive-cafe.png"
+          />
+          <div>
+            <h2 className="text-[26px] font-bold leading-snug text-ink md:text-[30px] dark:text-foreground">
+              小小微，把银行装进对话里
+              <br />
+              让普惠金融触手可及
+            </h2>
+            <div className="mt-5 flex items-center">
+              <span className="h-px w-12 bg-ink/60" />
+              <span className="h-px flex-1 bg-border/70" />
+            </div>
+            <p className="mt-5 text-[13.5px] leading-relaxed text-muted-foreground">
+              普惠金融，是把服务的门槛降到每个人够得着的地方。小小微银行助手面向每一位普通用户：不必研究复杂的功能菜单，用一句家常话说明想办的事，数字员工就能替你完成转账、订阅管理、理财匹配与账单解读，让专业的金融服务看得懂、用得上、办得成。
+            </p>
+            <p className="mt-3 text-[13.5px] leading-relaxed text-muted-foreground">
+              我们同样坚守可信的底线：每一步都需你确认、全程审计留痕，资金动账绝不自动执行，把选择权始终交还用户。以科技降低服务的成本与门槛，提升金融服务的覆盖率、可得性和满意度——这是小小微对普惠金融最朴素的回答。
+            </p>
+            <Link
+              className="mt-6 inline-flex items-center gap-1.5 text-[14px] font-medium text-brand-blue transition-colors hover:text-ink dark:hover:text-brand-blue"
+              href="/chat"
+            >
+              和小小微聊聊
+              <ArrowRightIcon className="size-4" />
+            </Link>
+          </div>
+        </div>
+      </section>
 
       <footer className="border-t border-white/60 py-6 text-center text-[12px] text-muted-foreground dark:border-white/10">
         小小微银行助手 · AI 负责理解世界，代码负责改变世界
