@@ -7,7 +7,8 @@ import sqlite3
 import pytest
 
 from bank_core.analysis import AnalysisService
-from bank_core.db import connect, init_db
+from bank_core.db import SCHEMA, connect, init_db
+from bank_core.db import audit, verify_audit_chain
 from bank_core.events import EventService
 from bank_core.ledger import LedgerError, LedgerService
 from bank_core.money import cents_to_yuan, yuan_to_cents
@@ -899,3 +900,45 @@ def test_set_card_limits_writes_audit(seeded_db):
     assert "set_card_limits" in _audited()
     assert conn.execute("SELECT daily_limit_cents d FROM cards WHERE id=?",
                         (card["id"],)).fetchone()["d"] == 800_000
+
+
+def test_audit_chain_verifies_and_detects_tamper(seeded_db):
+    """审计存证链(2026-10-28,微众"数据快递链"式可信存证):
+    正常写入逐条成链可校验;事后篡改任意一条即断链并报出首条被改的 id。"""
+    conn = seeded_db
+    for i in range(4):
+        audit(conn, "demo_tool", {"i": i}, {"ok": i}, risk="READ")
+
+    res = verify_audit_chain(conn)
+    assert res["ok"] is True
+    assert res["hashed"] >= 4 and res["broken_id"] is None
+
+    # 事后篡改一条留痕的内容(绕过 audit 直改库),链应立刻断
+    conn.execute("UPDATE audit_log SET args_json='{\"i\":999}' "
+                 "WHERE tool='demo_tool' AND json_extract(args_json,'$.i')=2")
+    conn.commit()
+    res2 = verify_audit_chain(conn)
+    assert res2["ok"] is False
+    assert res2["broken_id"] is not None
+    assert "不符" in res2["detail"]
+
+    # 删改同罪:删掉中间一条同样断链
+    conn2 = sqlite3.connect(":memory:")
+    conn2.executescript(SCHEMA)
+    audit(conn2, "a", {}, {})
+    audit(conn2, "b", {}, {})
+    audit(conn2, "c", {}, {})
+    conn2.execute("DELETE FROM audit_log WHERE tool='b'")
+    conn2.commit()
+    res3 = verify_audit_chain(conn2)
+    assert res3["ok"] is False and res3["broken_id"] is not None
+
+
+def test_audit_chain_legacy_rows_are_skipped(seeded_db):
+    """老库存量行(哈希为 NULL)按链前遗留跳过,新行起链,不算断链。"""
+    conn = seeded_db
+    conn.execute("UPDATE audit_log SET prev_hash=NULL, entry_hash=NULL")
+    conn.commit()
+    audit(conn, "new_after_legacy", {}, {})
+    res = verify_audit_chain(conn)
+    assert res["ok"] is True and res["legacy"] >= 1 and res["hashed"] >= 1

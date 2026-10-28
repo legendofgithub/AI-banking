@@ -297,6 +297,7 @@ input.mono{font-family:var(--mono)}
   <button class="tab" data-tab="orders">转账订单</button>
   <button class="tab" data-tab="adjust">调账</button>
   <button class="tab" data-tab="otp">短信记录</button>
+  <button class="tab" data-tab="audit">审计存证</button>
 </nav>
 
 <main>
@@ -547,6 +548,24 @@ input.mono{font-family:var(--mono)}
       <table>
         <thead><tr><th>#</th><th>用户</th><th>手机号</th><th>状态</th><th class="num">尝试</th><th>发送时间</th><th>过期时间</th></tr></thead>
         <tbody id="otpBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="tab-audit" class="panel">
+  <div class="card">
+    <h3>审计存证链
+      <span class="head-note">每条工具调用留痕带哈希链（前条哈希参与本条运算），事后篡改/删改会导致断链——本地哈希链存证，口径对齐"数据快递链"式可信审计</span>
+    </h3>
+    <div class="flex items-center gap-3" style="margin:8px 0 12px;">
+      <button id="auditVerifyBtn" class="btn" type="button">校验链完整性</button>
+      <span id="auditChainState" class="muted">加载中…</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>#</th><th>时间</th><th>工具</th><th>风险级</th><th>参数摘要</th><th>结果摘要</th><th>存证哈希</th></tr></thead>
+        <tbody id="auditBody"></tbody>
       </table>
     </div>
   </div>
@@ -1232,6 +1251,38 @@ async function loadOtp(){
   }).join('') || emptyRow(7);
 }
 
+/** 审计存证链:留痕列表 + 一键校验(哈希链断链即报出首条被篡改的 id) */
+async function loadAudit(){
+  $('#auditBody').innerHTML = loadingRow(7);
+  const d = await api('/api/audit-log?limit=80');
+  const c = d.chain || {};
+  const st = $('#auditChainState');
+  if (c.ok){
+    st.innerHTML = `<span style="color:#39c26d">✔ 存证链完整</span>（带哈希留痕 ${c.hashed} 条` +
+      (c.legacy ? `，链前遗留旧记录 ${c.legacy} 条` : '') + '）';
+  } else {
+    st.innerHTML = `<span style="color:#e5484d">✘ 断链：${esc(c.detail || '')}</span>`;
+  }
+  $('#auditBody').innerHTML = (d.audit_log || []).map(a => {
+    let args = a.args_json || '';
+    let result = a.result_json || '';
+    try { args = JSON.stringify(JSON.parse(args)); } catch (_) {}
+    try { const o = JSON.parse(result); result = JSON.stringify(o); } catch (_) {}
+    const cut = s => s.length > 90 ? s.slice(0, 90) + '…' : s;
+    const riskCls = a.risk === 'HIGH' ? '#e5484d' : (a.risk === 'MED' ? '#d29922' : '#8b949e');
+    return `
+    <tr>
+      <td class="mono">${esc(a.id)}</td>
+      <td class="ts">${esc(fmtTime(a.ts))}</td>
+      <td class="mono">${esc(a.tool)}</td>
+      <td><span class="mono" style="color:${riskCls}">${esc(a.risk)}</span></td>
+      <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(args)}">${esc(cut(args))}</td>
+      <td class="mono" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(result)}">${esc(cut(result))}</td>
+      <td class="mono">${a.hash8 ? esc(a.hash8) : '<span class="muted">旧记录</span>'}</td>
+    </tr>`;
+  }).join('') || emptyRow(7);
+}
+
 async function loadAdjustLog(){
   $('#adjustLogBody').innerHTML = loadingRow(9);
   const qs = new URLSearchParams({
@@ -1273,6 +1324,7 @@ const TAB_LOADERS = {
   orders:   safe(loadOrders),
   adjust:   safe(loadAdjust),
   otp:      safe(loadOtp),
+  audit:    safe(loadAudit),
 };
 function switchTab(key){
   currentTab = key;
@@ -1432,6 +1484,7 @@ $('#usersBody').addEventListener('click', e => {
 $('#btnBackList').addEventListener('click', backToList);
 $('#moneyLimit').addEventListener('change', () => TAB_LOADERS.money());
 $('#changeCategory').addEventListener('change', () => TAB_LOADERS.change());
+$('#auditVerifyBtn')?.addEventListener('click', () => TAB_LOADERS.audit());
 $('#orderStatus').addEventListener('change', () => TAB_LOADERS.orders());
 
 // 业务参数：账户级转账限额

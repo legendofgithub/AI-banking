@@ -42,6 +42,7 @@ from . import recorder
 from .auth_core import mask_identifier, mask_id_card, verify_password
 from .analysis import AnalysisService
 from .db import audit, connect, migrate_cards_bound, migrate_users_kyc, now_iso
+from .db import verify_audit_chain as _verify_audit_chain
 from .events import EventService
 from .ledger import LedgerError, LedgerService
 from .linkage import LinkageError, LinkageService
@@ -127,6 +128,12 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
     # users.id_card/email 老库补列(管理台 connect 直连,不经 init_db)
     migrate_users_kyc(conn)
     migrate_cards_bound(conn)  # 演示绑卡列
+    # 审计存证链列(2026-10-28,同上:管理台直连不走 init_db,这里补列)
+    audit_cols = {r[1] for r in conn.execute("PRAGMA table_info(audit_log)")}
+    if audit_cols and "prev_hash" not in audit_cols:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN prev_hash TEXT")
+        conn.execute("ALTER TABLE audit_log ADD COLUMN entry_hash TEXT")
+        conn.commit()
 
     def _uid(user_id: int | None) -> int:
         if user_id and not conn.execute(
@@ -767,6 +774,30 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
                                    else "待使用"))),
         } for r in rows]
         return {"otp_codes": items}
+
+    # ------------------------------------------------------------ 审计存证链
+    @app.get("/api/audit-log")
+    def audit_log(limit: int = 50) -> dict:
+        """工具调用留痕 + 存证链完整性(2026-10-28,微众"数据快递链"式可信存证)。
+
+        只读;每条带 prev_hash/entry_hash 哈希链,事后篡改会被 verify 断链。
+        """
+        n = max(1, min(int(limit or 50), 200))
+        rows = _rec_rows(
+            _db_file,
+            """SELECT id, ts, tool, args_json, result_json, risk, entry_hash
+               FROM audit_log ORDER BY id DESC LIMIT ?""", (n,))
+        items = [{
+            "id": r["id"], "ts": r["ts"], "tool": r["tool"], "risk": r["risk"],
+            "args_json": r["args_json"], "result_json": r["result_json"],
+            "hash8": (r["entry_hash"] or "")[:8] or None,
+        } for r in rows]
+        conn = connect(_db_file)
+        try:
+            chain = _verify_audit_chain(conn)
+        finally:
+            conn.close()
+        return {"audit_log": items, "chain": chain}
 
     # ------------------------------------------------------------ 静态管理页
     admin_dir = Path(__file__).resolve().parent.parent / "admin_console"

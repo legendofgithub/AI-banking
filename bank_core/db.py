@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -256,7 +257,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
     tool      TEXT NOT NULL,
     args_json TEXT NOT NULL,
     result_json TEXT NOT NULL,
-    risk      TEXT NOT NULL DEFAULT 'READ'
+    risk      TEXT NOT NULL DEFAULT 'READ',
+    prev_hash TEXT,
+    entry_hash TEXT
 );
 
 -- 跨场景联动计划（比赛剧本：生日 → 锁定预算 → 提前订购鲜花/蛋糕）。
@@ -347,6 +350,12 @@ def init_db(db_path: str | os.PathLike | None = None) -> sqlite3.Connection:
     if item_cols and "phone" not in item_cols:
         conn.execute("ALTER TABLE split_bill_items ADD COLUMN "
                      "phone TEXT NOT NULL DEFAULT ''")
+    # 审计存证链(2026-10-28):每条留痕带前条哈希与本条哈希,防篡改可校验。
+    # 老库补列,存量行哈希为 NULL(校验时按"链前遗留"跳过,新行起链)。
+    audit_cols = {r[1] for r in conn.execute("PRAGMA table_info(audit_log)")}
+    if audit_cols and "prev_hash" not in audit_cols:
+        conn.execute("ALTER TABLE audit_log ADD COLUMN prev_hash TEXT")
+        conn.execute("ALTER TABLE audit_log ADD COLUMN entry_hash TEXT")
     conn.commit()
     return conn
 
@@ -410,11 +419,70 @@ def reset_db(db_path: str | os.PathLike | None = None) -> None:
             p.unlink()
 
 
+_AUDIT_GENESIS = "0" * 64
+
+
+def _audit_entry_hash(prev_hash: str, ts: str, tool: str, risk: str,
+                      args_json: str, result_json: str) -> str:
+    """存证哈希:前条哈希参与本条运算,首条接创世(64 个 0)。纯函数,可单测。"""
+    payload = "|".join((prev_hash, ts, tool, risk, args_json, result_json))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def audit(conn: sqlite3.Connection, tool: str, args: dict, result, risk: str = "READ") -> None:
-    """工具调用留痕：参数与结果摘要全部入库。"""
+    """工具调用留痕：参数与结果摘要全部入库。
+
+    2026-10-28 起带存证链:本条 entry_hash = sha256(前条 entry_hash + 本条内容),
+    任何事后篡改/删改都会让 verify_audit_chain 断链(微众"数据快递链"式的
+    可信存证口径;本地哈希链,不虚称区块链)。
+    """
+    ts = now_iso()
+    args_json = json.dumps(args, ensure_ascii=False, default=str)
+    result_json = json.dumps(result, ensure_ascii=False, default=str)
+    last = conn.execute(
+        "SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
+    prev_hash = (last[0] if last and last[0] else _AUDIT_GENESIS)
+    entry_hash = _audit_entry_hash(prev_hash, ts, tool, risk,
+                                   args_json, result_json)
     conn.execute(
-        "INSERT INTO audit_log (ts, tool, args_json, result_json, risk) VALUES (?,?,?,?,?)",
-        (now_iso(), tool, json.dumps(args, ensure_ascii=False, default=str),
-         json.dumps(result, ensure_ascii=False, default=str), risk),
+        "INSERT INTO audit_log (ts, tool, args_json, result_json, risk,"
+        " prev_hash, entry_hash) VALUES (?,?,?,?,?,?,?)",
+        (ts, tool, args_json, result_json, risk, prev_hash, entry_hash),
     )
     conn.commit()
+
+
+def verify_audit_chain(conn: sqlite3.Connection) -> dict:
+    """校验审计存证链完整性:逐条重算哈希并与存量比对。
+
+    老库存量行(prev_hash/entry_hash 为 NULL)按"链前遗留"跳过,不计断链;
+    链从第一条带哈希的行起算。返回 {ok, total, legacy, hashed, broken_id,
+    detail},纯读不改任何数据。用位置下标取列(0..7),兼容无 row_factory 的连接;
+    未启用存证链的旧库(无哈希列)直接按全量遗留返回,不视为异常。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(audit_log)")}
+    if "entry_hash" not in cols:
+        total = conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
+        return {"ok": True, "total": int(total), "legacy": int(total),
+                "hashed": 0, "broken_id": None,
+                "detail": "该库未启用存证链(旧版审计表),无哈希可校验"}
+    rows = conn.execute(
+        "SELECT id, ts, tool, args_json, result_json, risk,"
+        " prev_hash, entry_hash FROM audit_log ORDER BY id").fetchall()
+    total = len(rows)
+    legacy = 0
+    prev = _AUDIT_GENESIS
+    for r in rows:
+        rid, ts, tool, args_json, result_json, risk, prev_hash, entry_hash = r
+        if not entry_hash:
+            legacy += 1
+            continue
+        expected = _audit_entry_hash(prev, ts, tool, risk,
+                                     args_json, result_json)
+        if prev_hash != prev or entry_hash != expected:
+            return {"ok": False, "total": total, "legacy": legacy,
+                    "hashed": total - legacy, "broken_id": int(rid),
+                    "detail": f"第 {rid} 条留痕与存证链不符(可能被篡改)"}
+        prev = entry_hash
+    return {"ok": True, "total": total, "legacy": legacy, "hashed": total - legacy,
+            "broken_id": None, "detail": f"存证链完整,共 {total - legacy} 条带哈希留痕"}
