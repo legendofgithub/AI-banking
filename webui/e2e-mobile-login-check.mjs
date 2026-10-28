@@ -1,5 +1,5 @@
 // 手机 App 下载码 + 跨设备同步端到端实测(2026-10-27 改版):
-//   电脑端登录 → 出 APK 下载二维码(直指 /app/bankagent.apk,浏览器打开即下载)
+//   电脑端登录 → 出 APK 下载二维码(直指 GitHub Release 公网直链,任何网络可下)
 //   → 手机上下文密码登录(移动端登录会自动加入电脑当前会话)→ 手机看到电脑消息
 //   → 手机输入新消息 → 电脑端自动看到(反向同步)。
 // 原接力登录票据二维码已从弹窗下线(后端接口与 /qr-login 页保留),
@@ -78,12 +78,9 @@ try {
   const qrBox = page.locator('[data-testid="mobile-qr"]');
   await qrBox.waitFor({ timeout: 15_000 });
   const qrUrl = await qrBox.getAttribute("data-url");
-  if (!qrUrl || !/\/app\/bankagent\.apk$/.test(qrUrl)) {
-    throw new Error(`T1: 二维码 URL 异常(应直指 APK): ${qrUrl}`);
-  }
-  // 电脑端用 127.0.0.1 打开时,二维码里应是局域网 IP(手机可达)
-  if (/127\.0\.0\.1|localhost/.test(qrUrl)) {
-    throw new Error(`T1: 二维码 URL 仍是本机回环地址,手机扫不开: ${qrUrl}`);
+  // 2026-10-28 起下载码编码 Release 公网直链(永远最新构建,不依赖演示本机)
+  if (!qrUrl || !qrUrl.includes("/releases/latest/download/bankagent.apk")) {
+    throw new Error(`T1: 二维码 URL 异常(应为 Release 公网直链): ${qrUrl}`);
   }
   const qrImg = page.locator('[data-testid="mobile-qr-img"]');
   await qrImg.waitFor({ timeout: 15_000 });
