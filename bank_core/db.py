@@ -330,6 +330,9 @@ def connect(db_path: str | os.PathLike | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    # 多进程共写演示库(agent/web_api/admin_api 三服务同写 audit_log):
+    # 等锁而不是立刻抛 SQLITE_BUSY,存证链的 BEGIN IMMEDIATE 原子段依赖它
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -435,10 +438,30 @@ def audit(conn: sqlite3.Connection, tool: str, args: dict, result, risk: str = "
     2026-10-28 起带存证链:本条 entry_hash = sha256(前条 entry_hash + 本条内容),
     任何事后篡改/删改都会让 verify_audit_chain 断链(微众"数据快递链"式的
     可信存证口径;本地哈希链,不虚称区块链)。
+
+    读前条哈希与写入必须在同一写事务里(BEGIN IMMEDIATE):agent/web_api/
+    admin_api 三个进程共写这张表,两进程同时"读旧哈希再各自插入"会让链
+    分叉、校验误报断链。busy_timeout 让等锁方排队而非报错。
     """
     ts = now_iso()
     args_json = json.dumps(args, ensure_ascii=False, default=str)
     result_json = json.dumps(result, ensure_ascii=False, default=str)
+    if conn.in_transaction:
+        # 调用方事务进行中(如 ledger 方法先写业务再留痕):本连接已持有
+        # 写锁,不存在跨进程并发窗口,直接在原事务里追加即可
+        _audit_insert(conn, ts, tool, risk, args_json, result_json)
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        _audit_insert(conn, ts, tool, risk, args_json, result_json)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _audit_insert(conn: sqlite3.Connection, ts: str, tool: str, risk: str,
+                  args_json: str, result_json: str) -> None:
     last = conn.execute(
         "SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
     prev_hash = (last[0] if last and last[0] else _AUDIT_GENESIS)
@@ -449,7 +472,6 @@ def audit(conn: sqlite3.Connection, tool: str, args: dict, result, risk: str = "
         " prev_hash, entry_hash) VALUES (?,?,?,?,?,?,?)",
         (ts, tool, args_json, result_json, risk, prev_hash, entry_hash),
     )
-    conn.commit()
 
 
 def verify_audit_chain(conn: sqlite3.Connection) -> dict:

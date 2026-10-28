@@ -942,3 +942,28 @@ def test_audit_chain_legacy_rows_are_skipped(seeded_db):
     audit(conn, "new_after_legacy", {}, {})
     res = verify_audit_chain(conn)
     assert res["ok"] is True and res["legacy"] >= 1 and res["hashed"] >= 1
+
+
+def test_audit_chain_multi_writer_concurrent(tmp_path):
+    """多进程共写场景(2026-10-28):agent/web_api/admin_api 三服务同写审计表,
+    并发写入不得让链分叉(否则校验误报断链)。每个工作线程持独立连接(等价
+    于多进程);audit 内部 BEGIN IMMEDIATE + busy_timeout 串行化写事务。"""
+    path = tmp_path / "bank.db"
+    seed(path)
+    import concurrent.futures as _futures
+
+    def _hammer(worker: int, n: int = 12):
+        conn = connect(path)  # 每个工作线程独立连接 = 模拟独立进程
+        try:
+            for i in range(n):
+                audit(conn, f"tool_w{worker}", {"i": i}, {"ok": True})
+        finally:
+            conn.close()
+
+    with _futures.ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(_hammer, range(3)))
+
+    res = verify_audit_chain(connect(path))
+    total = res["total"]
+    assert total >= 36, f"并发写入有丢失: {total}"
+    assert res["ok"] is True, f"并发写入导致链分叉/断链: {res}"
