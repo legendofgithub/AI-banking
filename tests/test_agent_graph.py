@@ -892,12 +892,15 @@ def test_split_statement_after_create_still_starts_new_bill(tmp_path):
 
 
 def test_is_inquiry_followup_pure_function():
-    """问句记号判定:追问 True,陈述句/空串 False。"""
+    """问句记号判定:追问 True,陈述句/空串 False;带新单动词的问句按新单 False。"""
     assert graph_mod._is_inquiry_followup("张三老王都会收到收款账单是吗")
     assert graph_mod._is_inquiry_followup("会自动扣款?")
     assert graph_mod._is_inquiry_followup("他们是不是已经收到了")
     assert not graph_mod._is_inquiry_followup("再发一单下午茶90元,三人均摊")
     assert not graph_mod._is_inquiry_followup("")
+    # 反例闸:问句但明确要开新单(如"能再发一个300的吗")不得改道答疑
+    assert not graph_mod._is_inquiry_followup("能再发起一个300的吗")
+    assert not graph_mod._is_inquiry_followup("可以再发一个火锅单吗")
 
 
 def test_payment_request_list_and_pay_flow(tmp_path):
