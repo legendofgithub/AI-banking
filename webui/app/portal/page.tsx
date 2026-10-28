@@ -27,6 +27,7 @@ import {
   SparklesIcon,
   TrendingDownIcon,
   TrendingUpIcon,
+  UsersIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -62,6 +63,12 @@ type HomeData = {
     days_left: number;
   }[];
   active_plans: { plan_id: number; title: string }[];
+  pending_payment_requests?: {
+    request_id: number;
+    from_name: string;
+    title: string;
+    amount_yuan: string;
+  }[];
   recent_transactions: {
     ts: string;
     direction: "in" | "out";
@@ -327,7 +334,8 @@ export default function PortalPage() {
   const pendingN = data?.pending_orders.length ?? 0;
   const subsN = data?.upcoming_subscriptions.length ?? 0;
   const plansN = data?.active_plans.length ?? 0;
-  const todoN = pendingN + subsN + plansN;
+  const payN = data?.pending_payment_requests?.length ?? 0;
+  const todoN = pendingN + subsN + plansN + payN;
 
   return (
     <div className="min-h-dvh bg-aurora">
@@ -523,6 +531,35 @@ export default function PortalPage() {
                     </p>
                   ) : (
                     <ul className="mt-3 flex flex-col divide-y divide-border/60">
+                      {(data?.pending_payment_requests ?? []).slice(0, 4).map(
+                        (q) => (
+                          <li key={`q-${q.request_id}`}>
+                            <button
+                              className="group flex w-full items-center gap-3 py-2.5 text-left transition-colors hover:bg-brand-red-soft/40"
+                              type="button"
+                              onClick={() =>
+                                goChat(
+                                  router,
+                                  `处理待办：${q.from_name}发来的AA交款单《${q.title}》#${q.request_id}，应付¥${q.amount_yuan}，帮我确认并完成付款`
+                                )
+                              }
+                            >
+                              <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-red-soft text-brand-red">
+                                <UsersIcon className="size-4" />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[13px] font-medium text-foreground">
+                                  AA 待付款：{q.from_name} 请你付 ¥{q.amount_yuan}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground">
+                                  {q.title} · 交款单 #{q.request_id} · 点击处理付款
+                                </p>
+                              </div>
+                              <ArrowRightIcon className="size-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-brand-red" />
+                            </button>
+                          </li>
+                        )
+                      )}
                       {(data?.pending_orders ?? []).slice(0, 4).map((o) => (
                         <li key={`o-${o.order_id}`}>
                           <button

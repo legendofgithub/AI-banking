@@ -1369,6 +1369,40 @@ def test_home_overview_aggregates_readonly(tmp_path):
         assert data2["recent_transactions"], "入金后应有最近交易"
         top = data2["recent_transactions"][0]
         assert top["direction"] == "in" and top["amount_yuan"] == "1000.00"
+        # 待付交款单聚合(2026-10-28):别人发来的 AA 要出现在收款人首页,
+        # 否则收款对象登录后完全感知不到自己该付钱
+        import sqlite3 as _sq
+        pc = _sq.connect(db)
+        other = pc.execute(
+            "SELECT id, name FROM users WHERE id != 1 ORDER BY id LIMIT 1"
+        ).fetchone()
+        from_uid, from_name = (other[0], other[1]) if other else (1, "陈明")
+        pc.execute(
+            """INSERT INTO split_bills
+               (user_id, title, total_cents, status, created_at)
+               VALUES (?, '火锅', 20000, 'collecting',
+                       '2026-10-28T00:00:00')""", (from_uid,))
+        pc.execute(
+            """INSERT INTO split_bill_items
+               (bill_id, contact_name, share_cents, paid, phone)
+               VALUES (1, '我', 10000, 0, '')""")
+        pc.execute(
+            """INSERT INTO payment_requests
+               (bill_id, item_id, from_user_id, to_user_id, title,
+                amount_cents, status, created_at)
+               VALUES (1, 1, ?, 1, '火锅', 10000, 'pending',
+                       '2026-10-28T00:00:00')""", (from_uid,))
+        pc.commit()
+        pc.close()
+        data3 = client.get("/api/home",
+                           headers={"x-bank-token": tok}).json()
+        reqs = data3.get("pending_payment_requests") or []
+        assert reqs, "待付交款单应出现在首页聚合"
+        q = reqs[0]
+        assert q["title"] == "火锅"
+        assert q["amount_yuan"] == "100.00"
+        assert q["request_id"] > 0
+        assert q["from_name"] == from_name
         # 未登录 401
         r401 = client.get("/api/home")
         assert r401.status_code == 401

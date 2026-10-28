@@ -980,6 +980,16 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                WHERE user_id=? AND status='active'
                ORDER BY id DESC LIMIT 5""", (uid,)).fetchall()
 
+        # 待付交款单(别人发来的 AA,收款对象视角的"代办"):没有这一项,
+        # 收款人登录门户后完全感知不到自己该付钱(2026-10-28 实测)。
+        pay_reqs = conn.execute(
+            """SELECT pr.id, pr.title, pr.amount_cents, pr.from_user_id,
+                      u.name AS from_name
+               FROM payment_requests pr
+               LEFT JOIN users u ON u.id = pr.from_user_id
+               WHERE pr.to_user_id=? AND pr.status='pending'
+               ORDER BY pr.id DESC LIMIT 10""", (uid,)).fetchall()
+
         recent = conn.execute(
             """SELECT t.ts, t.direction, t.amount_cents, t.counterparty, t.tx_type
                FROM transactions t JOIN accounts a ON t.account_id = a.id
@@ -997,6 +1007,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             "upcoming_subscriptions": upcoming_subs,
             "active_plans": [{"plan_id": r["id"], "title": r["title"]}
                              for r in plans],
+            "pending_payment_requests": [{
+                "request_id": r["id"],
+                "from_name": r["from_name"] or "一位用户",
+                "title": r["title"],
+                "amount_yuan": cents_to_yuan(r["amount_cents"]),
+            } for r in pay_reqs],
             "recent_transactions": [{
                 "ts": r["ts"], "direction": r["direction"],
                 "amount_yuan": cents_to_yuan(r["amount_cents"]),
