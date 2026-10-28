@@ -25,11 +25,31 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      # 版本号:run_number 单调递增,App 内更新检查按 versionCode 比大小;
+      # versionName 带日期便于人读
+      - name: Compute version
+        run: |
+          echo "VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "VERSION_NAME=1.0.${{ github.run_number }}.$(date +%Y%m%d)" >> "$GITHUB_ENV"
+
       - name: Build debug APK
         run: gradle -p mobile-app assembleDebug --no-daemon
+             -PappVersionCode="${VERSION_CODE}" -PappVersionName="${VERSION_NAME}"
+
+      # 版本清单:App 启动时拉 /app/version.json 比对;sha256 供下载后校验
+      - name: Write version manifest
+        run: |
+          cd mobile-app/app/build/outputs/apk/debug
+          SHA="$(sha256sum app-debug.apk | cut -d' ' -f1)"
+          cat > version.json <<JSON
+          {"versionCode": ${VERSION_CODE}, "versionName": "${VERSION_NAME}", "apk": "app/bankagent.apk", "sha256": "${SHA}"}
+          JSON
+          cat version.json
 
       - uses: actions/upload-artifact@v4
         with:
           name: bankagent-apk
-          path: mobile-app/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            mobile-app/app/build/outputs/apk/debug/app-debug.apk
+            mobile-app/app/build/outputs/apk/debug/version.json
           if-no-files-found: error

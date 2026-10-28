@@ -10,8 +10,10 @@ android {
         applicationId = "com.aibanking.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // 版本号由 CI 注入(-PappVersionCode/-PappVersionName;workflow 用
+        // run_number 保证单调递增,App 内更新按 versionCode 比大小)
+        versionCode = (project.findProperty('appVersionCode') ?: '1') as Integer
+        versionName = (project.findProperty('appVersionName') ?: '1.0') as String
     }
 
     buildTypes {

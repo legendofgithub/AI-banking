@@ -58,6 +58,7 @@ public class MainActivity extends Activity {
     private TextView statusText;
     private volatile boolean discoveryRunning = false;
     private boolean deepLinkHandled = false;
+    private AppUpdater updater;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -119,10 +120,22 @@ public class MainActivity extends Activity {
                 inputUrl.setText(saved);
                 hideSetup();
                 webView.loadUrl(saved);
+                // 冷启动也比对版本(App 内自更新)
+                updater = new AppUpdater(this, saved);
+                updater.check();
             } else {
                 showSetup(null);
                 startDiscovery();
             }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从「安装未知应用」系统设置返回:续装刚才被权限拦下的更新
+        if (updater != null) {
+            updater.resume();
         }
     }
 
@@ -260,6 +273,11 @@ public class MainActivity extends Activity {
         statusText.setVisibility(View.GONE);
         hideSetup();
         webView.loadUrl(origin);
+        // 连上电脑即比对 /app/version.json,有新版弹窗提示(App 内自更新)
+        if (updater == null) {
+            updater = new AppUpdater(this, origin);
+        }
+        updater.check();
     }
 
     /** 容忍整段 URL(带路径/查询),只取 origin;补协议。 */
