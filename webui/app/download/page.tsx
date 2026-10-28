@@ -2,9 +2,10 @@
 
 /*
  * 手机 App 下载页(手机浏览器扫码后落在)。
- * 主按钮指向 webui/public/app/bankagent.apk(由 mobile-app/ 的 GitHub Actions
- * 构建产物放入,不入库);页面动态展示电脑端局域网地址,方便装好 App 后回填。
- * 不需要登录;未放 APK 时按钮降级为「未就绪」并保留网页版入口。
+ * 主按钮指向 GitHub Release 公网直链(releases/latest/download,永远最新构建,
+ * 由 mobile-app/ 的 GitHub Actions 自动发布)——任何人扫码都能下,不依赖演示本机。
+ * 页面动态展示电脑端局域网地址,方便装好 App 后回填。
+ * 不需要登录;保留「手机网页版」入口兜底。
  */
 
 import {
@@ -19,7 +20,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { bankAgentBase } from "@/hooks/use-bank-auth";
 
-const APK_HREF = "app/bankagent.apk";
+const APK_HREF =
+  "https://github.com/legendofgithub/AI-banking/releases/latest/download/bankagent.apk";
 
 const STEPS: { title: string; detail: string }[] = [
   {
@@ -43,8 +45,6 @@ const STEPS: { title: string; detail: string }[] = [
 
 export default function DownloadPage() {
   const [lanHost, setLanHost] = useState("");
-  const [apkReady, setApkReady] = useState(false);
-  const [apkChecked, setApkChecked] = useState(false);
   const [isAndroid, setIsAndroid] = useState(true);
 
   useEffect(() => {
@@ -53,11 +53,6 @@ export default function DownloadPage() {
       .then((r) => r.json())
       .then((j: { host?: string }) => setLanHost(j.host ?? ""))
       .catch(() => setLanHost(""));
-    // 相对路径跟随 basePath;HEAD 探测 APK 是否已由构建产物放入
-    fetch(APK_HREF, { method: "HEAD" })
-      .then((r) => setApkReady(r.ok))
-      .catch(() => setApkReady(false))
-      .finally(() => setApkChecked(true));
   }, []);
 
   const pcOrigin = lanHost ? `http://${lanHost}:3000` : "";
@@ -95,23 +90,14 @@ export default function DownloadPage() {
             手机与电脑需连接同一 Wi-Fi
           </div>
 
-          {apkChecked && !apkReady ? (
-            <div className="mt-3 rounded-xl bg-warning/10 px-3 py-2.5 text-[13px] leading-relaxed text-warning">
-              安装包还没就绪(需要先在电脑端完成一次云端构建,见
-              mobile-app/README)。可以先用下面的「手机网页版」体验同样的功能。
-            </div>
-          ) : (
-            <a
-              className={`sheen mt-3 flex h-12 items-center justify-center gap-2 rounded-xl bg-brand-red-solid text-[15px] font-medium text-white shadow-[0_12px_28px_-12px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep ${
-                apkChecked && !apkReady ? "pointer-events-none opacity-50" : ""
-              }`}
-              download="AI-Banking.apk"
-              href={APK_HREF}
-            >
-              <DownloadIcon className="size-4" />
-              下载 Android App(APK)
-            </a>
-          )}
+          <a
+            className="sheen mt-3 flex h-12 items-center justify-center gap-2 rounded-xl bg-brand-red-solid text-[15px] font-medium text-white shadow-[0_12px_28px_-12px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
+            download="AI-Banking.apk"
+            href={APK_HREF}
+          >
+            <DownloadIcon className="size-4" />
+            下载 Android App(APK)
+          </a>
 
           {!isAndroid ? (
             <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">

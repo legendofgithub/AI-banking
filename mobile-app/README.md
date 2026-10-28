@@ -29,12 +29,14 @@ scripts/discover_responder.py     UDP 58713 应答器(纯 stdlib)
 .github/workflows/build-android-app.yml   云端构建(APK 产物)
 ```
 
-## 构建(GitHub Actions,本机零安装)
+## 构建与分发(GitHub Actions,本机零安装)
 
-1. push 仓库后,Actions 里跑 **build-android-app**(改 `mobile-app/**` 会自动触发,也可手动 Run workflow)。
-2. 构建完在该 run 的 Artifacts 下载 `bankagent-apk`,或本机:
-   `gh run download -n bankagent-apk -D /tmp/apk`
-3. 把 `app-debug.apk` 复制为 `webui/public/app/bankagent.apk`(该路径已 gitignore,不入库)。
+1. push 仓库后,Actions 里跑 **build-android-app**(改 `mobile-app/**` 或工作流文件会自动触发,也可手动 Run workflow)。
+2. 构建完自动发布到固定 tag「app」的 Release,**公网扫码直链**(永远指向最新构建,发新版不用换二维码):
+   `https://github.com/legendofgithub/AI-banking/releases/latest/download/bankagent.apk`
+   对外分发、打印二维码都用这个地址——不依赖任何人的本机;下载页主按钮也指向它。
+3. App 内自更新与局域网兜底仍用本地副本:从 Release 资产(或 run 的 Artifacts)取
+   `bankagent.apk` 与 `version.json`,放入 `webui/public/app/`(该目录已 gitignore,不入库)。
 4. `curl -I http://127.0.0.1:3000/app/bankagent.apk` 确认 200 且
    Content-Type 为 `application/vnd.android.package-archive`(放入新文件后必须重启演示栈)。
 
@@ -45,8 +47,8 @@ scripts/discover_responder.py     UDP 58713 应答器(纯 stdlib)
   (应答器随启动器刷新地址),App 里旧地址连不上时删掉重装或在配置屏改。
 - 装过 App 的手机覆盖安装即可,配置与登录态保留。
 - App 内语音输入不可用(WebView 不支持 webkitSpeechRecognition),文本输入是主路径。
-- 首次安装:浏览器扫码 → APK 下载安装(Play Protect 选「仍然安装」)→ 打开 App
-  自动发现电脑 → 登录页一键填入演示账号。
+- 首次安装:任意网络扫码(公网 Release 直链)→ APK 下载安装(Play Protect
+  选「仍然安装」)→ 打开 App 后连接**与电脑同一 Wi-Fi**,自动发现电脑 → 登录页一键填入演示账号。
 
 ## 登录态说明
 

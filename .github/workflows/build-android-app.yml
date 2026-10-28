@@ -11,6 +11,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      # 发布 Release 需要写 contents(默认 GITHUB_TOKEN 是只读)
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -53,3 +56,19 @@ jobs:
             mobile-app/app/build/outputs/apk/debug/app-debug.apk
             mobile-app/app/build/outputs/apk/debug/version.json
           if-no-files-found: error
+
+      # 公网分发:APK 发布到固定 tag「app」的 Release,扫码直链
+      #   https://github.com/<owner>/<repo>/releases/latest/download/bankagent.apk
+      # 永远指向最新一次构建——发新版不用换二维码,也不依赖演示本机。
+      # tag 已存在时 create 失败,回落到 upload --clobber 覆盖资产。
+      - name: Publish APK to GitHub Release
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/mobile-app'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd mobile-app/app/build/outputs/apk/debug
+          cp app-debug.apk bankagent.apk
+          gh release create app bankagent.apk version.json \
+            --title "Android App(自动构建)" \
+            --notes "versionCode=${VERSION_CODE} versionName=${VERSION_NAME} commit=${GITHUB_SHA}" \
+          || gh release upload app bankagent.apk version.json --clobber
