@@ -1,9 +1,9 @@
 # AI Banking Agent —— 全自动银行助手（bank_core）
 
-> 2026 深圳国际金融科技大赛 · AI Banking Agent 赛道 ｜ 研发计划见 [docs/AI-Banking-Agent-产品研发计划.md](docs/AI-Banking-Agent-产品研发计划.md)
+> 2026 深圳国际金融科技大赛 · AI Banking Agent 赛道
 
 `bank_core` 是整套系统的**银行能力层**：一间随时可重置的沙箱银行，含账本、卡片、
-理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 48 个工具，
+理财、订阅、用户事件与审计日志，并以标准 **MCP Server** 对外暴露 49 个工具，
 供 LangGraph 编排层（或任何 MCP 客户端）调用。
 
 ## 快速开始
@@ -98,7 +98,7 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
         │ MCP (stdio / http)
         ▼
 ┌──────────────────────────────────────────────┐
-│ mcp_server.py   48 个工具，标注 READ/LOW/MED/HIGH │
+│ mcp_server.py   49 个工具，标注 READ/LOW/MED/HIGH │
 ├──────────────────────────────────────────────┤
 │ ledger.py 账本·转账两步走·AA·卡片                │
 │ analysis.py 分类统计·月报·异常检测·订阅挖掘       │
@@ -140,7 +140,7 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 609 个用例全绿(2026-10-27 实测)
+.venv/Scripts/python.exe -m pytest tests -q      # 617 个用例全绿(2026-10-28 实测)
 .venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
 
 # 用例数不写固定值,一律以 --collect-only 实测为准(历史文档里的 205/245/133/413/481 均已过期)
@@ -181,7 +181,7 @@ tests/test_memory.py        38 个 —— 长期记忆九模块 UPSERT、条目�
 tests/test_memory_capture.py 26 个 —— 对话提炼器(2026-10-26):偏好/事实/目标/反目标
                             正则提取与误报闸、每轮落库编排、时间线、渲染与检阅
 tests/test_persona.py       11 个 —— 人设提示词存取、默认态、越界防御、温度透传
-tests/test_tool_meta.py     16 个 —— 44 工具身份证对账(多/少/风险等级漂移都红)、
+tests/test_tool_meta.py     16 个 —— 49 工具身份证对账(多/少/风险等级漂移都红)、
                             动钱面/两步类/不可逆类/敏感类清单、scoped 白名单视图
 tests/test_votes.py          8 个 —— 消息投票:投/换/取消往返、GET 恢复、管理台汇总
 tests/test_task_store.py     7 个 —— 长程任务存储层(纯 sqlite)
@@ -192,6 +192,6 @@ tests/test_guarded_call.py  21 个 —— 工具调用咽喉:记账字段与旧 
                             args 快照隔离("我怎么把它弄坏"探测抓到的真 bug 回归)
 tests/test_history_compact.py 25 个 —— 历史三层压缩:L1 占位清理(4 条/500 字符)、
                             L2 阈值摘要(6000 token/熔断 3 次)、L3 不做
-tests/test_prompt_channels.py 8 个 —— 通道分离:System Prompt 严格等于静态常量、
+tests/test_prompt_channels.py 9 个 —— 通道分离:System Prompt 严格等于静态常量、
                             动态上下文(persona/记忆/事实)一律走 HumanMessage
 ```

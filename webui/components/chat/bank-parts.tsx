@@ -37,7 +37,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
  *   data-card-confirmation      卡片确认卡(kind=apply|limits|status;card=card_id/
  *                               尾号/类型/当前限额或状态/目标值;挂失加红字警示)
  *   data-subscription-list      订阅/代扣总览卡(逐项金额/下次扣费/年化+取消入口;
- *                               配套后台接入中,先经 /preview/subscriptions 演示)
+ *                               订阅清单/取消/代扣预审三卡由后端 s_* 管线经 SSE 直发)
  *   data-subscription-cancel    取消代扣确认卡(确认闸门,支付密码核验)
  *   data-ask-slot               缺槽提示
  *   data-gate-pending           本轮停在人工闸门(后端仍下发;前端不渲染提示胶囊)
