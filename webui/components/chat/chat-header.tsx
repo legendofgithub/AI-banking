@@ -24,7 +24,7 @@ import { memo } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
 import { MobileLoginButton } from "./mobile-login-button";
-import { SettingsDropdownButton } from "./sidebar-settings";
+import { MobileSettingsDialog } from "./sidebar-settings";
 
 /* 右上角动作区:手机 App 下载二维码(位于后台入口左边) + 管理台。
    均仅 PC 端显示——前者是"电脑演示 → 手机装 App 直连"的入口,手机端自己没有
@@ -88,14 +88,14 @@ function PureChatHeader() {
         </span>
       </div>
 
-      {/* 手机端:设置 + 会话总览(设置菜单与桌面侧栏左下角同款) */}
+      {/* 手机端:设置 + 会话总览。设置用居中弹窗(下拉版二级子菜单在窄屏会飞出屏幕) */}
       <div className="ml-auto flex items-center md:hidden">
-        <SettingsDropdownButton
+        <MobileSettingsDialog
           aria-label="设置"
           className="size-9 text-ink hover:bg-brand-red-soft hover:text-brand-red dark:text-foreground"
         >
           <SettingsIcon className="size-4" />
-        </SettingsDropdownButton>
+        </MobileSettingsDialog>
         <Button
           aria-label="会话总览"
           className="size-9 text-ink hover:bg-brand-red-soft hover:text-brand-red dark:text-foreground"

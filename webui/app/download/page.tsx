@@ -164,7 +164,7 @@ export default function DownloadPage() {
         {/* 兜底:网页版 */}
         <Link
           className="flex items-center justify-between rounded-2xl border border-brand-blue/15 bg-card/80 px-4 py-3 text-[13px] text-foreground transition-colors hover:border-brand-red/25 hover:text-brand-red-deep dark:border-white/10 dark:bg-white/[0.04] dark:hover:text-brand-red"
-          href="/home"
+          href="/"
         >
           <span className="flex items-center gap-2">
             <SmartphoneIcon className="size-4 text-brand-blue" />

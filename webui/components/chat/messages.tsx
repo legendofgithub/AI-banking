@@ -63,9 +63,9 @@ function PureMessages({
   }, [scrollToBottom]);
 
   return (
-    <div className="relative flex-1 bg-chat-canvas md:bg-background">
+    <div className="relative flex-1 bg-chat-canvas">
       <div
-        className="absolute inset-0 touch-pan-y overflow-y-auto bg-chat-canvas md:bg-background"
+        className="absolute inset-0 touch-pan-y overflow-y-auto bg-chat-canvas"
         ref={messagesContainerRef}
         style={isArtifactVisible ? { scrollbarWidth: "none" } : undefined}
       >

@@ -109,7 +109,7 @@ export function ChatShell() {
           {/* 悬空转账强制提醒(右下角,无法关闭;确认完自动消失) */}
           <PendingTransferToast />
 
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-chat-canvas md:rounded-tl-[12px] md:border-t md:border-l md:border-border/40 md:bg-background">
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-chat-canvas md:rounded-tl-[12px] md:border-t md:border-l md:border-border/40">
             <Messages
               addToolApprovalResponse={addToolApprovalResponse}
               chatId={chatId}
@@ -125,8 +125,8 @@ export function ChatShell() {
               votes={votes}
             />
 
-            <div className="sticky bottom-0 z-1 w-full bg-chat-canvas pb-1.5 md:bg-background md:pb-2">
-              {/* 四个高频能力的常驻入口:手机端常驻,不随消息增减消失 */}
+            <div className="sticky bottom-0 z-1 w-full bg-chat-canvas pb-[calc(20px_+_env(safe-area-inset-bottom,0px))] md:pb-2">
+              {/* 理财/账单两张悬浮问题卡:手机端常驻,不随消息增减消失 */}
               {!isReadonly && !editingMessage && (
                 <div className="mx-auto w-full max-w-4xl md:hidden">
                   <QuickTags />

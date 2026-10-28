@@ -537,14 +537,11 @@ textarea:focus-visible {
     linear-gradient(120deg, #fff4f0 0%, #f3f6ff 52%, #eef3ff 100%);
 }
 
-/* 聊天画布:比纯灰多一层暖冷过渡,但不足以抢内容 */
+/* 聊天画布:整块统一白底。刻意不用渐变——画布由消息区、输入区等多个元素拼成,
+   各画一份渐变会在交界处拼出一条色阶接缝(上深下浅一条线);
+   用 --card 而非写死白色,深色主题自动落到深色卡片底 */
 @utility bg-chat-canvas {
-  background-image: linear-gradient(
-    180deg,
-    #fbf9fc 0%,
-    #f6f7fb 42%,
-    #f2f5fb 100%
-  );
+  background-color: var(--card);
 }
 
 /* 玻璃层:导航、浮层、输入框 */
@@ -686,10 +683,6 @@ textarea:focus-visible {
 
 .dark .glass-bar {
   background-color: rgb(18 21 30 / 0.82);
-}
-
-.dark .bg-chat-canvas {
-  background-image: linear-gradient(180deg, #141722 0%, #11131b 100%);
 }
 
 @media (prefers-reduced-motion: reduce) {

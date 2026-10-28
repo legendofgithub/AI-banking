@@ -19,7 +19,7 @@ import {
 import { toast } from "sonner";
 import { useLocalStorage, useWindowSize } from "usehooks-ts";
 import { ModelSelectorLogo } from "@/components/ai-elements/model-selector";
-import { SettingsDropdownButton } from "@/components/chat/sidebar-settings";
+import { MobileSettingsDialog } from "@/components/chat/sidebar-settings";
 import { useChatModel } from "@/hooks/use-chat-model";
 import { useSpeechInput } from "@/hooks/use-speech-input";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -39,7 +39,6 @@ import {
   SlashCommandMenu,
   slashCommands,
 } from "./slash-commands";
-import { SuggestedActions } from "./suggested-actions";
 
 function PureMultimodalInput({
   chatId,
@@ -49,14 +48,12 @@ function PureMultimodalInput({
   stop,
   attachments,
   setAttachments,
-  messages,
   setMessages,
   sendMessage,
   className,
   editingMessage,
   onCancelEdit,
   onRequestTransfer,
-  isLoading,
 }: {
   chatId: string;
   input: string;
@@ -527,17 +524,6 @@ function PureMultimodalInput({
         </div>
       ) : null}
 
-      {/* 建议胶囊只在桌面端保留;手机端的四个高频入口由 QuickTags + 首屏相关问题卡承担 */}
-      {!editingMessage &&
-        !isLoading &&
-        messages.length === 0 &&
-        attachments.length === 0 &&
-        uploadQueue.length === 0 && (
-          <div className="hidden md:block">
-            <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
-          </div>
-        )}
-
       <input
         className="pointer-events-none fixed -top-4 -left-4 size-0.5 opacity-0"
         multiple
@@ -602,15 +588,14 @@ function PureMultimodalInput({
         />
         <PromptInputFooter className="px-3 pb-1.5">
           <PromptInputTools>
-            {/* 手机端左下角设置入口:与侧栏左下角/门户顶栏同一份菜单(桌面端有侧栏,不重复) */}
+            {/* 手机端左下角设置入口:居中弹窗版(窄屏上二级下拉会飞出屏幕);桌面端有侧栏,不重复 */}
             <div className="md:hidden">
-              <SettingsDropdownButton
-                align="start"
+              <MobileSettingsDialog
                 aria-label="设置"
                 className="size-7 rounded-lg text-muted-foreground hover:text-foreground"
               >
                 <SettingsIcon className="size-4" />
-              </SettingsDropdownButton>
+              </MobileSettingsDialog>
             </div>
             <AttachmentsButton fileInputRef={fileInputRef} status={status} />
             {speech.status !== "unsupported" ? (

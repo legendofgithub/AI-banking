@@ -32,16 +32,19 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   bankAgentBase,
   bankAuthHeaders,
   getStoredToken,
   useBankAuth,
 } from "@/hooks/use-bank-auth";
-import { SettingsMenu } from "@/components/chat/sidebar-settings";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  SettingsMenu,
+  MobileSettingsDialogBody,
+} from "@/components/chat/sidebar-settings";
 
 type HomeData = {
   nickname: string;
@@ -228,6 +231,8 @@ export default function PortalPage() {
   // 事件目标不可靠;因此不看事件目标,只看坐标是否落在头像或菜单矩形内——
   // 在内即开/保持,在外 200ms 后收起(指针停止移动时不产生事件,状态即最后判定)。
   const [accountOpen, setAccountOpen] = useState(false);
+  // 手机端居中设置弹窗:与桌面悬浮下拉(accountOpen)分开管,互不牵动
+  const [accountDialogOpen, setAccountDialogOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -373,13 +378,40 @@ export default function PortalPage() {
                 进入对话
               </Link>
             )}
-            <DropdownMenu
-              onOpenChange={setAccountOpen}
-              open={accountOpen}
-            >
-              <DropdownMenuTrigger
-                aria-label="账号与设置"
-                className="flex size-9 items-center justify-center rounded-full outline-none transition-colors hover:bg-brand-red-soft focus-visible:ring-2 focus-visible:ring-brand-red/40 dark:text-foreground md:size-10"
+            {/* 账号/设置双端分治:桌面保留悬浮下拉(几何判定逻辑见上,鼠标移入弹出、
+                移出 200ms 收起);手机端窄屏上二级子菜单会飞出屏幕,改为点击弹出
+                居中设置弹窗(与聊天端 MobileSettingsDialog 同款本体) */}
+            <div className="hidden shrink-0 md:block">
+              {/* modal=false:非模态,不锁 body 滚动。默认模态会在弹出瞬间
+                  overflow:hidden 隐藏滚动条,页面回流产生几像素横移;
+                  收起由上面的几何判定负责,非模态不影响 */}
+              <DropdownMenu
+                modal={false}
+                onOpenChange={setAccountOpen}
+                open={accountOpen}
+              >
+                <DropdownMenuTrigger
+                  aria-label="账号与设置"
+                  className="flex size-10 items-center justify-center rounded-full outline-none transition-colors hover:bg-brand-red-soft focus-visible:ring-2 focus-visible:ring-brand-red/40 dark:text-foreground"
+                >
+                  {user ? (
+                    <span className="brand-surface flex size-8 items-center justify-center rounded-full text-[14px] font-semibold text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
+                      {user.nickname?.trim() ? user.nickname[0] : "客"}
+                    </span>
+                  ) : (
+                    <SettingsIcon className="size-5" />
+                  )}
+                </DropdownMenuTrigger>
+                <SettingsMenu align="end" side="bottom" />
+              </DropdownMenu>
+            </div>
+            <div className="shrink-0 md:hidden">
+              <button
+                aria-label="设置"
+                className="flex size-9 items-center justify-center rounded-full outline-none transition-colors hover:bg-brand-red-soft focus-visible:ring-2 focus-visible:ring-brand-red/40 dark:text-foreground"
+                data-testid="portal-account-button"
+                onClick={() => setAccountDialogOpen(true)}
+                type="button"
               >
                 {user ? (
                   <span className="brand-surface flex size-8 items-center justify-center rounded-full text-[14px] font-semibold text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
@@ -388,9 +420,12 @@ export default function PortalPage() {
                 ) : (
                   <SettingsIcon className="size-5" />
                 )}
-              </DropdownMenuTrigger>
-              <SettingsMenu align="end" side="bottom" />
-            </DropdownMenu>
+              </button>
+              <MobileSettingsDialogBody
+                onOpenChange={setAccountDialogOpen}
+                open={accountDialogOpen}
+              />
+            </div>
           </div>
         </div>
       </header>

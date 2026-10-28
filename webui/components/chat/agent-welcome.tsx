@@ -5,14 +5,17 @@
  * 左侧圆形头像 + 服务名 + 白色气泡 + 下方「相关问题」卡。
  *
  * 纯表达层:气泡里只写产品真实具备的能力(建单/确认/支付密码/审计留痕),
- * 四个问题入口复用 QUICK_TAGS,与输入框上方的常驻标签同一份清单。
+ * 四个问题入口复用 QUICK_TAGS(输入框上方的两张悬浮卡走 FLOAT_TAGS,两者不重复)。
  */
 
 import { HelpCircleIcon, Landmark } from "lucide-react";
+import { useActiveChat } from "@/hooks/use-active-chat";
 import { QUICK_TAGS, useQuickTagHandler } from "./quick-tags";
+import { SuggestedActions } from "./suggested-actions";
 
 export function AgentWelcome() {
   const onQuickTag = useQuickTagHandler();
+  const { chatId, sendMessage } = useActiveChat();
 
   return (
     <div className="flex items-start gap-2.5" data-testid="agent-welcome">
@@ -35,7 +38,7 @@ export function AgentWelcome() {
           <p className="mt-2">您是否要问以下问题：</p>
         </div>
 
-        {/* 相关问题:红色标题 + 暖白渐变底,四项与常驻标签同源。
+        {/* 相关问题:红色标题 + 暖白渐变底,四项能力入口(与悬浮卡分离)。
             桌面端隐藏——桌面下方本就是六格建议卡片,再来一张卡是同义重复。 */}
         <div
           className="brand-surface-soft gradient-hairline mt-2.5 overflow-hidden rounded-2xl border border-transparent md:hidden"
@@ -59,6 +62,13 @@ export function AgentWelcome() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* 桌面端六格建议卡:紧跟欢迎气泡(2026-10-28 从输入框上方上移,
+            消除气泡与卡片间的一大块空白);手机端隐藏,用上方相关问题卡。
+            发消息后 messages 增多,Greeting 整体卸载,卡片随气泡一起消失。 */}
+        <div className="mt-3 hidden md:block">
+          <SuggestedActions chatId={chatId} sendMessage={sendMessage} />
         </div>
       </div>
     </div>
