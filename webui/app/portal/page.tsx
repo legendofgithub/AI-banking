@@ -471,7 +471,7 @@ export default function PortalPage() {
                 hint="点击任意服务,数字员工直接开跑"
               />
               <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-                {/* 今日待办 */}
+                {/* 今日待办:平铺具体条目,点哪条 agent 处理哪条(话术带单号/对象/金额) */}
                 <div className="glass-panel gradient-hairline rounded-2xl p-5">
                   <div className="flex items-center justify-between">
                     <h3 className="flex items-center text-[15px] font-semibold text-foreground">
@@ -488,61 +488,102 @@ export default function PortalPage() {
                     </p>
                   ) : (
                     <ul className="mt-3 flex flex-col divide-y divide-border/60">
-                      {pendingN > 0 ? (
-                        <li className="flex items-center gap-3 py-3">
-                          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-red-soft text-brand-red">
-                            <BanknoteIcon className="size-4" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[13px] font-medium text-foreground">
-                              {pendingN} 笔转账待确认
-                            </p>
-                            <p className="truncate text-[11px] text-muted-foreground">
-                              待确认 {data?.pending_orders[0].to_name} ¥
-                              {data?.pending_orders[0].amount_yuan}
-                            </p>
-                          </div>
+                      {(data?.pending_orders ?? []).slice(0, 4).map((o) => (
+                        <li key={`o-${o.order_id}`}>
+                          <button
+                            className="group flex w-full items-center gap-3 py-2.5 text-left transition-colors hover:bg-brand-red-soft/40"
+                            type="button"
+                            onClick={() =>
+                              goChat(
+                                router,
+                                `处理待办：确认转账单 #${o.order_id}——给${o.to_name}转¥${o.amount_yuan}，请带我从确认开始走完流程`
+                              )
+                            }
+                          >
+                            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-red-soft text-brand-red">
+                              <BanknoteIcon className="size-4" />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[13px] font-medium text-foreground">
+                                转账待确认：{o.to_name} ¥{o.amount_yuan}
+                              </p>
+                              <p className="text-[11px] text-muted-foreground">
+                                单号 #{o.order_id} · 点击处理这笔
+                              </p>
+                            </div>
+                            <ArrowRightIcon className="size-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-brand-red" />
+                          </button>
                         </li>
-                      ) : null}
-                      {subsN > 0 ? (
-                        <li className="flex items-center gap-3 py-3">
-                          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-blue-soft text-brand-blue">
-                            <RepeatIcon className="size-4" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[13px] font-medium text-foreground">
-                              {subsN} 项订阅 3 天内扣费
-                            </p>
-                            <p className="truncate text-[11px] text-muted-foreground">
-                              {data?.upcoming_subscriptions[0].merchant} ¥
-                              {data?.upcoming_subscriptions[0].amount_yuan}
-                            </p>
-                          </div>
+                      ))}
+                      {(data?.upcoming_subscriptions ?? []).slice(0, 3).map(
+                        (s) => (
+                          <li key={`s-${s.merchant}`}>
+                            <button
+                              className="group flex w-full items-center gap-3 py-2.5 text-left transition-colors hover:bg-brand-blue-soft/40"
+                              type="button"
+                              onClick={() =>
+                                goChat(
+                                  router,
+                                  `处理待办：${s.merchant}的订阅¥${s.amount_yuan}将在${s.days_left}天后扣费，帮我评估是否保留，并给出理由`
+                                )
+                              }
+                            >
+                              <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-blue-soft text-brand-blue">
+                                <RepeatIcon className="size-4" />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[13px] font-medium text-foreground">
+                                  订阅将扣费：{s.merchant} ¥{s.amount_yuan}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground">
+                                  {s.days_left} 天后扣费 · 点击评估这笔
+                                </p>
+                              </div>
+                              <ArrowRightIcon className="size-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-brand-blue" />
+                            </button>
+                          </li>
+                        )
+                      )}
+                      {(data?.active_plans ?? []).slice(0, 3).map((p) => (
+                        <li key={`p-${p.plan_id}`}>
+                          <button
+                            className="group flex w-full items-center gap-3 py-2.5 text-left transition-colors hover:bg-brand-blue-soft/40"
+                            type="button"
+                            onClick={() =>
+                              goChat(
+                                router,
+                                `处理待办：联动计划「${p.title}」进行中，请先列出该计划剩余的步骤，等我确认后再继续推进`
+                              )
+                            }
+                          >
+                            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-blue-soft text-brand-blue">
+                              <CalendarClockIcon className="size-4" />
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[13px] font-medium text-foreground">
+                                计划进行中：{p.title}
+                              </p>
+                              <p className="text-[11px] text-muted-foreground">
+                                点击查看下一步
+                              </p>
+                            </div>
+                            <ArrowRightIcon className="size-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-brand-blue" />
+                          </button>
                         </li>
-                      ) : null}
-                      {plansN > 0 ? (
-                        <li className="flex items-center gap-3 py-3">
-                          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-blue-soft text-brand-blue">
-                            <CalendarClockIcon className="size-4" />
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[13px] font-medium text-foreground">
-                              {plansN} 个联动计划进行中
-                            </p>
-                            <p className="truncate text-[11px] text-muted-foreground">
-                              {data?.active_plans[0].title}
-                            </p>
-                          </div>
-                        </li>
-                      ) : null}
+                      ))}
                     </ul>
                   )}
                   <button
                     className="mt-2 inline-flex items-center gap-1 text-[12px] text-brand-blue hover:underline"
                     type="button"
-                    onClick={() => goChat(router, "今天有什么待办要处理")}
+                    onClick={() =>
+                      goChat(
+                        router,
+                        "请列出我今天全部待办事项（转账/订阅/计划），先不要执行任何一项，等我选择处理哪条"
+                      )
+                    }
                   >
-                    让助手逐条处理
+                    列出全部待办，我来选
                     <ArrowRightIcon className="size-3" />
                   </button>
                 </div>
