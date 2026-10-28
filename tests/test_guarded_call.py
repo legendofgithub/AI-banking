@@ -31,7 +31,9 @@ EXPECTED_DIRECT_CALLS = {
     # + pr_pay 付款/刷新进度 2;与 sb_*/ss_* 同款直接调用)
     # 55→56(2026-10-28 chat 兜底通讯录事实注入:_contact_fact_block 拉
     # list_contacts 1 处——堵 LLM 无事实编造联系人名单的洞)
-    "agent/graph.py": (r"tools\.call\(", 56),
+    # 56→57(2026-10-28 AA 账单问句事实注入:_split_bill_fact_block 拉
+    # get_split_bill 1 处——交款单"未发送原因"有据可答,不再拒答)
+    "agent/graph.py": (r"tools\.call\(", 57),
     "agent/skills.py": (r"tools\.call\(", 8),
     "agent/api.py": (r"\.call\(", 4),
 }

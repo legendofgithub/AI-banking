@@ -382,6 +382,56 @@ def test_split_bill_rejects_unregistered_and_ambiguous(tmp_path):
         "SELECT COUNT(*) c FROM split_bill_items").fetchone()["c"] == 0
 
 
+def test_get_split_bill_exposes_send_reasons(tmp_path):
+    """每条分摊项透出投递结果与原因(2026-10-28 实测:发起后追问"陈明为什么
+    未发起",助手只有已送达/未发送两个哑状态,无因可讲只能拒答)——发起人
+    本人/未注册在派发时是确定的,查询时必须能给回解释。"""
+    conn = init_db(tmp_path / "t.db")
+    _mk_payment_users(conn)
+    led = LedgerService(conn, 1)
+    bill = led.create_split_bill("火锅", 20000, [
+        {"name": "我", "share_cents": 10000},
+        {"name": "李四", "share_cents": 10000},
+    ])
+    led.send_split_requests(bill["bill_id"])
+    d = led.get_split_bill(bill["bill_id"])
+    by = {i["name"]: i for i in d["items"]}
+    assert by["我"]["send_status"] == "self"
+    assert "发起人本人" in by["我"]["send_note"]
+    assert by["李四"]["send_status"] == "delivered"
+    assert "待对方付款" in by["李四"]["send_note"]
+
+    # legacy 单(建单强制注册生效前的数据):未注册项也能看出原因而不是哑状态
+    cur = conn.execute(
+        "INSERT INTO split_bills (user_id,title,total_cents,created_at) "
+        "VALUES (1,'旧单',10000,'2026-01-01T00:00:00')")
+    conn.execute(
+        "INSERT INTO split_bill_items (bill_id,contact_name,phone,share_cents) "
+        "VALUES (?, '路人甲', '', 10000)", (cur.lastrowid,))
+    conn.commit()
+    d = led.get_split_bill(cur.lastrowid)
+    item = d["items"][0]
+    assert item["send_status"] == "not_found"
+    assert "还没有在平台创建账号" in item["send_note"]
+
+
+def test_send_split_requests_deliveries_carry_notes(tmp_path):
+    """派发结果逐人带原因:首轮播报就能讲清"为什么这条没发"。"""
+    conn = init_db(tmp_path / "t.db")
+    _mk_payment_users(conn)
+    led = LedgerService(conn, 1)
+    bill = led.create_split_bill("火锅", 10000, [
+        {"name": "我", "share_cents": 5000},
+        {"name": "李四", "share_cents": 5000},
+    ])
+    disp = led.send_split_requests(bill["bill_id"])
+    by = {d["name"]: d for d in disp["deliveries"]}
+    assert by["我"]["status"] == "self"
+    assert "发起人本人" in by["我"]["note"]
+    assert by["李四"]["status"] == "delivered"
+    assert by["李四"]["note"] == "交款单已发送"
+
+
 def test_split_request_dispatch_resolves_by_phone_and_name(tmp_path):
     """派发:显式手机号/同名解析/联系人手机号/自我逐项正确,且幂等。
 
@@ -400,6 +450,7 @@ def test_split_request_dispatch_resolves_by_phone_and_name(tmp_path):
     assert disp["sent_count"] == 3
     by_name = {d["name"]: d for d in disp["deliveries"]}
     assert by_name["我"]["status"] == "self"
+    assert "发起人本人" in by_name["我"]["note"]
     assert by_name["李四"]["status"] == "delivered"
     assert by_name["李四"]["to_user_id"] == 2
     assert by_name["王五"]["status"] == "delivered"       # 联系人手机号解析

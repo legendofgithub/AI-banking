@@ -663,13 +663,35 @@ class LedgerService:
             "total_yuan": cents_to_yuan(bill["total_cents"]),
             "status": bill["status"],
             "paid_count": paid, "total_count": len(items),
-            "items": [{"name": i["contact_name"],
-                       "share_yuan": cents_to_yuan(i["share_cents"]),
-                       "paid": bool(i["paid"]),
-                       "request_status": i["request_status"]} for i in items],
+            "items": [self._item_view(i) for i in items],
         }
         audit(self.conn, "get_split_bill", {"bill_id": bill_id}, {"status": result["status"]})
         return result
+
+    def _item_view(self, i: sqlite3.Row) -> dict:
+        """分摊项视图:带投递结果与**原因**(2026-10-28 实测:发起后追问
+        "陈明为什么未发起",助手只有已送达/未发送两个哑状态,无因可讲只能
+        拒答——发起人本人/未注册在派发时是确定的,这里复用同款解析口径
+        给出解释,供播报与 AA 账单问句的事实注入引用)。"""
+        view = {"name": i["contact_name"],
+                "share_yuan": cents_to_yuan(i["share_cents"]),
+                "paid": bool(i["paid"]),
+                "request_status": i["request_status"]}
+        if i["request_id"]:
+            view["send_status"] = "delivered"
+            view["send_note"] = ("交款单已发送,已付款" if i["request_status"] == "paid"
+                                 else "交款单已发送,待对方付款")
+            return view
+        resolved = self._resolve_payee({"contact_name": i["contact_name"],
+                                        "phone": i["phone"] or ""})
+        status = resolved["status"]
+        view["send_status"] = status
+        view["send_note"] = {
+            "self": "发起人本人,无需发送交款单(自己那份直接计入,不需要付款操作)",
+            "not_found": "对方还没有在平台创建账号,交款单无法发送",
+            "ambiguous": "同名注册用户多位,无法确定投递对象,交款单未发送",
+        }.get(status, "交款单尚未发送")
+        return view
 
     # ---------------------------------------------------- AA 交款单（跨用户）
 
@@ -719,6 +741,16 @@ class LedgerService:
             return {"status": "self", "to_user_id": user_id, "candidates": []}
         return {"status": "delivered", "to_user_id": user_id, "candidates": []}
 
+    def _dispatch_note(self, status: str) -> str:
+        """投递状态的人类可读解释(派发结果与账单查询共用一套口径)。"""
+        return {
+            "self": "发起人本人,无需发送交款单(自己那份直接计入,不需要付款操作)",
+            "not_found": "对方还没有在平台创建账号,交款单无法发送",
+            "ambiguous": "同名注册用户多位,无法确定投递对象,交款单未发送",
+            "already_sent": "交款单此前已发送,不重复投递",
+            "delivered": "交款单已发送",
+        }.get(status, "")
+
     def send_split_requests(self, bill_id: int) -> dict:
         """把 AA 账单逐个参与人投递成「交款单」（幂等：同一分摊项只投一次）。
 
@@ -743,6 +775,7 @@ class LedgerService:
             if existing:
                 deliveries.append({"name": item["contact_name"],
                                    "status": "already_sent",
+                                   "note": self._dispatch_note("already_sent"),
                                    "request_id": int(existing["id"]),
                                    "to_user_id": int(existing["to_user_id"])})
                 continue
@@ -750,6 +783,7 @@ class LedgerService:
             if resolved["status"] != "delivered":
                 deliveries.append({"name": item["contact_name"],
                                    "status": resolved["status"],
+                                   "note": self._dispatch_note(resolved["status"]),
                                    "candidates": resolved["candidates"]})
                 continue
             cur = self.conn.execute(
@@ -762,6 +796,7 @@ class LedgerService:
             sent += 1
             deliveries.append({"name": item["contact_name"],
                                "status": "delivered",
+                               "note": self._dispatch_note("delivered"),
                                "request_id": int(cur.lastrowid),
                                "to_user_id": resolved["to_user_id"]})
         self.conn.commit()

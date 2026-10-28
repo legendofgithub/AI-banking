@@ -689,6 +689,41 @@ def test_split_bill_unregistered_participant_rejected(tmp_path):
     run(scenario())
 
 
+def test_split_bill_inquiry_carries_dispatch_reasons(tmp_path):
+    """2026-10-28 实测复盘:发起 AA(含发起人本人)后追问"陈明未发起的原因
+    是?",chat 必须拿到【实时AA账单】事实块(逐人投递结果与原因),讲清
+    "发起人本人无需交款单",而不是拒答"查不到具体原因"。"""
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        llm = _RecordingLLM([
+            '{"intent": "split_bill"}',
+            json.dumps({"title": "火锅", "total_yuan": "400", "even": True,
+                        "participants": [{"name": "我"}, {"name": "老王"},
+                                         {"name": "小刘"}]},
+                       ensure_ascii=False),
+            "AA 已发起,老王小刘的交款单已发送。",
+            '{"intent": "chat"}',
+            "陈明是发起人本人,交款单不会发给自己;老王和小刘的已发送。",
+        ])
+        async with _AgentSession(db, tmp_path, ["-"], llm=llm) as graph:
+            cfg = {"configurable": {"thread_id": "aa-why"}}
+            r1 = await graph.ainvoke({"auth_user_id": 1, "messages": [HumanMessage(
+                "发起AA,火锅400,我、老王、小刘均摊")]}, cfg)
+            assert _interrupt_payload(r1)["type"] == "confirm_split"
+            await graph.ainvoke(Command(resume="确认"), cfg)
+            await graph.ainvoke({"auth_user_id": 1, "messages": [HumanMessage(
+                "陈明未发起的原因是?")]}, cfg)
+        calls = _calls_with_sys(llm, str(graph_mod.CHAT_SYS)[:24])
+        assert calls, "追问未被送进 chat"
+        extra = str(calls[-1][-1].content)
+        assert "【实时AA账单】" in extra
+        assert "发起人本人" in extra          # 原因讲清了
+        assert "老王" in extra                # 逐人明细在场
+
+    run(scenario())
+
+
 # ----------------------------------------------------------------- AA 交款单(收件人视角)
 
 def _mk_multi_user_db(tmp_path: Path) -> Path:

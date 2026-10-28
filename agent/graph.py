@@ -5322,19 +5322,56 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                  f"禁止编造名单外的人名或手机号:\n{lines}")
         return block, [call]
 
+    # AA 账单问句词根(2026-10-28 实测:发起 AA 后追问"陈明未发起的原因是?",
+    # chat 无事实被逼得拒答"查不到原因"——派发原因在 send 时是确定的,
+    # 把账单的逐人投递结果与原因查回来喂给它)。仅当本线程刚发起过 AA
+    # (state.bill)才生效,避免劫持其他场景的"账单"字眼。
+    _SPLIT_ASK_WORDS = ("交款单", "收款单", "收款账单", "未发送", "没发送",
+                        "未发起", "没收到", "分摊")
+
+    async def _split_bill_fact_block(state: AgentState) -> tuple[str, list[dict]]:
+        """AA 账单问句的事实注入:线程里有本会话发起的 AA 账单且用户在问
+        交款单/未发送等话题时,确定性查一次逐人投递结果(含原因),作为
+        【实时AA账单】块喂给闲聊模型。"""
+        bill = state.get("bill") or {}
+        bill_id = bill.get("bill_id")
+        msgs = state.get("messages") or []
+        last_user = next((m for m in reversed(msgs)
+                          if getattr(m, "type", "") == "human"), None)
+        text = str(getattr(last_user, "content", "") or "")
+        if not bill_id or not any(w in text for w in _SPLIT_ASK_WORDS):
+            return "", []
+        d = await tools.call("get_split_bill", bill_id=bill_id)
+        call = _jr("get_split_bill", {"bill_id": bill_id}, d)
+        if _has_error(d):
+            return ("\n【实时AA账单】银行系统暂时查不到这笔账单的投递明细,"
+                    "请照实告知用户稍后再试;禁止编造任何原因。"), [call]
+        lines = "\n".join(
+            f"- {it.get('name')} {it.get('share_yuan')}元:{it.get('send_note', '')}"
+            for it in d.get("items", []) if isinstance(it, dict))
+        block = (f"\n【实时AA账单】《{d.get('title')}》(账单{bill_id})总额 "
+                 f"{d.get('total_yuan')} 元,当前状态 {d.get('status')}。"
+                 f"每个分摊项的投递结果与原因:\n{lines}\n"
+                 "回答\"为什么没发送/谁没收到\"只能引用以上原因;其中"
+                 "\"发起人本人,无需发送交款单\"是正常设计(自己不给自己发"
+                 "交款单,自己那份直接计入),不是故障,请向用户讲清这一点。")
+        return block, [call]
+
     async def chat(state: AgentState) -> dict:
         # 条目 3:System Prompt 一律传**模块常量原样**,禁止在调用点拼接——
         # 静态前缀跨轮字节级不变才能命中 API 前缀缓存;人设/长期记忆这类每用户
         # 都不同的动态上下文走 extra(HumanMessage 通道),语义与语气都不变。
         persona_block, persona_temp = _persona_ctx(state)
         contact_block, contact_calls = await _contact_fact_block(state)
+        bill_block, bill_calls = await _split_bill_fact_block(state)
         text = await ask_llm(CHAT_SYS, state["messages"],
                              _dynamic_ctx(persona_block, _profile_ctx(state),
-                                          contact_block),
+                                          contact_block, bill_block),
                              strong=True, temperature=persona_temp)
         out: dict = {"messages": [AIMessage(content=text or "我在。")]}
-        if contact_calls:
-            out["bank_calls"] = contact_calls
+        calls = contact_calls + bill_calls
+        if calls:
+            out["bank_calls"] = calls
         return out
 
     # ---------------------------------------------------------------- 通用播报
