@@ -425,9 +425,15 @@ SB_EXTRACT_SYS = """你是 AA 收款信息抽取器。结合【已有槽位】�
 规则:
 - 用户说"均摊/AA"且没给每人份额 → even=true,participants 只填姓名,不要自己算份额;
 - 用户给了每人份额 → even=false,participants 每项加 "share_yuan": "纯数字字符串";
+- 发起人本人也是参与人:用户说"和我一起/包括我/我也出一份"时,把用户自己加进
+  participants;上下文【当前用户】给了本人姓名就写这个姓名,没给才写"我";
+- participants 永远输出**全量名单**:以【已有槽位】为底,最新消息更新了谁的
+  份额/手机号就改谁,新提到的人追加;最新消息只补充一个人时,其余参与人原样
+  保留,绝不能因为只提到一个人就把名单里其他人删掉;
+- 仅当用户明确说某人"不参加/退出/划掉"时,才把该人从名单去掉(其余保留);
 - 用户为某位参与人报了手机号 → 该参与人加 "phone"(只留数字);没报则 phone 填 null;
   手机号用于把交款单精确投递给对方的 Agent,不要臆造;
-- 最新消息覆盖已有槽位;未知填 null。"""
+- 最新消息覆盖 title/total_yuan;未知填 null。"""
 
 SS_EXTRACT_SYS = """你是 AA 收款结算抽取器。从【对话】最新一条用户消息中抽取,输出 JSON,不要任何多余文字:
 {"contact_name": "刚付款的参与人姓名|null", "bill_id": 整数|null}
@@ -848,6 +854,62 @@ def even_split(total_cents: int, names: list[str]) -> list[dict]:
             for i, name in enumerate(names)]
 
 
+# AA 参与人里指代发起人本人的字面说法(置换由确定性代码兜底,不依赖 LLM 听话)
+_SELF_REF_WORDS = frozenset({"我", "我自己", "本人", "俺", "咱", "自己"})
+
+
+def _self_display_name(state: dict) -> str:
+    """发起人本人姓名:长期记忆 profile.name(「我叫X」捕获);没有返回空串。"""
+    prof = memory_mod.recall(state.get("auth_user_id"), "profile") or {}
+    return str(prof.get("name") or "").strip()
+
+
+def merge_split_participants(old: Any, parsed: Any,
+                             self_name: str = "") -> list[dict]:
+    """AA 参与人按姓名 upsert 合并(纯函数,可单测)。
+
+    澄清轮的补充答复往往只提到部分人(2026-10-28 实测:用户补"我自己也要
+    出100",参与人整字段覆盖下老名单原样不动、新人没进来,同一句纠偏文案
+    反复复读)。这里以旧名单为底:同名者用新报的份额/手机号覆盖(未报字段
+    沿用旧值),新名字追加;"我/我自己"在拿到当前用户姓名时先置换成真名,
+    交款单才能按注册用户投递。
+    收缩名单的唯一通道:parsed 全是老名单里的人且确实少了(模型按"全量名单"
+    输出了剔除结果,如"丁博文不参加了"),此时以 parsed 为准;含新名字的
+    补充合并绝不触发收缩。parsed 一人也绝不收缩(单条补充最常见)。
+    """
+    def _norm(rows: Any) -> list[dict]:
+        out: list[dict] = []
+        for p in rows or []:
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("name") or "").strip()
+            if not name:
+                continue
+            if name in _SELF_REF_WORDS and self_name:
+                name = self_name
+            row: dict = {"name": name}
+            share = p.get("share_yuan")
+            if share not in (None, ""):
+                row["share_yuan"] = share
+            phone = str(p.get("phone") or "").strip()
+            if phone:
+                row["phone"] = phone
+            out.append(row)
+        return out
+
+    new_rows = _norm(parsed)
+    if not new_rows:  # 模型没抽出人(全 null/空):沿用旧名单
+        return _norm(old)
+    old_rows = _norm(old)
+    if (len(old_rows) >= 2 and len(new_rows) >= 2
+            and {r["name"] for r in new_rows} < {r["name"] for r in old_rows}):
+        return new_rows  # 全量剔除式名单
+    merged: dict[str, dict] = {r["name"]: dict(r) for r in old_rows}
+    for r in new_rows:  # 同名 upsert;新名字追加;重复名后到者覆盖
+        merged.setdefault(r["name"], {}).update(r)
+    return list(merged.values())
+
+
 _CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
@@ -1002,6 +1064,32 @@ def _sb_slot_question(missing: list[str]) -> str:
         return "这份 AA 账单叫什么?(如:火锅)"
     else:
         return "请说明参与人(至少两人,含你自己)。"
+
+
+def _sb_state_question(state: dict, missing: list[str]) -> str:
+    """shares 纠偏时回显当前分摊与差额,替代静态文案(2026-10-28 实测复盘:
+    纠偏问句一字不变地复读,用户看不到系统记了什么,只能盲猜)。
+    份额/总额任一取不到时返回空串,回落 _sb_slot_question 的默认问句。"""
+    if "shares" not in (missing or []):
+        return ""
+    split = state.get("split") or {}
+    total_cents = _cents(split.get("total_yuan"))
+    parts = split.get("participants") or []
+    if total_cents is None or not parts:
+        return ""
+    cells: list[str] = []
+    sum_cents = 0
+    for p in parts:
+        c = _cents(p.get("share_yuan"))
+        if c is None:
+            return ""
+        cells.append(f"{p.get('name')} {cents_to_yuan(c)}元")
+        sum_cents += c
+    diff = total_cents - sum_cents
+    verb = "还差" if diff > 0 else "多出"
+    return (f"我目前记的分摊是:{'、'.join(cells)},合计 {cents_to_yuan(sum_cents)} 元,"
+            f"与总额 {cents_to_yuan(total_cents)} 元{verb} {cents_to_yuan(abs(diff))} 元。"
+            "请补正差额(直接说谁出多少即可),或回复「均摊」由系统平分。")
 
 
 # 录入备注的"跳过"答复(确定性识别,占位词不写入备注栏)
@@ -2822,13 +2910,21 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
 
     async def sb_extract(state: AgentState) -> dict:
         history = state["messages"]
+        self_name = _self_display_name(state)
         extra = ("【已有槽位】" + json.dumps(state.get("split") or {}, ensure_ascii=False)
+                 + (f"\n【当前用户】发起人本人姓名「{self_name}」,参与人里的"
+                    f"“我/我自己”一律写这个姓名。" if self_name else "")
                  + "\n请输出抽取结果。")
         parsed = json_from_content(await ask_llm(SB_EXTRACT_SYS, history, extra)) or {}
         split: dict = dict(state.get("split") or {})
-        for key in ("title", "total_yuan", "participants", "even"):
+        for key in ("title", "total_yuan", "even"):
             if parsed.get(key) is not None:
                 split[key] = parsed[key]
+        if parsed.get("participants") is not None:
+            # 参与人按姓名 upsert(2026-10-28):澄清轮补充只动被提到的人,
+            # 整字段覆盖会把老名单冲掉/漏并增量,是纠偏复读事故的根因之一
+            split["participants"] = merge_split_participants(
+                split.get("participants"), parsed["participants"], self_name)
 
         missing: list[str] = []
         if not split.get("title"):
@@ -2870,7 +2966,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         update.update(_clarify_reset(state, "split_missing", missing))
         return update
 
-    sb_clarify = _make_clarify_node("split_missing", _sb_slot_question)
+    sb_clarify = _make_clarify_node("split_missing", _sb_slot_question,
+                                    state_question_of=_sb_state_question)
 
     # AA 闸门:取消即终态、无撤单节点,拒绝/超限的 split_cancelled 由闸门自给
     sb_gate = _make_gate_node(

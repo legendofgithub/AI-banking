@@ -556,6 +556,100 @@ def test_split_bill_gate_cancel(tmp_path):
     run(scenario())
 
 
+def test_merge_split_participants_upserts_by_name():
+    """纯函数:澄清轮按姓名 upsert(2026-10-28 复盘——"我自己也要出100"在
+    整字段覆盖下既没进新人也没冲掉旧人,纠偏文案原样复读)。"""
+    old = [{"name": "老王", "share_yuan": "100", "phone": "13600001234"},
+           {"name": "小刘", "share_yuan": "100"},
+           {"name": "丁博文", "share_yuan": "100"}]
+    # 补充增量:老名单保留,"我自己"置换成真名后追加
+    merged = graph_mod.merge_split_participants(
+        old, [{"name": "我自己", "share_yuan": "100"}], self_name="陈明")
+    assert [p["name"] for p in merged] == ["老王", "小刘", "丁博文", "陈明"]
+    assert merged[0]["phone"] == "13600001234"  # 未提到的人字段原样沿用
+    # 同名更新:老王改口出 50,其余不动
+    merged2 = graph_mod.merge_split_participants(
+        old, [{"name": "老王", "share_yuan": "50"}])
+    assert merged2[0]["share_yuan"] == "50" and len(merged2) == 3
+    # 全量剔除:"丁博文不参加"(全是老名单的人且确实少了 → 以 parsed 为准)
+    merged3 = graph_mod.merge_split_participants(
+        old, [{"name": "老王", "share_yuan": "200"},
+              {"name": "小刘", "share_yuan": "200"}])
+    assert [p["name"] for p in merged3] == ["老王", "小刘"]
+    # 单人剔除不收缩(parsed 只有一人属最常见补充,绝不触发剔除通道)
+    assert len(graph_mod.merge_split_participants(
+        old, [{"name": "老王", "share_yuan": "400"}])) == 3
+    # 模型没抽出人 → 沿用旧名单;无真名时"我"保留字面
+    assert graph_mod.merge_split_participants(old, None) == old
+    assert [p["name"] for p in graph_mod.merge_split_participants(
+        [], [{"name": "我", "share_yuan": "100"}])] == ["我"]
+    # 去重:模型既输出"我"又输出真名,按同一人合并(后者份额覆盖)
+    dedup = graph_mod.merge_split_participants(
+        [], [{"name": "我", "share_yuan": "100"},
+             {"name": "陈明", "share_yuan": "120"}], self_name="陈明")
+    assert [p["name"] for p in dedup] == ["陈明"]
+    assert dedup[0]["share_yuan"] == "120"
+
+
+def test_sb_state_question_echoes_shares_and_diff():
+    """shares 纠偏问句回显当前分摊明细与差额(替代静态复读);信息不全回落。"""
+    st = {"split": {"total_yuan": "400", "participants": [
+        {"name": "老王", "share_yuan": "100"}, {"name": "小刘", "share_yuan": "100"},
+        {"name": "丁博文", "share_yuan": "100"}]}}
+    q = graph_mod._sb_state_question(st, ["shares"])
+    assert "老王 100.00元" in q and "还差 100.00 元" in q and "均摊" in q
+    # 非 shares 缺项 / 槽位还没到能回显的程度 → 空串,回落 _sb_slot_question
+    assert graph_mod._sb_state_question(st, ["title"]) == ""
+    assert graph_mod._sb_state_question({}, ["shares"]) == ""
+    bad = {"split": {"total_yuan": "400", "participants": [{"name": "老王"}]}}
+    assert graph_mod._sb_state_question(bad, ["shares"]) == ""
+
+
+def test_split_bill_clarify_echoes_then_merges_self_share(tmp_path):
+    """2026-10-28 手机端实测复盘:首抽漏了发起人本人("和我一起…他们仨各出
+    100"只抽到 3 人,合计 300≠400)→ 纠偏问句回显差额;用户补"我自己也要
+    出100"要并进名单直达闸门,而不是原样复读同一句纠偏。"""
+    db = _mk_db(tmp_path)
+    memory.merge(1, "profile", {"name": "陈明"})
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "split_bill"}',
+            # 首抽(复刻实测:只抽到点名的三人,发起人本人没进名单)
+            json.dumps({"title": "AA群收款", "total_yuan": "400", "even": False,
+                        "participants": [
+                            {"name": "老王", "phone": "13600001234",
+                             "share_yuan": "100"},
+                            {"name": "小刘", "share_yuan": "100"},
+                            {"name": "丁博文", "share_yuan": "100"}]},
+                       ensure_ascii=False),
+            # 澄清轮(最坏情况:模型只回增量,确定性合并兜底)
+            json.dumps({"participants": [{"name": "我自己", "share_yuan": "100"}]},
+                       ensure_ascii=False),
+            "AA 收款已发起。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "t9"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage(
+                     "老王,小刘和丁博文需要和我一起aa掉400块钱,"
+                     "他们仨个人各出100,发起群收款")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "ask_slot"
+            # 反问回显当前分摊与差额,不再让用户盲猜
+            assert "老王" in payload["question"] and "还差" in payload["question"]
+            r2 = await graph.ainvoke(
+                Command(resume="因为我自己也要出100呀"), cfg)
+            gate = _interrupt_payload(r2)
+            assert gate["type"] == "confirm_split"
+            parts = {p["name"]: p["share_yuan"]
+                     for p in gate["bill"]["participants"]}
+            assert parts == {"老王": "100.00", "小刘": "100.00",
+                             "丁博文": "100.00", "陈明": "100.00"}
+
+    run(scenario())
+
+
 # ----------------------------------------------------------------- AA 交款单(收件人视角)
 
 def _mk_multi_user_db(tmp_path: Path) -> Path:
