@@ -745,9 +745,9 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
         """登录短信验证码发送记录(2026-10-27 登录二次校验)。
 
         只读;表由 init_db/init_auth 建,老演示库首启前可能还没有——空列表兜底。
-        展示脱敏:手机号走 mask_identifier;库中本就无明文码(code_hash)。
+        展示口径(2026-10-28 运营要求):手机号全量直显,不再脱敏;
+        库中本就无明文码(code_hash)。
         """
-        from bank_core.auth_core import mask_identifier as _mask
         from bank_core.db import now_iso as _now
 
         n = max(1, min(int(limit or 30), 100))
@@ -759,7 +759,7 @@ def create_admin_app(db_path: str | Path | None = None) -> FastAPI:
                ORDER BY o.id DESC LIMIT ?""", (n,))
         items = [{
             "id": r["id"], "user_id": r["user_id"], "nickname": r["name"],
-            "phone_masked": _mask(r["phone"]), "attempts": r["attempts"],
+            "phone": r["phone"], "attempts": r["attempts"],
             "created_at": r["created_at"], "expires_at": r["expires_at"],
             "status": ("已使用" if r["consumed_at"]
                        else ("已过期" if r["expires_at"] < _now()

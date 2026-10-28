@@ -655,17 +655,10 @@ function fmtTime(v){
   return String(v).replace('T', ' ').slice(0, 16);
 }
 
-/** 账号脱敏（前端兜底，后端 users 接口仍返回完整手机号）：
-    11 位手机号 → 前3****后4；邮箱 → 首字符***@域名；其余原样返回 */
+/** 账号展示：管理台按运营要求全量直显手机号（2026-10-28 起不脱敏）；
+    邮箱列的脱敏由后端 email_masked 提供，前端不再做二次遮盖 */
 function maskId(v){
-  const s = String(v ?? '').trim();
-  if (!s) return '';
-  if (s.includes('@')){
-    const at = s.indexOf('@');
-    return s.slice(0, 1) + '***' + s.slice(at);
-  }
-  if (/^\d{11}$/.test(s)) return s.slice(0, 3) + '****' + s.slice(7);
-  return s;
+  return String(v ?? '').trim();
 }
 
 /** 表格空态占位行 */
@@ -1230,7 +1223,7 @@ async function loadOtp(){
     <tr>
       <td class="mono">${esc(o.id)}</td>
       <td>${esc(o.nickname || '')} <span class="muted">(ID:${esc(o.user_id)})</span></td>
-      <td class="mono">${esc(o.phone_masked)}</td>
+      <td class="mono">${o.phone ? esc(o.phone) : '<span class="muted">—</span>'}</td>
       <td>${otpBadge(o.status)}</td>
       <td class="num">${esc(o.attempts)}</td>
       <td class="ts">${esc(fmtTime(o.created_at))}</td>

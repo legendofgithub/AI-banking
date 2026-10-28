@@ -448,7 +448,8 @@ def test_otp_codes_endpoint_lists_masked(tmp_path):
         r = c.get("/api/otp-codes")
         assert r.status_code == 200
         items = r.json()["otp_codes"]
-        assert items and items[0]["phone_masked"].startswith("138****")
+        # 2026-10-28 运营要求:管理台手机号全量直显(不再脱敏)
+        assert items and items[0]["phone"] == "13800000000"
         assert items[0]["status"] == "待使用"
         raw = sqlite3.connect(db).execute(
             "SELECT code_hash FROM login_otps").fetchall()
