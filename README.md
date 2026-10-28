@@ -71,9 +71,12 @@ python -m venv .venv
 
 ## 对话前端（webui，:3000）
 
+- 产品第一屏是展示门户 `/portal`（根路由重定向，手机/桌面同版响应式）：服务宫格、
+  今日待办、理财专区、账单统计、最近交易；顶栏「进入对话」进聊天页。
 - 自然语言覆盖六大场景：转账/AA、账单、理财、卡片、订阅、生日联动；回复流式输出，
   金额/卡片/闸门由 `data-*` 部件渲染。
-- 账号体系：实名注册、登录密码 + 支付密码、会话 7 天；动钱统一走建单→确认→支付密码。
+- 账号体系：实名注册、登录密码 + 短信验证码（演示环境为"模拟短信"，验证码回显在
+  登录页）+ 支付密码、会话 7 天；动钱统一走建单→确认→支付密码。
 - **Agent 记忆（设置 → Agent 记忆）**：九档记忆一屏检阅——用户画像/关于你/偏好忌讳/
   想做的事/账单/理财/生日经验/对话时间线/计划历史。每轮对话经路由器**确定性提炼**
   （零 LLM 调用）落库：城市/职业/年龄/收入/家庭等自述事实，喜欢/讨厌/风险态度，
@@ -84,7 +87,8 @@ python -m venv .venv
   明天后天这周六），动作（物料清单）千人千面、只做自由输入;每卡带"其他"自由
   输入兜底。消息出现"计划"即进联动意图（三道硬闸：资金意图不被劫持、长程任务
   优先、到期分流不变）。
-- 手机端：375px 适配、会话总览弹窗（搜索/命名新建）、扫码免密登录。
+- 手机端：375px 适配、会话总览弹窗（搜索/命名新建）、Android App（WebView 壳）
+  扫码下载（二维码指向 GitHub Release 公网直链，不依赖演示本机在线）。
 - 跨设备同步：同一账号的手机和电脑自动跟随当前会话，消息、待答问题和转账确认卡
   约 1.5 秒内双向同步。
 - 大模型管理：设置里可接入 DeepSeek/OpenAI/Claude/自定义端点（Key + Base URL），
@@ -94,19 +98,20 @@ python -m venv .venv
 ## 架构定位
 
 ```
-LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门）
+LangGraph 编排层（agent/，多节点 / 11 路由意图 / 13 类人工闸门）
         │ MCP (stdio / http)
         ▼
-┌──────────────────────────────────────────────┐
+┌───────────────────────────────────────────────────┐
 │ mcp_server.py   49 个工具，标注 READ/LOW/MED/HIGH │
-├──────────────────────────────────────────────┤
-│ ledger.py 账本·转账两步走·AA·卡片                │
+├───────────────────────────────────────────────────┤
+│ ledger.py 账本·转账两步走·AA·卡片                 │
 │ analysis.py 分类统计·月报·异常检测·订阅挖掘       │
-│ wealth.py 产品库·风险闸门·申赎两步走             │
-│ events.py 用户事件·提醒任务·联动建议草稿         │
-├──────────────────────────────────────────────┤
+│ wealth.py 产品库·风险闸门·申赎两步走              │
+│ events.py 用户事件·提醒任务·联动建议草稿          │
+│ linkage.py 联动计划·预算预留单·到期执行           │
+├───────────────────────────────────────────────────┤
 │ db.py SQLite（金额一律整数"分"） + audit 全量留痕 │
-└──────────────────────────────────────────────┘
+└───────────────────────────────────────────────────┘
 ```
 
 ## 资金安全铁律（代码已强制）
@@ -147,53 +152,59 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
 # 全量推荐加 --basetemp=.pytest_tmp/<批次号>(批次号递增、目录全新),
 # 否则 pytest 清理旧临时库触发 safe-delete 守卫 → 用例全过却 rc=1 的假失败。
 
-tests/test_bank_core.py     26 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
+tests/test_bank_core.py       31 个 —— 金额换算、转账两步走/余额不足/幂等/日限额、
                             AA 对账、挂失不可逆、理财风险闸门(含无测评限购 R1)、
                             申购幂等键、种子确定性、余额=入-出不变量、订阅/异常戏眼、
                             月报勾稽、事件联动
-tests/test_agent_graph.py   58 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅、
+tests/test_agent_graph.py     80 个 —— 全图端到端(闸门/澄清/消歧/联动/账单/理财/卡片/订阅、
                             "计划"关键词路由三道硬闸、联动动作容错规整、缺槽选择题)
-tests/test_api_stream.py    29 个 —— SSE 协议帧、确认卡片、会话目录/搜索/同步、悬空单落地页
-tests/test_auth.py          31 个 —— 实名注册、密码策略、会话与支付密码核验
-tests/test_admin.py         15 个 —— 管理台资金/变更记录、调账、按用户隔离
-tests/test_review_fixes.py   8 个 —— 严格确认语义、犹豫答复绝不执行、幂等重放
-tests/test_linkage.py        9 个 —— 跨场景联动建/到期/取消与时间旅行
-tests/test_e2e_transfer.py   5 个 —— 端到端 A~E(立即/同名/超限/定时/AA)
-tests/test_llm_autoselect.py 8 个 —— 模型自动选型、连接参数与 Claude 适配
-tests/test_contract.py      30 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
+tests/test_api_stream.py      36 个 —— SSE 协议帧、确认卡片、会话目录/搜索/同步、悬空单落地页
+tests/test_auth.py            31 个 —— 实名注册、密码策略、会话与支付密码核验
+tests/test_login_otp.py       10 个 —— 登录短信验证码:挑战绑定账号、TTL/错 5 次作废/
+                            重发冷却、只存哈希与审计脱敏、开关回退单步
+tests/test_admin.py           16 个 —— 管理台资金/变更记录、调账、按用户隔离
+tests/test_review_fixes.py     8 个 —— 严格确认语义、犹豫答复绝不执行、幂等重放
+tests/test_linkage.py         11 个 —— 跨场景联动建/到期/撤回/取消与时间旅行
+tests/test_e2e_transfer.py     5 个 —— 端到端 A~E(立即/同名/超限/定时/AA)
+tests/test_llm_autoselect.py  12 个 —— 模型自动选型、连接参数与 Claude 适配
+tests/test_contract.py        36 个 —— 跨层接口契约守卫(闸门→SSE 部件→前端渲染、
                             线协议词表、播报白名单、**部件载荷字段级冻结**——前端
                             interface 与后端键集漂移直接红灯),多人并行的"合同测试"
-tests/test_precheck.py       6 个 —— 代扣预审(事前知情):滚动数学/涨价对照/
+tests/test_precheck.py         6 个 —— 代扣预审(事前知情):滚动数学/涨价对照/
                             ack 抑制/跳过顺延/老库自愈补列
-tests/test_env_template.py  13 个 —— "clone 后只填一个 Key"契约守卫:.gitignore
+tests/test_env_template.py    13 个 —— "clone 后只填一个 Key"契约守卫:.gitignore
                             通配拦截所有 .env 变体(git check-ignore 实测)、
                             模板键齐全且默认值可用、setup_env.py 随机密钥/防覆盖
-tests/test_demo_launcher.py  7 个 —— 一键启动/停止、端口 PID、跳过构建
-tests/test_make_phone_qr.py  3 个 —— 扫码二维码卡字体:三平台 CJK 候选齐全、
+tests/test_demo_launcher.py    7 个 —— 一键启动/停止、端口 PID、跳过构建
+tests/test_make_phone_qr.py    3 个 —— 扫码二维码卡字体:三平台 CJK 候选齐全、
                             有字体不静默降级、出图冒烟
-tests/test_report_followup.py 5 个 —— 播报后的业务追问与收尾
-tests/test_analysis_plan.py  33 个 —— 只读分析技能:账单/理财事实行、卡片视图、
+tests/test_report_followup.py  5 个 —— 播报后的业务追问与收尾
+tests/test_analysis_plan.py   33 个 —— 只读分析技能:账单/理财事实行、卡片视图、
                             风险过滤(候选风险等级必须 ≤ 用户等级)、空数据不装成功
-tests/test_core.py          30 个 —— Agent Core 契约:Plan/Guard 校验、拓扑执行序、
+tests/test_insights_core.py   29 个 —— 客户洞察引擎核心:兴趣度(softmax+时间衰减)、
+                            准入拒绝理由、候选集与冷启动兜底
+tests/test_insights_api.py    15 个 —— /api/insights:开关/鉴权/正常返回/
+                            LLM 全部降级路径(stub 不联网)
+tests/test_core.py            30 个 —— Agent Core 契约:Plan/Guard 校验、拓扑执行序、
                             Observe-Reflect、重规划只改受影响步骤(纯函数,不建库不调 LLM)
-tests/test_plan.py          28 个 —— agent.plan 纯函数:事件匹配/订阅候选/可支配/
+tests/test_plan.py            28 个 —— agent.plan 纯函数:事件匹配/订阅候选/可支配/
                             计划分支/预算编辑
-tests/test_memory.py        38 个 —— 长期记忆九模块 UPSERT、条目型追加(key 去重/截顶)、
+tests/test_memory.py          38 个 —— 长期记忆九模块 UPSERT、条目型追加(key 去重/截顶)、
                             用户隔离、失败软处理、未登录不写、计划历史队列限 5 条
-tests/test_memory_capture.py 26 个 —— 对话提炼器(2026-10-26):偏好/事实/目标/反目标
+tests/test_memory_capture.py  26 个 —— 对话提炼器(2026-10-26):偏好/事实/目标/反目标
                             正则提取与误报闸、每轮落库编排、时间线、渲染与检阅
-tests/test_persona.py       11 个 —— 人设提示词存取、默认态、越界防御、温度透传
-tests/test_tool_meta.py     16 个 —— 49 工具身份证对账(多/少/风险等级漂移都红)、
+tests/test_persona.py         11 个 —— 人设提示词存取、默认态、越界防御、温度透传
+tests/test_tool_meta.py       16 个 —— 49 工具身份证对账(多/少/风险等级漂移都红)、
                             动钱面/两步类/不可逆类/敏感类清单、scoped 白名单视图
-tests/test_votes.py          8 个 —— 消息投票:投/换/取消往返、GET 恢复、管理台汇总
-tests/test_task_store.py     7 个 —— 长程任务存储层(纯 sqlite)
-tests/test_longtask.py       5 个 —— 长程任务图级闭环:建档 → 到期唤醒 → 复盘留痕
-tests/test_token_usage.py   14 个 —— Token 估算纯函数(CJK 1 字符≈1 token / 其余≈0.25):
+tests/test_votes.py            8 个 —— 消息投票:投/换/取消往返、GET 恢复、管理台汇总
+tests/test_task_store.py       7 个 —— 长程任务存储层(纯 sqlite)
+tests/test_longtask.py         5 个 —— 长程任务图级闭环:建档 → 到期唤醒 → 复盘留痕
+tests/test_token_usage.py     14 个 —— Token 估算纯函数(CJK 1 字符≈1 token / 其余≈0.25):
                             异形输入、百万字符秒级返回、6000 阈值边界稳定
-tests/test_guarded_call.py  21 个 —— 工具调用咽喉:记账字段与旧 _jr 逐字段等价、
+tests/test_guarded_call.py    21 个 —— 工具调用咽喉:记账字段与旧 _jr 逐字段等价、
                             args 快照隔离("我怎么把它弄坏"探测抓到的真 bug 回归)
 tests/test_history_compact.py 25 个 —— 历史三层压缩:L1 占位清理(4 条/500 字符)、
                             L2 阈值摘要(6000 token/熔断 3 次)、L3 不做
-tests/test_prompt_channels.py 9 个 —— 通道分离:System Prompt 严格等于静态常量、
+tests/test_prompt_channels.py  9 个 —— 通道分离:System Prompt 严格等于静态常量、
                             动态上下文(persona/记忆/事实)一律走 HumanMessage
 ```
