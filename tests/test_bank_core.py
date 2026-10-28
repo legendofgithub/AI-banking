@@ -314,7 +314,9 @@ def test_internal_transfer_exempt_from_daily_limit(tmp_path):
 def test_split_bill_math(tmp_path):
     conn = init_db(tmp_path / "t.db")
     conn.execute("INSERT INTO users (id,name,phone,created_at) "
-                 "VALUES (1,'测试用户','13800000000','2026-01-01T00:00:00')")
+                 "VALUES (1,'测试用户','13800000000','2026-01-01T00:00:00'),"
+                 "(2,'老王','13600001234','2026-01-01T00:00:00'),"
+                 "(3,'小刘','13700005678','2026-01-01T00:00:00')")
     conn.commit()
     led = LedgerService(conn, 1)
     bill = led.create_split_bill("火锅", 30000,
@@ -349,18 +351,50 @@ def _mk_payment_users(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def test_split_request_dispatch_resolves_by_phone_and_name(tmp_path):
-    """派发:显式手机号/同名解析/联系人手机号/自我/歧义/未注册逐项正确,且幂等。"""
+def test_split_bill_rejects_unregistered_and_ambiguous(tmp_path):
+    """AA 收款对象必须是平台注册用户(2026-10-28 产品口径):未注册点名报错、
+    整单不予发起(零落库);同名注册用户多位无法确定投递对象,同样拦下。"""
     conn = init_db(tmp_path / "t.db")
     _mk_payment_users(conn)
     led = LedgerService(conn, 1)
-    bill = led.create_split_bill("火锅", 30000, [
+    with pytest.raises(LedgerError, match="路人 还没有在平台创建账号"):
+        led.create_split_bill("火锅", 20000, [
+            {"name": "我", "share_cents": 10000},
+            {"name": "李四", "share_cents": 5000},
+            {"name": "路人", "share_cents": 5000},
+        ])
+    # 多个未注册一并点名
+    with pytest.raises(LedgerError, match="路人、路人乙 还没有在平台创建账号"):
+        led.create_split_bill("火锅", 20000, [
+            {"name": "我", "share_cents": 10000},
+            {"name": "路人", "share_cents": 5000},
+            {"name": "路人乙", "share_cents": 5000},
+        ])
+    # 同名注册用户多位:无法确定交款单投递给谁,拦下并提示改用手机号
+    with pytest.raises(LedgerError, match="多位同名注册用户"):
+        led.create_split_bill("火锅", 20000, [
+            {"name": "我", "share_cents": 10000},
+            {"name": "同名", "share_cents": 10000},
+        ])
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM split_bills").fetchone()["c"] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) c FROM split_bill_items").fetchone()["c"] == 0
+
+
+def test_split_request_dispatch_resolves_by_phone_and_name(tmp_path):
+    """派发:显式手机号/同名解析/联系人手机号/自我逐项正确,且幂等。
+
+    未注册与同名歧义在创建侧已被拦(见上一个测试),能走到派发的账单
+    全部参与人可投递。"""
+    conn = init_db(tmp_path / "t.db")
+    _mk_payment_users(conn)
+    led = LedgerService(conn, 1)
+    bill = led.create_split_bill("火锅", 20000, [
         {"name": "我", "share_cents": 5000},
         {"name": "李四", "share_cents": 5000},
         {"name": "王五", "share_cents": 5000},
         {"name": "赵六", "phone": "13800000006", "share_cents": 5000},
-        {"name": "同名", "share_cents": 5000},
-        {"name": "路人", "share_cents": 5000},
     ])
     disp = led.send_split_requests(bill["bill_id"])
     assert disp["sent_count"] == 3
@@ -372,9 +406,6 @@ def test_split_request_dispatch_resolves_by_phone_and_name(tmp_path):
     assert by_name["王五"]["to_user_id"] == 3
     assert by_name["赵六"]["status"] == "delivered"       # 显式手机号解析
     assert by_name["赵六"]["to_user_id"] == 6
-    assert by_name["同名"]["status"] == "ambiguous"       # 两个注册用户同名
-    assert len(by_name["同名"]["candidates"]) == 2
-    assert by_name["路人"]["status"] == "not_found"
 
     # 幂等:重复派发零新增,已投递项标记 already_sent
     again = led.send_split_requests(bill["bill_id"])
@@ -388,7 +419,6 @@ def test_split_request_dispatch_resolves_by_phone_and_name(tmp_path):
     status_by_name = {i["name"]: i["request_status"] for i in view["items"]}
     assert status_by_name["李四"] == "pending"
     assert status_by_name["我"] is None
-    assert status_by_name["路人"] is None
 
 
 def test_payment_request_inbox_isolated_and_pay_idempotent(tmp_path):

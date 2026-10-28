@@ -287,8 +287,9 @@ def test_e2e_e_split_bill_create_and_settle(tmp_path):
                                            "settle_split_bill_item"]
             send_rows = _tool_rows(db, "send_split_requests")
             assert len(send_rows) == 1 and send_rows[0]["risk"] == "MED"
-            # 本次参与人都不是注册用户 → 零投递,但工具链与审计痕必须在
-            assert send_rows[0]["result"]["sent_count"] == 0
+            # 参与人老王/小刘均已注册 → 全员投递(2026-10-28 起 AA 收款对象
+            # 必须是注册用户,未注册在创建侧即被拒,不存在"零投递静默记账")
+            assert send_rows[0]["result"]["sent_count"] == 2
             assert len(_tool_rows(db, "get_split_bill")) >= 2  # 每次结算后都查了进度
 
     import asyncio

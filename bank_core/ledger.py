@@ -593,13 +593,33 @@ class LedgerService:
                           participants: list[dict]) -> dict:
         """发起 AA：participants=[{name, phone?, share_cents}]，金额总和必须等于总额。
 
+        收款对象必须是平台注册用户（2026-10-28 产品口径）：有参与人解析不到
+        注册账号时**点名报错、整单不予发起**——此前未注册参与人静默降级为
+        纯记账，发起人根本不知道对方永远收不到交款单。同名注册用户多于一个
+        无法确定投递对象，同样拦下（提示改用手机号指定）。发起人本人（"我"）
+        天然放行，不参与投递。
         phone 选填：给了手机号，交款单就能精确投递给对应的注册用户；
-        不给则只在派发时按姓名/联系人手机号反查（见 send_split_requests）。
+        不给则按姓名/联系人手机号反查（见 _resolve_payee / send_split_requests）。
         """
         share_sum = sum(p["share_cents"] for p in participants)
         if share_sum != total_cents:
             raise LedgerError(
                 f"分摊合计 {cents_to_yuan(share_sum)} 元 ≠ 总额 {cents_to_yuan(total_cents)} 元")
+        # 投递预检:复用派发同款解析口径,任何一人不可投递就不建单(零落库)
+        unregistered: list[str] = []
+        for p in participants:
+            resolved = self._resolve_payee({"contact_name": p["name"],
+                                            "phone": str(p.get("phone") or "").strip()})
+            if resolved["status"] == "ambiguous":
+                raise LedgerError(
+                    f"「{p['name']}」有多位同名注册用户，无法确定交款单投递给谁，"
+                    "本次未发起群收款；请改用手机号指定")
+            if resolved["status"] == "not_found":
+                unregistered.append(str(p["name"]))
+        if unregistered:
+            raise LedgerError(
+                "、".join(unregistered) + " 还没有在平台创建账号，本次未发起群收款；"
+                "请让对方注册后再发起")
         cur = self.conn.execute(
             "INSERT INTO split_bills (user_id, title, total_cents, created_at) VALUES (?,?,?,?)",
             (self.user_id, title, total_cents, now_iso()))
@@ -702,8 +722,9 @@ class LedgerService:
     def send_split_requests(self, bill_id: int) -> dict:
         """把 AA 账单逐个参与人投递成「交款单」（幂等：同一分摊项只投一次）。
 
-        未匹配到注册用户的参与人保留为普通记账项，不阻塞整单；
-        返回逐人投递结果，供 Agent 如实播报“已送达谁 / 谁未注册”。
+        创建侧（create_split_bill）已强制全部参与人可投递，正常路径逐人
+        delivered；未匹配分支仅作兜底防御保留，返回逐人投递结果供 Agent
+        如实播报。
         """
         bill = self.conn.execute(
             "SELECT * FROM split_bills WHERE id=? AND user_id=?",

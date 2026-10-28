@@ -77,6 +77,12 @@ def _mk_db(tmp_path: Path, balance_cents: int = DEFAULT_BALANCE,
               "VALUES (2,1,'林悦','13711112222','friend','建设银行 尾号2222')")
     c.execute("INSERT INTO contacts (id,user_id,name,phone,relation,note) "
               "VALUES (3,1,'张三','13633334444','colleague','')")
+    # AA 收款对象必须是注册用户(2026-10-28 产品口径):预置两个可解析的注册
+    # 用户,id 用 91/92 避开 _mk_multi_user_db 显式占用的 id=2(李四)
+    c.executemany(
+        "INSERT INTO users (id,name,phone,created_at) VALUES (?,?,?,?)",
+        [(91, "老王", "13600001234", "2026-01-01T00:00:00"),
+         (92, "小刘", "13700005678", "2026-01-01T00:00:00")])
     c.commit()
     c.close()
     # 登录态预置:user1 的 auth 行(登录密码 Demo@12345 / 支付密码 888888)。
@@ -646,6 +652,39 @@ def test_split_bill_clarify_echoes_then_merges_self_share(tmp_path):
                      for p in gate["bill"]["participants"]}
             assert parts == {"老王": "100.00", "小刘": "100.00",
                              "丁博文": "100.00", "陈明": "100.00"}
+
+    run(scenario())
+
+
+def test_split_bill_unregistered_participant_rejected(tmp_path):
+    """2026-10-28 产品口径:指定的联系人还没在平台创建账号 → 点名提示、
+    整单不予发起(此前未注册参与人静默降级为纯记账,发起人根本不知道
+    对方永远收不到交款单)。"""
+    db = _mk_db(tmp_path)  # 老王/小刘 已注册;王五 没有
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "split_bill"}',
+            json.dumps({"title": "聚餐", "total_yuan": "300", "even": True,
+                        "participants": [{"name": "我"}, {"name": "老王"},
+                                         {"name": "王五"}]},
+                       ensure_ascii=False),
+            "王五还没有在平台创建账号,本次未发起群收款。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "t-unreg"}}
+            r1 = await graph.ainvoke({"auth_user_id": 1, "messages": [HumanMessage(
+                "我和老王、王五 aa 300 块,发起群收款")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "confirm_split"  # 闸门照常走(还没碰账)
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            notice = r2.get("notice") or {}
+            assert notice.get("kind") == "bank_error"
+            assert "王五" in str(notice.get("error", ""))
+            assert "还没有在平台创建账号" in str(notice.get("error", ""))
+            # 整单不予发起:账单与分摊项零落库
+            assert _count(db, "split_bills") == 0
+            assert _count(db, "split_bill_items") == 0
+            assert _count(db, "payment_requests") == 0
 
     run(scenario())
 

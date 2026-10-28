@@ -151,7 +151,9 @@ def verify_pay_password(pay_password: str) -> dict:
 def create_split_bill(title: str, total_yuan: str,
                       participants: list[dict]) -> dict:
     """[MED] 发起 AA 收款。participants=[{"name":"老王","phone":"138…","share_yuan":"88.5"},...]，
-    分摊合计必须等于总额。phone 选填：给了就能把交款单精确投递给对应注册用户。
+    分摊合计必须等于总额。所有收款对象必须是平台注册用户：有人没注册会
+    点名报错且整单不发起（请对方注册后再来），同名注册用户多位则请改用
+    手机号指定。phone 选填：给了就能把交款单精确投递给对应注册用户。
     返回账单与各人应付。"""
     parts = [{"name": p["name"], "phone": str(p.get("phone") or "").strip(),
               "share_cents": _yuan(p["share_yuan"])}
