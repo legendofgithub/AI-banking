@@ -1451,6 +1451,25 @@ def _is_due_message(text: str) -> bool:
     return t.startswith("(到期提醒)") or any(w in t for w in _DUE_TRIGGER_WORDS)
 
 
+# 撤回/取消已有联动计划的话术(确定性分流)。2026-10-28 实测:计划确认执行后,
+# 用户"预留金额过大我要撤回"被 l_extract 当成**新计划**重抽重划,又被自己先前
+# 那笔预留吃满的日限额拦死——撤回永远到不了 l_cancel。
+_PLAN_CANCEL_VERBS = ("撤回", "撤销", "收回", "退回", "取消")
+_PLAN_CANCEL_NOUNS = ("预留", "计划", "锁定", "联动", "预算", "单子")
+
+
+def _is_linkage_cancel_message(text: str) -> bool:
+    """这轮 linkage 消息是否在要求撤回/取消**已有**计划。纯函数,可单测。
+
+    动词与名词须同现("撤回预留""取消联动计划");单说"取消"不算——那是
+    建计划闸门的否决与反问放弃的领地(且"取消订阅/取消订单"不带这些名词,
+    不会误分);到期提醒文本("该订购门票了")不含动词,同样不误分。
+    """
+    t = str(text or "")
+    return (any(w in t for w in _PLAN_CANCEL_VERBS)
+            and any(w in t for w in _PLAN_CANCEL_NOUNS))
+
+
 # 生日预算计划触发词(硬约束:绝不能用"预算"单独触发——旧联动消息
 # "帮我准备林悦的生日,预算1000,..." 必须继续走 l_extract)
 _PLAN_TRIGGER_WORDS = ("规划", "钱不够", "砍订阅", "取消订阅", "省钱")
@@ -3372,6 +3391,8 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
 
     async def l_cancel(state: AgentState) -> dict:
         plan = state.get("plan") or {}
+        # plan_id 缺省 = 最新进行中的计划(撤回入口"撤回预留单"没有上下文单号,
+        # bank_core 里按 user_id 取最新 active;闸门否决路径则带刚建的计划号)
         args = {"plan_id": plan.get("plan_id")}
         res = await tools.call("cancel_linkage_plan", **args)
         calls = [_jr("cancel_linkage_plan", args, res)]
@@ -5363,11 +5384,15 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         if intent != "chat" and not state.get("auth_user_id"):
             return "auth_guard"
         if intent == "linkage":
-            # linkage 的两条支线由确定性代码分流(不靠 LLM 二次判断):
+            # linkage 的三条支线由确定性代码分流(不靠 LLM 二次判断):
+            # 撤回/取消已有计划 → l_cancel(plan_id 缺省取最新进行中的计划);
             # 消息含 到期/提醒/该准备(或系统提醒前缀 '(到期提醒)')→ 到期处理,
             # 否则视为建计划。"提前2天提醒我"这类说法会被误送 l_due,匹配不到
             # active 计划时安全收尾(no_due_plan),不会误动钱。
-            return "l_due" if _is_due_message(_latest_human(state)) else "l_extract"
+            text = _latest_human(state)
+            if _is_linkage_cancel_message(text):
+                return "l_cancel"
+            return "l_due" if _is_due_message(text) else "l_extract"
         # Agent Core:命中分析类措辞的账单/理财请求交给唯一的 Core 编排
         # (迭代计划 §3)。未命中仍走旧 b_*/w_* 路径,行为一字不变。
         if intent in ("bill_analysis", "wealth") \
@@ -5767,7 +5792,7 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         "transfer": "t_extract", "split_bill": "sb_extract",
         "split_settle": "ss_extract", "split_payment": "pr_extract",
         "contact_add": "c_extract",
-        "l_extract": "l_extract", "l_due": "l_due",
+        "l_extract": "l_extract", "l_due": "l_due", "l_cancel": "l_cancel",
         "bill_analysis": "b_extract", "wealth": "w_extract",
         "card": "k_extract", "subscription": "s_extract",
         "plan": "p_extract", "chat": "chat",

@@ -269,38 +269,69 @@ class LedgerService:
             "default_single_limit_cents": POLICY["single_tx_limit_cents"],
         }
 
+    def _own_account_by_tail(self, tail: Any) -> dict | None:
+        """4 位账户尾号 → 本用户自己名下的账户；不是自己的返回 None。
+
+        内部划转判定的基础：联动锁定单创建时目标尾号就写成 f"{账户id:04d}"
+        （linkage.py），"活期→理财专户"因此可识别为划给自己。外部收款人的
+        卡尾号（8821 等）即使撞上数字也过不了 user_id 校验，不会误判。
+        """
+        try:
+            aid = int(str(tail or ""))
+        except (TypeError, ValueError):
+            return None
+        row = self.conn.execute(
+            "SELECT * FROM accounts WHERE id=? AND user_id=?",
+            (aid, self.user_id)).fetchone()
+        return dict(row) if row else None
+
     def policy_check(self, amount_cents: int, to_contact_id: int | None,
-                     from_account_id: int | None = None) -> dict:
-        """执行前风控校验：账户级限额、当日累计、白名单。只判断不执行。"""
+                     from_account_id: int | None = None,
+                     to_account_tail: str | None = None) -> dict:
+        """执行前风控校验：账户级限额、当日累计、白名单。只判断不执行。
+
+        日限额只管**对外**转出：目标是本用户自己账户的内部划转（联动预留、
+        预算释放）不占对外额度，当日累计里也剔除划给自己账户的历史流水
+        （counterparty_tail 命中自己账户尾号）。否则预留一笔就把当日额度
+        吃满，撤回/重划全被自己先前那笔拦死（2026-10-28 实测：预留单 195）。
+        """
         limits = self.transfer_limits()
         single_limit = limits["single_limit_cents"]
         daily_limit = limits["daily_limit_cents"]
         reasons: list[str] = []
         if amount_cents > single_limit:
             reasons.append(f"单笔限额 {cents_to_yuan(single_limit)} 元")
-        if from_account_id:
+        internal = self._own_account_by_tail(to_account_tail) is not None
+        if from_account_id and not internal:
             today = now_iso()[:10]
+            own_tails = [f"{r['id']:04d}" for r in self.conn.execute(
+                "SELECT id FROM accounts WHERE user_id=?", (self.user_id,))]
+            ph = ",".join("?" * len(own_tails))
             row = self.conn.execute(
-                """SELECT COALESCE(SUM(amount_cents),0) s FROM transactions
+                f"""SELECT COALESCE(SUM(amount_cents),0) s FROM transactions
                    WHERE direction='out' AND tx_type IN ('transfer_out','split')
-                     AND ts LIKE ? AND account_id=?""",
-                (f"{today}%", from_account_id),
+                     AND ts LIKE ? AND account_id=?
+                     AND (counterparty_tail IS NULL
+                          OR counterparty_tail NOT IN ({ph}))""",
+                (f"{today}%", from_account_id, *own_tails),
             ).fetchone()
             if row["s"] + amount_cents > daily_limit:
                 reasons.append(
                     f"当日已转出 {cents_to_yuan(row['s'])} 元，加本笔将超过日限额 "
                     f"{cents_to_yuan(daily_limit)} 元"
                 )
-        if POLICY["whitelist_only"] and to_contact_id is None:
+        if POLICY["whitelist_only"] and to_contact_id is None and not internal:
             reasons.append("当前策略仅允许向常用收款人转账")
         ok = not reasons
         result = {"approved": ok, "reasons": reasons,
                   "limits": {"daily_limit_yuan": cents_to_yuan(daily_limit),
                              "single_limit_yuan": cents_to_yuan(single_limit)},
+                  "internal_transfer": internal,
                   "checked_at": now_iso()}
         audit(self.conn, "policy_check",
               {"amount_cents": amount_cents, "to_contact_id": to_contact_id,
-               "from_account_id": from_account_id}, result, risk="READ")
+               "from_account_id": from_account_id,
+               "to_account_tail": to_account_tail}, result, risk="READ")
         return result
 
     def _check_transfer_lock(self) -> None:
@@ -339,7 +370,8 @@ class LedgerService:
         if not to_name:
             raise LedgerError("收款人不能为空")
 
-        check = self.policy_check(amount_cents, to_contact_id, from_account_id)
+        check = self.policy_check(amount_cents, to_contact_id, from_account_id,
+                                  to_account_tail=to_account_tail)
         if not check["approved"]:
             raise LedgerError("风控拒绝：" + "；".join(check["reasons"]))
 
@@ -405,7 +437,8 @@ class LedgerService:
                 conn.commit()
                 raise LedgerError(f"余额不足：当前 {cents_to_yuan(acct['balance_cents'])} 元")
             check = self.policy_check(order["amount_cents"], order["to_contact_id"],
-                                      order["from_account_id"])
+                                      order["from_account_id"],
+                                      to_account_tail=order["to_account_tail"])
             if not check["approved"]:
                 raise LedgerError("风控拒绝：" + "；".join(check["reasons"]))
 
@@ -424,6 +457,28 @@ class LedgerService:
                  "转账", "app", order["memo"] or f"转账给{order['to_name']}",
                  f"order:{order_id}"),
             )
+            # 内部划转入账:收款尾号命中本用户自己的账户时,钱进那个账户
+            # (联动预留 = 活期→理财专户)。此前只记出账,预留的钱在账本上
+            # 凭空消失、理财专户永远 0 余额,撤回/回转无从谈起(2026-10-28 实测)。
+            internal_credit = None
+            dest = self._own_account_by_tail(order["to_account_tail"])
+            if dest is not None and dest["id"] != acct["id"]:
+                dest_balance = dest["balance_cents"] + order["amount_cents"]
+                conn.execute("UPDATE accounts SET balance_cents=? WHERE id=?",
+                             (dest_balance, dest["id"]))
+                conn.execute(
+                    """INSERT INTO transactions
+                       (account_id, ts, direction, amount_cents, balance_after_cents,
+                        tx_type, counterparty, counterparty_tail, category, channel,
+                        memo, external_ref)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (dest["id"], ts, "in", order["amount_cents"], dest_balance,
+                     "transfer_in", acct["name"], f"{acct['id']:04d}",
+                     "转账", "app", order["memo"] or f"来自{acct['name']}",
+                     f"order:{order_id}:in"))  # external_ref 唯一,入账腿加后缀
+                internal_credit = {"account_id": dest["id"],
+                                   "account_name": dest["name"],
+                                   "balance_yuan": cents_to_yuan(dest_balance)}
             conn.execute(
                 "UPDATE transfer_orders SET status='executed', executed_at=? WHERE id=?",
                 (ts, order_id))
@@ -438,6 +493,8 @@ class LedgerService:
             "balance_after_yuan": cents_to_yuan(new_balance),
             "transaction_id": cur.lastrowid,
         }
+        if internal_credit is not None:
+            result["internal_credit"] = internal_credit
         audit(conn, "confirm_transfer_order", {"order_id": order_id}, result, risk="HIGH")
         record_money(conn, self.user_id, tool="confirm_transfer_order",
                      delta_cents=-order["amount_cents"],
@@ -462,6 +519,63 @@ class LedgerService:
                       target=row["to_name"],
                       detail={"order_id": order_id,
                               "amount_yuan": cents_to_yuan(row["amount_cents"])})
+        return result
+
+    def internal_transfer(self, from_account_id: int, to_account_id: int,
+                          amount_cents: int, memo: str = "") -> dict:
+        """自己名下两账户间划转（联动预算释放/撤回）：余额对移、两腿流水。
+
+        不走对外风控——日限额只管对外转出（见 policy_check 的内部划转豁免），
+        撤回自己刚预留的钱不该被自己吃满的额度拦死。源余额不足整笔失败。
+        """
+        if from_account_id == to_account_id:
+            raise LedgerError("划转源与目标是同一账户")
+        conn = self.conn
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            src = conn.execute(
+                "SELECT * FROM accounts WHERE id=? AND user_id=?",
+                (from_account_id, self.user_id)).fetchone()
+            dst = conn.execute(
+                "SELECT * FROM accounts WHERE id=? AND user_id=?",
+                (to_account_id, self.user_id)).fetchone()
+            if not src or not dst:
+                raise LedgerError("账户不存在")
+            if src["balance_cents"] < amount_cents:
+                raise LedgerError(
+                    f"余额不足：{src['name']} 当前 {cents_to_yuan(src['balance_cents'])} 元")
+            ts = now_iso()
+            new_src = src["balance_cents"] - amount_cents
+            new_dst = dst["balance_cents"] + amount_cents
+            conn.execute("UPDATE accounts SET balance_cents=? WHERE id=?",
+                         (new_src, src["id"]))
+            conn.execute("UPDATE accounts SET balance_cents=? WHERE id=?",
+                         (new_dst, dst["id"]))
+            for acct, other, direction, balance in (
+                    (src, dst, "out", new_src), (dst, src, "in", new_dst)):
+                conn.execute(
+                    """INSERT INTO transactions
+                       (account_id, ts, direction, amount_cents, balance_after_cents,
+                        tx_type, counterparty, counterparty_tail, category, channel,
+                        memo, external_ref)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (acct["id"], ts, direction, amount_cents, balance,
+                     "transfer_out" if direction == "out" else "transfer_in",
+                     other["name"], f"{other['id']:04d}",
+                     "转账", "app", memo or f"与{other['name']}互转", None))
+            conn.commit()
+        except LedgerError:
+            conn.rollback()
+            raise
+        result = {
+            "from_account_id": from_account_id, "to_account_id": to_account_id,
+            "amount_yuan": cents_to_yuan(amount_cents),
+            "from_balance_yuan": cents_to_yuan(new_src),
+            "to_balance_yuan": cents_to_yuan(new_dst),
+        }
+        audit(conn, "internal_transfer",
+              {"from_account_id": from_account_id, "to_account_id": to_account_id,
+               "amount_cents": amount_cents, "memo": memo}, result, risk="MED")
         return result
 
     def due_scheduled_transfers(self) -> list[dict]:

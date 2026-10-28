@@ -1063,17 +1063,75 @@ def test_linkage_plan_gate_then_confirm(tmp_path):
             assert order["status"] == "executed"           # 锁定单真正划转
             assert order["amount_cents"] == 100_000        # 恰好 1000 元
             assert order["memo"] == "生日预留"
-            # 活期余额恰好减少预算;理财专户余额不变——bank_core 的
-            # confirm_transfer_order 只记转出侧(transfer_out 落一笔 out 流水,
-            # to_account_tail 仅展示用,见 ledger.confirm_transfer_order),
-            # 所以"预留"的可观察效果是活期减少,而非 savings 增加。
+            # 活期余额恰好减少预算;理财专户恰好增加预算——confirm_transfer_order
+            # 对内部划转(收款尾号命中自己账户)双侧记账(2026-10-28 起;此前只记
+            # 转出侧,预留的钱在账本上凭空消失,理财专户永远 0 余额)。
             assert _balance(db, 1) == DEFAULT_BALANCE - 100_000
-            assert _balance(db, 2) == 0
+            assert _balance(db, 2) == 100_000
             assert _linkage_row(db, plan_id)["status"] == "active"
             tools_called = _audited_tools(db)
             assert "create_linkage_plan" in tools_called
             assert "confirm_transfer_order" in tools_called
             assert "execute_linkage_action" not in tools_called  # 到期前绝不购买
+
+    run(scenario())
+
+
+def test_is_linkage_cancel_message():
+    """撤回/取消已有计划的话术判定:动词+名词同现才认,单说"取消"不认
+    (那是闸门否决与反问放弃的领地),到期提醒文本不误分。"""
+    assert graph_mod._is_linkage_cancel_message("预留太多了,我要撤回这个单子")
+    assert graph_mod._is_linkage_cancel_message("取消联动计划")
+    assert graph_mod._is_linkage_cancel_message("把林悦生日计划撤销掉")
+    assert not graph_mod._is_linkage_cancel_message("(到期提醒)该订购鲜花了")
+    assert not graph_mod._is_linkage_cancel_message("帮我准备生日")
+    assert not graph_mod._is_linkage_cancel_message("取消")
+
+
+def test_linkage_cancel_message_releases_budget(tmp_path):
+    """2026-10-28 实测回归:计划执行后说"撤回预留单"必须走 l_cancel 原路
+    退回预算,而不是被 l_extract 当成新计划再划一笔(被自己吃满的日限额
+    拦死,"撤回失败被风控拦截")。"""
+    db = _mk_linkage_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            # 轮 1:建计划 → 闸门 → 支付密码确认执行
+            '{"intent": "linkage"}',
+            _LINK_ACTIONS_JSON,
+            "预算已预留,联动计划生效。",
+            # 轮 2:撤回话术(router → l_cancel → l_report 播报;l_cancel 不调 LLM)
+            '{"intent": "linkage"}',
+            "好的,这笔预留已撤回,1000 元已退回你的活期账户。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "l-cancel"}}
+            r1 = await graph.ainvoke({"auth_user_id": 1, "messages": [HumanMessage(
+                "帮我准备林悦的生日,预算1000,提前2天订300元的鲜花,提前1天订200元的蛋糕")]}, cfg)
+            payload = _interrupt_payload(r1)
+            assert payload["type"] == "confirm_linkage"
+            plan_id = payload["plan"]["plan_id"]
+            order_id = payload["plan"]["lock_order"]["order_id"]
+            await graph.ainvoke(Command(resume="888888"), cfg)
+            assert _balance(db, 1) == DEFAULT_BALANCE - 100_000
+            assert _balance(db, 2) == 100_000
+
+            # 撤回话术(动词"撤回"+名词"预留/单子")→ l_cancel,plan_id 缺省取最新
+            r2 = await graph.ainvoke({"auth_user_id": 1, "messages": [HumanMessage(
+                "预留太多了,我要撤回这个单子")]}, cfg)
+            notice = r2.get("notice") or {}
+            assert notice.get("kind") == "linkage_cancelled"
+            released = (notice.get("result") or {}).get("released") or {}
+            assert released.get("amount_yuan") == "1000.00"
+            assert _linkage_row(db, plan_id)["status"] == "cancelled"
+            assert _order(db, order_id)["status"] == "executed"  # 已执行事实不改写
+            assert _balance(db, 1) == DEFAULT_BALANCE            # 预算退回活期
+            assert _balance(db, 2) == 0                           # 理财专户清空
+            tools_called = _audited_tools(db)
+            assert "cancel_linkage_plan" in tools_called
+            assert "internal_transfer" in tools_called
+            # 撤回轮没有再建计划,也没有新的风控预检(= 没把它当新划转)
+            assert tools_called.count("create_linkage_plan") == 1
+            assert tools_called.count("policy_check") == 2  # 建单+确认各一次
 
     run(scenario())
 

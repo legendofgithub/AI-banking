@@ -208,17 +208,56 @@ def test_cancel_plan_cancels_lock_and_tasks(db):
         lk.execute_linkage_action(plan_id, 0)
 
 
-def test_cancel_after_lock_executed_keeps_money(db):
-    """锁定单已 executed（用户确认过划转）再取消计划：不动已划转的钱。"""
+def test_cancel_after_lock_executed_releases_budget(db):
+    """锁定单已 executed(用户确认过划转)再取消计划:预留资金退回活期。
+
+    2026-10-28 起的新语义——此前"已划转不回收",用户预留过大只能干瞪眼;
+    现在按原路释放(内部划转,不占对外日限额),无已完成动作时全额退。"""
     lk = LinkageService(db, 1)
     led = LedgerService(db, 1)
     plan_id = _mk_plan(db)["plan_id"]
     led.confirm_transfer_order(
         db.execute("SELECT lock_order_id FROM linkage_plans WHERE id=?",
                    (plan_id,)).fetchone()["lock_order_id"])
+    # 前置:确认划转后活期减 1000、理财专户增 1000(内部划转双侧记账)
+    assert _bal(db, 1) == yuan_to_cents("4000")
+    assert _bal(db, 2) == yuan_to_cents("1000")
     r = lk.cancel_linkage_plan(plan_id)
-    assert r["lock_order"]["status"] == "executed"   # 已划转不回收
-    assert _bal(db, 1) == yuan_to_cents("4000")      # 划走的 1000 不退
+    assert r["lock_order"]["status"] == "executed"   # 已执行事实不改写
+    assert r["released"]["amount_yuan"] == "1000.00"
+    assert r["note"] == "预留资金已退回活期"
+    assert _bal(db, 1) == yuan_to_cents("5000")      # 预算全额退回活期
+    assert _bal(db, 2) == 0                           # 理财专户清空
+
+
+def test_cancel_executed_lock_releases_minus_done_actions(db):
+    """已完成的动作视为已消耗:释放金额 = 预算 - 已完成动作合计。"""
+    lk = LinkageService(db, 1)
+    led = LedgerService(db, 1)
+    plan_id = _mk_plan(db)["plan_id"]
+    led.confirm_transfer_order(
+        db.execute("SELECT lock_order_id FROM linkage_plans WHERE id=?",
+                   (plan_id,)).fetchone()["lock_order_id"])
+    lk.execute_linkage_action(plan_id, 0)  # 鲜花 300 已购(从活期直接扣)
+    r = lk.cancel_linkage_plan(plan_id)
+    assert r["released"]["amount_yuan"] == "700.00"
+    # 活期:5000 -1000(预留) -300(鲜花) +700(释放) = 4400
+    assert _bal(db, 1) == yuan_to_cents("4400")
+    assert _bal(db, 2) == yuan_to_cents("300")
+
+
+def test_cancel_plan_id_none_takes_latest_active(db):
+    """plan_id 缺省 = 最新进行中的计划(对话"撤回预留单"不带单号);
+    没有 active 计划时明确报错,绝不误伤已取消/已完成的旧计划。"""
+    lk = LinkageService(db, 1)
+    with pytest.raises(LinkageError, match="没有进行中"):
+        lk.cancel_linkage_plan(None)
+    first = _mk_plan(db)["plan_id"]
+    second = _mk_plan(db)["plan_id"]
+    r = lk.cancel_linkage_plan(None)  # 不带单号 → 撤最新的
+    assert r["plan_id"] == second
+    assert db.execute("SELECT status FROM linkage_plans WHERE id=?",
+                      (first,)).fetchone()["status"] == "active"
 
 
 # ------------------------------------------------------------- 审计留痕

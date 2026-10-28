@@ -434,9 +434,10 @@ def execute_linkage_action(plan_id: int, action_idx: int) -> dict:
 
 
 @mcp.tool
-def cancel_linkage_plan(plan_id: int) -> dict:
-    """[MED] 取消联动计划：未完成的计划置 cancelled，未执行的预算锁定转账单
-    与剩余提醒任务一并撤销。"""
+def cancel_linkage_plan(plan_id: int | None = None) -> dict:
+    """[MED] 取消联动计划：未执行的预算锁定单与剩余提醒任务一并撤销；
+    已执行的锁定单把预留资金退回活期（内部划转，不占对外日限额，已完成
+    的动作按消耗扣减）。plan_id 不传 = 最新一个进行中的计划。"""
     return _linkage.cancel_linkage_plan(plan_id)
 
 

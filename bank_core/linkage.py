@@ -307,25 +307,53 @@ class LinkageService:
 
     # ------------------------------------------------------------- 取消计划
 
-    def cancel_linkage_plan(self, plan_id: int) -> dict:
-        """取消未完成的计划：锁定单未执行则一并取消；pending 提醒全部撤销。"""
+    def cancel_linkage_plan(self, plan_id: int | None = None) -> dict:
+        """取消计划：锁定单未执行则一并取消；已执行的把预留资金退回活期
+        （内部划转，不占对外日限额；已完成的动作按消耗扣减）；剩余提醒撤销。
+        plan_id 缺省 = 最新一个 active 计划（对话里"撤回预留单"不带单号，
+        2026-10-28 实测：此前已执行的锁定单无法撤回，用户预留过大只能干瞪眼）。"""
+        if plan_id is None:
+            row = self.conn.execute(
+                "SELECT id FROM linkage_plans WHERE user_id=? AND status='active' "
+                "ORDER BY id DESC LIMIT 1", (self.user_id,)).fetchone()
+            if not row:
+                raise LinkageError("当前没有进行中的联动计划")
+            plan_id = int(row["id"])
         plan = self._get_plan(plan_id)
         if plan["status"] == "done":
             raise LinkageError("计划已完成，不可取消")
         if plan["status"] == "cancelled":
             raise LinkageError("计划已取消")
 
-        # 锁定单：pending_confirm/scheduled 可取消；已 executed 的钱已划走，不回收
+        # 锁定单:pending_confirm/scheduled 直接取消;已 executed 的把预留资金
+        # 退回活期(原路释放,减去已完成动作的消耗),不再"钱已划走,不回收"
         lock_status = None
+        released: dict | None = None
+        ledger = LedgerService(self.conn, self.user_id)
         if plan["lock_order_id"]:
             o = self.conn.execute(
-                "SELECT status FROM transfer_orders WHERE id=?",
+                "SELECT status, amount_cents FROM transfer_orders WHERE id=?",
                 (plan["lock_order_id"],)).fetchone()
             lock_status = o["status"] if o else None
             if lock_status in ("pending_confirm", "scheduled"):
-                LedgerService(self.conn, self.user_id).cancel_transfer_order(
-                    plan["lock_order_id"])
+                ledger.cancel_transfer_order(plan["lock_order_id"])
                 lock_status = "cancelled"
+            elif lock_status == "executed":
+                actions = json.loads(plan["actions_json"])
+                spent = sum(int(a.get("amount_cents", 0)) for a in actions
+                            if a.get("done"))
+                release = int(o["amount_cents"]) - spent
+                if release <= 0:
+                    lock_status = "executed"  # 预算已耗尽,无可退
+                else:
+                    checking = self._account_by_type("checking")
+                    savings = self._account_by_type("savings")
+                    moved = ledger.internal_transfer(
+                        savings["id"], checking["id"], release,
+                        memo=f"{plan['title']}预留撤回")
+                    released = {"amount_yuan": moved["amount_yuan"],
+                                "to_account": checking["name"],
+                                "to_balance_yuan": moved["to_balance_yuan"]}
 
         # 撤销该计划剩余 pending 提醒任务（按 actions_json 里记录的 task_id）
         cancelled_tasks: list[int] = []
@@ -344,16 +372,20 @@ class LinkageService:
             "plan_id": plan_id, "status": "cancelled",
             "lock_order": ({"order_id": plan["lock_order_id"], "status": lock_status}
                            if plan["lock_order_id"] else None),
+            "released": released,
             "cancelled_task_ids": cancelled_tasks,
-            "note": "锁定单与提醒任务已一并撤销" if cancelled_tasks or
-                    lock_status == "cancelled" else "",
+            "note": ("预留资金已退回活期" if released else
+                     ("锁定单与提醒任务已一并撤销" if cancelled_tasks or
+                      lock_status == "cancelled" else "")),
         }
         audit(self.conn, "cancel_linkage_plan", {"plan_id": plan_id},
               {"status": "cancelled", "lock_order_status": lock_status,
+               "released": released,
                "cancelled_tasks": len(cancelled_tasks)}, risk="MED")
         record_change(self.conn, self.user_id, category="linkage", action="cancel",
                       target=plan["title"],
                       detail={"plan_id": plan_id, "lock_order_status": lock_status,
+                              "released": released,
                               "cancelled_tasks": len(cancelled_tasks)})
         return result
 

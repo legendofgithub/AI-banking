@@ -262,6 +262,55 @@ def test_daily_limit_gate(tmp_path):
         led.create_transfer_order(acct, 300000, to_name="B")  # 8000+3000 > 10000
 
 
+def test_internal_transfer_exempt_from_daily_limit(tmp_path):
+    """内部划转(划进自己名下账户)不占对外日限额,当日累计也剔除历史内部
+    流水(2026-10-28 实测:预留 1 万自己吃满日限额,撤回被自己拦死)。"""
+    conn = init_db(tmp_path / "t.db")
+    acct = _mk_account(conn, 100000000)
+    conn.execute("INSERT INTO accounts (user_id,type,name,balance_cents,opened_at) "
+                 "VALUES (1,'savings','理财专户',0,'2026-01-01T00:00:00')")
+    savings = conn.execute(
+        "SELECT id FROM accounts WHERE type='savings'").fetchone()[0]
+    conn.commit()
+    led = LedgerService(conn, 1)
+    tail = f"{savings:04d}"
+
+    # 对外 8000 后,再对外 3000 照旧被日限额拦(外部流水正常累计)
+    o1 = led.create_transfer_order(acct, 800000, to_name="外部A")
+    led.confirm_transfer_order(o1["id"])
+    with pytest.raises(LedgerError, match="风控拒绝"):
+        led.create_transfer_order(acct, 300000, to_name="外部B")
+
+    # 划给自己:建单+确认都放行,钱真实进账(此前只记出账,预留的钱凭空消失)
+    lock = led.create_transfer_order(acct, 300000, to_name="测试用户",
+                                     to_account_tail=tail, memo="预留")
+    assert lock["status"] == "pending_confirm"
+    r = led.confirm_transfer_order(lock["id"])
+    assert r["internal_credit"]["account_name"] == "理财专户"
+    assert conn.execute("SELECT balance_cents FROM accounts WHERE id=?",
+                        (savings,)).fetchone()[0] == 300000
+
+    # 历史内部流水不进当日累计:对外仍可再转 2000(8000+2000=10000 恰好达标)
+    o2 = led.create_transfer_order(acct, 200000, to_name="外部C")
+    led.confirm_transfer_order(o2["id"])
+
+    # internal_transfer 双腿流水;源余额不足整笔失败
+    moved = led.internal_transfer(savings, acct, 100000, memo="释放")
+    assert moved["amount_yuan"] == "1000.00"
+    assert conn.execute("SELECT balance_cents FROM accounts WHERE id=?",
+                        (acct,)).fetchone()[0] == 98_800_000
+    with pytest.raises(LedgerError, match="余额不足"):
+        led.internal_transfer(savings, acct, 10_000_000)
+    rows = conn.execute("SELECT direction FROM transactions WHERE account_id=? "
+                        "ORDER BY id", (savings,)).fetchall()
+    assert [x["direction"] for x in rows] == ["in", "out"]
+
+    # 判定兜底:非自己账户的尾号/垃圾尾号不算内部划转
+    assert led._own_account_by_tail("9999") is None
+    assert led._own_account_by_tail("abc") is None
+    assert led._own_account_by_tail(None) is None
+
+
 def test_split_bill_math(tmp_path):
     conn = init_db(tmp_path / "t.db")
     conn.execute("INSERT INTO users (id,name,phone,created_at) "

@@ -140,7 +140,7 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 617 个用例全绿(2026-10-28 实测)
+.venv/Scripts/python.exe -m pytest tests -q      # 622 个用例全绿(2026-10-28 实测)
 .venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
 
 # 用例数不写固定值,一律以 --collect-only 实测为准(历史文档里的 205/245/133/413/481 均已过期)
