@@ -140,7 +140,7 @@ LangGraph 编排层（agent/，多节点 / 10 路由意图 / 9 类人工闸门�
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 622 个用例全绿(2026-10-28 实测)
+.venv/Scripts/python.exe -m pytest tests -q      # 625 个用例全绿(2026-10-28 实测)
 .venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
 
 # 用例数不写固定值,一律以 --collect-only 实测为准(历史文档里的 205/245/133/413/481 均已过期)
@@ -169,6 +169,8 @@ tests/test_env_template.py  13 个 —— "clone 后只填一个 Key"契约守�
                             通配拦截所有 .env 变体(git check-ignore 实测)、
                             模板键齐全且默认值可用、setup_env.py 随机密钥/防覆盖
 tests/test_demo_launcher.py  7 个 —— 一键启动/停止、端口 PID、跳过构建
+tests/test_make_phone_qr.py  3 个 —— 扫码二维码卡字体:三平台 CJK 候选齐全、
+                            有字体不静默降级、出图冒烟
 tests/test_report_followup.py 5 个 —— 播报后的业务追问与收尾
 tests/test_analysis_plan.py  33 个 —— 只读分析技能:账单/理财事实行、卡片视图、
                             风险过滤(候选风险等级必须 ≤ 用户等级)、空数据不装成功

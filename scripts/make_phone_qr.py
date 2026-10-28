@@ -41,8 +41,25 @@ def detect_lan_ip() -> str:
         s.close()
 
 
+# 中文字体候选:各平台常见 CJK 字体路径,逐个试开,第一个能用的生效。
+# 全部落空才退 PIL 默认字体——它没有中文字形,二维码卡上的中文会渲染成
+# 方块(2026-10-28 在 macOS 上踩到:原先只认 C:\Windows\Fonts)。
+_FONT_CANDIDATES = (
+    # Windows: 微软雅黑 / 宋体
+    r"C:\Windows\Fonts\msyh.ttc",
+    r"C:\Windows\Fonts\simsun.ttc",
+    # macOS: 苹方(近年必有)/ 黑体-简 / 冬青黑体
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    # Linux: Noto Sans CJK 常见安装位置(Debian/Ubuntu 与 Fedora/Arch)
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+)
+
+
 def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    for cand in (r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simsun.ttc"):
+    for cand in _FONT_CANDIDATES:
         if Path(cand).is_file():
             try:
                 return ImageFont.truetype(cand, size)
@@ -82,7 +99,7 @@ def build_qr(url: str, out: Path, *, box_size: int = 12) -> None:
     canvas.save(out, "PNG")
     print(f"[完成] {out}")
     print(f"       扫码地址: {url}")
-    print(f"       手机需与电脑同一 WiFi;连不上先查 Windows 防火墙规则")
+    print(f"       手机需与电脑同一 WiFi;连不上先查系统防火墙对本机入站连接的限制")
     print(f"       「AI Banking Mobile Demo 3000/8800」是否存在(见 AGENTS.md 环境坑)。")
 
 
