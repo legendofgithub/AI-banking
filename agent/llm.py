@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import logging
 import math
 import os
 import urllib.request
@@ -37,6 +38,21 @@ _auto_model_cache: str | None = None
 # 请求级 LLM 覆盖(BYOK:界面填的 Key/模型/端点随请求生效;无覆盖走环境变量)
 _request_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "request_llm_override", default=None)
+
+_log = logging.getLogger(__name__)
+
+
+def _is_connection_error(exc: BaseException) -> bool:
+    """是否连接类异常(openai 的 APIConnectionError,含超时子类)。
+
+    openai 是 langchain-openai 的传递依赖,保持延迟导入:纯单测环境不必安装。
+    只认连接类——鉴权/限流/业务异常换新实例也救不了,不该触发自愈。
+    """
+    try:
+        from openai import APIConnectionError
+    except ImportError:
+        return False
+    return isinstance(exc, APIConnectionError)
 
 
 def provider_family(provider: str | None) -> str:
@@ -390,6 +406,12 @@ class RequestLLM:
     (api_key/model/base_url/provider)解析出模型实例,按连接参数缓存不重复构造。
     无覆盖时回落环境变量/自动选型(与旧行为完全一致)。
 
+    自愈(2026-10-28 宕机复盘):实例内部是 openai/httpx 客户端,连接池一旦
+    卡死(实测:手机端流式中途断开泄漏连接)会对同一缓存键**永久**失败,
+    其他实例却全然正常,只能重启进程。构造实例是零 I/O 的内存操作——凡连接类
+    异常即逐出缓存实例,首响应/首块吐出前换新实例透明重试一次,调用方无感;
+    已吐块后失败只逐出不重试(无声重发会重复内容),下一轮调用自愈。
+
     测试注入:factory 可替换(返回带 .ainvoke 的任意对象)。
     """
 
@@ -399,7 +421,7 @@ class RequestLLM:
         self._fallback_model = fallback_model
         self._factory = factory or get_llm
         self._base_kwargs = base_kwargs
-        self._instances: dict[tuple[str, str, str, str], Any] = {}
+        self._instances: dict[tuple[str, str, str, str, bool, float], Any] = {}
 
     @property
     def model_name(self) -> str | None:
@@ -407,8 +429,15 @@ class RequestLLM:
         return (os.environ.get("ZAI_MODEL") or self._fallback_model
                 or DEFAULT_MODEL)
 
+    def _evict(self, ck: tuple, exc: BaseException) -> None:
+        """连接类异常即逐出缓存实例(自愈的落点,配合 _is_connection_error)。"""
+        if self._instances.pop(ck, None) is not None:
+            _log.warning("LLM 连接类异常,已逐出缓存实例待重建: model=%s err=%s: %s",
+                         ck[3], type(exc).__name__, str(exc)[:200])
+
     def _resolve(self, strong: bool = False,
-                 temperature: float | None = None) -> Any:
+                 temperature: float | None = None) -> tuple[Any, tuple]:
+        """解析本次调用的模型实例,返回 (实例, 缓存键);自愈逐出要用键。"""
         ov = _request_override.get() or {}
         key = ov.get("api_key") or os.environ.get("ZAI_API_KEY")
         model = (ov.get("model") or os.environ.get("ZAI_MODEL")
@@ -447,13 +476,26 @@ class RequestLLM:
                 model=eff_model, api_key=key, base_url=base,
                 provider=provider, enable_thinking=do_think,
                 **kwargs)
-        return self._instances[ck]
+        return self._instances[ck], ck
 
     async def ainvoke(self, messages: Any, *, strong: bool = False,
                       temperature: float | None = None,
                       **kwargs: Any) -> Any:
-        return await self._resolve(strong, temperature).ainvoke(
-            messages, **kwargs)
+        instance, ck = self._resolve(strong, temperature)
+        try:
+            return await instance.ainvoke(messages, **kwargs)
+        except Exception as exc:
+            if not _is_connection_error(exc):
+                raise
+            self._evict(ck, exc)
+        # 自愈重试:首响应还没出炉,换全新实例重发一次,调用方无感
+        instance, ck = self._resolve(strong, temperature)
+        try:
+            return await instance.ainvoke(messages, **kwargs)
+        except Exception as exc:
+            if _is_connection_error(exc):
+                self._evict(ck, exc)
+            raise
 
     async def astream(self, messages: Any, *, strong: bool = False,
                       temperature: float | None = None,
@@ -465,7 +507,37 @@ class RequestLLM:
         strong=True 时解析为"会思考"的模型(见 thinking_model_for)。
         temperature 是**人设功能的请求级参数**:必须在门面层拦截消费,
         不能透传给底层 astream(langchain 不认这个 kwargs)。
+        自愈规则:连接类异常即逐出实例;首块吐出前失败换新实例透明重试
+        一次(对消费方无损);已吐块后失败只逐出不重试(无声重发会重复
+        内容),下一轮调用自然拿到新实例。finally 里显式 aclose 内层生成器,
+        消费方中途弃流时连接确定性归还,不给连接池留悬空流。
         """
-        resolved = self._resolve(strong, temperature)
-        async for chunk in resolved.astream(messages, **kwargs):
-            yield chunk
+        instance, ck = self._resolve(strong, temperature)
+        inner = instance.astream(messages, **kwargs)
+        yielded = False
+        retried = False
+        try:
+            while True:
+                try:
+                    chunk = await inner.__anext__()
+                except StopAsyncIteration:
+                    return
+                except Exception as exc:
+                    if not _is_connection_error(exc):
+                        raise
+                    self._evict(ck, exc)
+                    if yielded or retried:
+                        raise
+                    retried = True  # 首块前失败:换新实例补试一次
+                    instance, ck = self._resolve(strong, temperature)
+                    inner = instance.astream(messages, **kwargs)
+                    continue
+                yielded = True
+                yield chunk
+        finally:
+            aclose = getattr(inner, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception:  # noqa: BLE001 —— 收尾关闭失败不掩盖原异常
+                    pass

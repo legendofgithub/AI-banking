@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -116,6 +117,10 @@ from agent.llm import (RequestLLM, fetch_models_json, get_llm,
                        reset_request_llm, set_request_llm)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# 观测性(2026-10-28 宕机复盘):LLM 异常只回前端 toast 的话日志零痕迹,
+# 进程级的病(连接池卡死等)要靠手工复现才定位得到——异常堆栈必须落盘。
+logger = logging.getLogger("agent.api")
 
 STREAM_HEADER = "x-vercel-ai-ui-message-stream"
 STREAM_HEADER_VALUE = "v1"  # 依据:ai-sdk.dev stream-protocol(自定义后端必须设 v1)
@@ -1698,6 +1703,7 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             graph_input = turn_inputs[0]
 
         async def event_source() -> AsyncIterator[str]:
+            turn_started = time.monotonic()  # 观测性:异常日志带本轮耗时
             yield _frame({"type": "start", "messageId": uuid4().hex})
             gate: dict | None = None
             gate_payload: dict | None = None
@@ -1916,6 +1922,9 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                         for f in _close(node):
                             yield f
             except TimeoutError:
+                logger.warning("聊天流超时中止 thread=%s model=%s 耗时=%.1fs",
+                               req.thread_id, req.model or "(默认)",
+                               time.monotonic() - turn_started)
                 # 先闭合仍开着的 part,避免前端永远停在"生成中"
                 for node in list(open_text) + list(open_reason):
                     for f in _close(node):
@@ -1926,6 +1935,10 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
                 yield _frame({"type": "finish", "finishReason": "error"})
                 return
             except Exception as exc:  # noqa: BLE001 —— 流式响应里必须转成 error 帧
+                # 堆栈落日志(前端只收得到一行 errorText,排查全靠这里)
+                logger.exception("聊天流异常 thread=%s model=%s 耗时=%.1fs",
+                                 req.thread_id, req.model or "(默认)",
+                                 time.monotonic() - turn_started)
                 for node in list(open_text) + list(open_reason):
                     for f in _close(node):
                         yield f

@@ -215,3 +215,175 @@ def test_request_llm_passes_connection(monkeypatch):
     assert made[1]["base_url"] == "https://api.anthropic.com/v1"
     assert made[1]["provider"] == "anthropic"
     assert len(made) == 2
+
+
+# ----------------------------------------------------------------- 连接类异常自愈(2026-10-28 宕机复盘)
+
+def _conn_error():
+    """构造真实的 openai.APIConnectionError(自愈判定以它为准)。"""
+    import httpx
+    from openai import APIConnectionError
+
+    return APIConnectionError(
+        request=httpx.Request("POST", "https://api.example.com/v1/x"))
+
+
+def test_request_llm_ainvoke_self_heals_connection_error(monkeypatch):
+    """ainvoke 连接失败:逐出病实例 → 换新实例透明重试,调用方无感。
+
+    背景:实例内 openai/httpx 连接池卡死会对同一缓存键永久失败(实测
+    flash 实例病了 40 分钟、其他实例全正常,重启才愈),必须自动重建。
+    """
+    import asyncio
+
+    from agent.llm import (RequestLLM, reset_request_llm, set_request_llm)
+
+    monkeypatch.delenv("ZAI_MODEL", raising=False)
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+
+    made = []
+
+    class FakeInst:
+        def __init__(self, **kw):
+            self.sick = len(made) == 0  # 第一个实例病了
+            made.append(self)
+
+        async def ainvoke(self, _msgs, **_):
+            if self.sick:
+                raise _conn_error()
+            return "ok"
+
+    llm = RequestLLM(factory=lambda **kw: FakeInst(**kw))
+
+    async def go():
+        tok = set_request_llm(api_key="k1", model="m1")
+        try:
+            return await llm.ainvoke([{"role": "user", "content": "hi"}])
+        finally:
+            reset_request_llm(tok)
+
+    assert asyncio.run(go()) == "ok"
+    assert len(made) == 2  # 病实例被逐出,重建了一次
+    assert made[0].sick and not made[1].sick
+
+
+def test_request_llm_astream_heals_before_first_chunk(monkeypatch):
+    """astream 首块吐出前连接失败:换新实例透明重试,消费方拿到完整流。"""
+    import asyncio
+
+    from agent.llm import (RequestLLM, reset_request_llm, set_request_llm)
+
+    monkeypatch.delenv("ZAI_MODEL", raising=False)
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+
+    made = []
+
+    class FakeInst:
+        def __init__(self, **kw):
+            self.sick = len(made) == 0
+            made.append(self)
+
+        async def astream(self, _msgs, **_):
+            if self.sick:
+                raise _conn_error()
+            yield "你"
+            yield "好"
+
+    llm = RequestLLM(factory=lambda **kw: FakeInst(**kw))
+
+    async def go():
+        tok = set_request_llm(api_key="k1", model="m1")
+        try:
+            buf = []
+            async for chunk in llm.astream([{"role": "user", "content": "hi"}]):
+                buf.append(chunk)
+            return buf
+        finally:
+            reset_request_llm(tok)
+
+    assert asyncio.run(go()) == ["你", "好"]
+    assert len(made) == 2
+
+
+def test_request_llm_astream_midstream_failure_evicts_without_retry(monkeypatch):
+    """已吐块后连接断:本轮流照常报错(无声重发会重复内容),但病实例已逐出,
+    下一次调用拿全新实例即成功——自愈不隔轮。"""
+    import asyncio
+
+    import pytest
+
+    from agent.llm import (RequestLLM, reset_request_llm, set_request_llm)
+
+    monkeypatch.delenv("ZAI_MODEL", raising=False)
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+
+    made = []
+
+    class FakeInst:
+        def __init__(self, **kw):
+            self.sick = len(made) == 0  # 只有第一个实例在半路断流
+            made.append(self)
+
+        async def astream(self, _msgs, **_):
+            if self.sick:
+                yield "半"
+                raise _conn_error()
+            yield "恢复"
+
+    llm = RequestLLM(factory=lambda **kw: FakeInst(**kw))
+
+    async def go():
+        tok = set_request_llm(api_key="k1", model="m1")
+        try:
+            got1 = []
+            with pytest.raises(Exception):
+                async for chunk in llm.astream(
+                        [{"role": "user", "content": "hi"}]):
+                    got1.append(chunk)
+            assert got1 == ["半"]
+            got2 = []
+            async for chunk in llm.astream([{"role": "user", "content": "hi"}]):
+                got2.append(chunk)
+            return got2
+        finally:
+            reset_request_llm(tok)
+
+    assert asyncio.run(go()) == ["恢复"]
+    assert len(made) == 2  # 病实例 + 重建实例
+
+
+def test_request_llm_non_connection_error_not_evicted(monkeypatch):
+    """业务异常(鉴权失败/断言等)原样抛出且不逐出实例——换新实例也救不了
+    的场景不触发重建,保持缓存语义与旧行为一致。"""
+    import asyncio
+
+    import pytest
+
+    from agent.llm import (RequestLLM, reset_request_llm, set_request_llm)
+
+    monkeypatch.delenv("ZAI_MODEL", raising=False)
+    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+
+    made = []
+
+    class FakeInst:
+        def __init__(self, **kw):
+            made.append(self)
+
+        async def ainvoke(self, _msgs, **_):
+            raise ValueError("401 鉴权失败")
+
+    llm = RequestLLM(factory=lambda **kw: FakeInst(**kw))
+
+    async def go():
+        tok = set_request_llm(api_key="k1", model="m1")
+        try:
+            with pytest.raises(ValueError):
+                await llm.ainvoke([{"role": "user", "content": "hi"}])
+            with pytest.raises(ValueError):
+                await llm.ainvoke([{"role": "user", "content": "hi"}])
+        finally:
+            reset_request_llm(tok)
+
+    asyncio.run(go())
+    assert len(made) == 1  # 未逐出、未重建
