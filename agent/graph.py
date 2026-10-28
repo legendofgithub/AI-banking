@@ -570,7 +570,14 @@ CHAT_SYS = """你是"练功假银行"的智能客服「小小微」(大赛演示
 账单分析(月报/分类统计/消费Top/异常检测)、理财(推荐/风险测评/申购/赎回,动钱必经确认)、
 卡片管理(查询/办卡/限额/锁定解锁挂失,挂失需双重确认)、
 订阅/代扣管理(查订阅清单与年化成本、取消自动扣费)。
-想体验联动可以说「联动计划」(或直接说「帮我准备生日」)。你不得执行或承诺任何未经确认的资金操作。"""
+想体验联动可以说「联动计划」(或直接说「帮我准备生日」)。你不得执行或承诺任何未经确认的资金操作。
+
+【业务事实红线】凡涉及用户的真实业务数据——联系人/收款人名单、账户与余额、
+交易流水、账单数字、转账订单、理财与持仓、订阅、卡片、联动计划——只能引用
+系统注入的【实时…】上下文块;没有对应事实块就明确说"我这边暂时查不到",
+并引导用户走对应功能入口(如「查我的订阅」「看下最近的账单」),
+绝不编造、推测或凭印象补出任何人名、手机号、金额、日期或名单;
+名单里没有的人就照实说没有,不要脑补相似名字充数。"""
 
 # ===================================================================== 播报兜底文案(确定性,LLM 失效时用)
 
@@ -5257,15 +5264,57 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         """
         return {"notice": {"kind": "login_required"}}
 
+    # 通讯录问句词根:chat 是无工具的闲聊兜底,问到联系人名单若不喂事实
+    # 必被编造(2026-10-28 实测:模型杜撰"张伟/李娜/王强"名单,与真实
+    # 通讯录矛盾,还反咬"沙箱数据同步问题")。
+    _CONTACT_LIST_WORDS = ("联系人", "收款人", "通讯录")
+
+    async def _contact_fact_block(state: AgentState) -> tuple[str, list[dict]]:
+        """通讯录问句的事实注入:最新用户消息提到联系人/收款人/通讯录时,
+        确定性拉一次全量名单,作为【实时通讯录】块喂给闲聊模型。
+
+        chat 路径没有工具循环(设计如此:业务全走确定性节点),所以用
+        "词根命中 + 单次只读调用"补事实,而不是给 chat 发工具。查询失败
+        或为空也要注入对应结论,让模型照实说,禁止编造姓名/手机号。
+        """
+        msgs = state.get("messages") or []
+        last_user = next((m for m in reversed(msgs)
+                          if getattr(m, "type", "") == "human"), None)
+        text = str(getattr(last_user, "content", "") or "")
+        if not any(w in text for w in _CONTACT_LIST_WORDS):
+            return "", []
+        contacts = await tools.call("list_contacts")
+        call = _jr("list_contacts", {}, contacts)
+        if _has_error(contacts):
+            return ("\n【实时通讯录】银行系统返回了错误,暂时查不到联系人名单,"
+                    "请照实告知用户稍后再试;禁止编造任何姓名或手机号。"), [call]
+        rows = contacts if isinstance(contacts, list) else []
+        if not rows:
+            return ("\n【实时通讯录】银行系统返回:通讯录当前为空。"
+                    "请照实告知;禁止编造任何姓名或手机号。"), [call]
+        lines = "\n".join(
+            f"- {c.get('name', '')} {c.get('phone', '')}"
+            + (f"(备注:{c.get('note')})" if c.get("note") else "")
+            for c in rows if isinstance(c, dict))
+        block = (f"\n【实时通讯录】以下是银行系统返回的全部联系人(共{len(rows)}位)。"
+                 f"回答联系人相关问题只能引用这份名单,名单里没有的人就说不存在,"
+                 f"禁止编造名单外的人名或手机号:\n{lines}")
+        return block, [call]
+
     async def chat(state: AgentState) -> dict:
         # 条目 3:System Prompt 一律传**模块常量原样**,禁止在调用点拼接——
         # 静态前缀跨轮字节级不变才能命中 API 前缀缓存;人设/长期记忆这类每用户
         # 都不同的动态上下文走 extra(HumanMessage 通道),语义与语气都不变。
         persona_block, persona_temp = _persona_ctx(state)
+        contact_block, contact_calls = await _contact_fact_block(state)
         text = await ask_llm(CHAT_SYS, state["messages"],
-                             _dynamic_ctx(persona_block, _profile_ctx(state)),
+                             _dynamic_ctx(persona_block, _profile_ctx(state),
+                                          contact_block),
                              strong=True, temperature=persona_temp)
-        return {"messages": [AIMessage(content=text or "我在。")]}
+        out: dict = {"messages": [AIMessage(content=text or "我在。")]}
+        if contact_calls:
+            out["bank_calls"] = contact_calls
+        return out
 
     # ---------------------------------------------------------------- 通用播报
 

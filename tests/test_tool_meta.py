@@ -2,7 +2,7 @@
 
 对应的迭代内容（借鉴 Claude Code 的 Tool 契约/角色隔离，知识库
 ClaudeCode-Source-Analysis 方法论落地第一弹）：
-- **对账闸**：tool_meta.REGISTRY 必须与 FastMCP 实际注册的 48 个工具
+- **对账闸**：tool_meta.REGISTRY 必须与 FastMCP 实际注册的 49 个工具
   逐一对账（多/少/风险等级漂移都红），docstring 标签与注册表口径一致；
 - **不变量闸**：动钱面、两步类、不可逆类、敏感类各自收敛在显式清单里；
 - **白名单闸**：CORE_RUNNABLE 分析技能只能看到只读工具（跨层守卫），
@@ -53,14 +53,14 @@ def _real_tools_with_doc_risk() -> dict[str, str | None]:
 
 
 def test_registry_matches_fastmcp_exactly():
-    """注册表与真实注册的 48 个工具逐一对账：少登记/多登记/风险漂移都算失败。"""
+    """注册表与真实注册的 49 个工具逐一对账：少登记/多登记/风险漂移都算失败。"""
     expected = _real_tools_with_doc_risk()
-    assert len(expected) == 48, f"实际注册 {len(expected)} 个工具，与预期 48 不符"
+    assert len(expected) == 49, f"实际注册 {len(expected)} 个工具，与预期 49 不符"
     assert validate_registry(expected) == []
 
 
 def test_every_docstring_carries_risk_tag():
-    """48 个工具的 docstring 必须全部带 [READ]/[LOW]/[MED]/[HIGH] 标签。"""
+    """49 个工具的 docstring 必须全部带 [READ]/[LOW]/[MED]/[HIGH] 标签。"""
     expected = _real_tools_with_doc_risk()
     untagged = sorted(n for n, r in expected.items() if r is None)
     assert untagged == [], f"这些工具的 docstring 缺风险标签: {untagged}"

@@ -29,7 +29,9 @@ EXPECTED_DIRECT_CALLS = {
     # w_query 未测评分支列 R1 产品 1 处;与周边 w_* 节点同款直接调用)
     # 51→55(2026-10-27 AA 交款单:sb_create 派发 1 + pr_extract 查收件箱 1
     # + pr_pay 付款/刷新进度 2;与 sb_*/ss_* 同款直接调用)
-    "agent/graph.py": (r"tools\.call\(", 55),
+    # 55→56(2026-10-28 chat 兜底通讯录事实注入:_contact_fact_block 拉
+    # list_contacts 1 处——堵 LLM 无事实编造联系人名单的洞)
+    "agent/graph.py": (r"tools\.call\(", 56),
     "agent/skills.py": (r"tools\.call\(", 8),
     "agent/api.py": (r"\.call\(", 4),
 }

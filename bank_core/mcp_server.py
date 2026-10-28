@@ -70,6 +70,12 @@ def get_transactions(start: str | None = None, end: str | None = None,
 # ============================== 2. 智能转账 ==============================
 
 @mcp.tool
+def list_contacts() -> list[dict]:
+    """[READ] 列出用户全部收款人(联系人)。被问"我有哪些联系人/通讯录里有谁"时必须调用本工具,只依据返回结果作答,禁止编造名单。"""
+    return _ledger.list_contacts()
+
+
+@mcp.tool
 def resolve_contact(name: str | None = None, phone: str | None = None) -> list[dict]:
     """[READ] 按姓名或手机号查找收款人。返回多个同名联系人时应向用户澄清选哪个。"""
     return _ledger.resolve_contact(name, phone)

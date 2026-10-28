@@ -201,3 +201,17 @@ def test_prompt_constants_are_module_level_and_stable():
         const = getattr(graph_mod, name)
         assert isinstance(const, str) and const
         assert not callable(const)
+
+
+def test_chat_sys_carries_anti_fabrication_redline():
+    """2026-10-28 编造联系人名单事件的红线:chat 兜底必须自带禁编造约束。
+
+    chat 是唯一没有【事实】注入纪律的自由生成路径(播报走 REPORT_SYS 的
+    "禁止编造",抽取器只出 JSON)——红线一旦被删,模型又会凭空补名单。
+    """
+    assert "【业务事实红线】" in graph_mod.CHAT_SYS, \
+        "CHAT_SYS 缺少业务事实红线 —— chat 兜底会回到编造业务数据的状态"
+    assert "【实时" in graph_mod.CHAT_SYS, \
+        "红线必须指明事实来源是系统注入的【实时…】上下文块"
+    for w in ("编造", "查不到"):
+        assert w in graph_mod.CHAT_SYS, f"红线缺少关键约束词: {w}"

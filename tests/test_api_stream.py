@@ -91,7 +91,7 @@ def test_health_and_validation(tmp_path):
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok"
-        assert body["bank_tools"] == 48  # 45 + 3 AA 收款请求工具(2026-10-27)
+        assert body["bank_tools"] == 49  # 48 + list_contacts(2026-10-28 堵 chat 编造名单)
         assert "model" in body
 
         # 没有 user 消息 → 400,绝不进入流式
