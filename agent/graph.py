@@ -1484,6 +1484,17 @@ _PLAN_TRIGGER_WORDS = ("规划", "钱不够", "砍订阅", "取消订阅", "省�
 # ③ 强词只收无歧义项,"收益/资产/基金"这类账单/闲聊语境也常用的词不进来。
 _WEALTH_ROUTE_WORDS = ("理财", "风险测评", "申购", "赎回", "持仓")
 
+# AA 建单后的疑问性追问判定(router 用,实测场景:确认建单后用户问
+# "张三丁博文都会收到你发出的收款账单是吗",被再次拉进发起流程重复弹确认卡)。
+# 只认问句记号:陈述句("再发一个 300 的")仍是新一轮发起意图,不误伤。
+_POST_CREATE_QUESTION_WORDS = ("吗", "？", "?", "是不是", "会不会", "对吧", "是吧")
+
+
+def _is_inquiry_followup(text: str) -> bool:
+    """建单成功后的用户回合是不是问句(纯函数,router 用,可单测)。"""
+    t = str(text or "")
+    return any(w in t for w in _POST_CREATE_QUESTION_WORDS)
+
 
 def _wants_plan(text: str) -> bool:
     """确定性判定"本轮是否要生日预算规划"(router 用,不靠 LLM 二次判断)。"""
@@ -2732,6 +2743,13 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                 and not latest.startswith(("(到期提醒)", "(任务提醒)")) \
                 and any(w in latest for w in _WEALTH_ROUTE_WORDS):
             intent = "wealth"
+        # AA 建单成功后的疑问性追问("…都会收到你发出的收款账单是吗")归 chat 答疑。
+        # 会话里已有 bill 且本轮是问句时,若照旧进 split_bill,sb_extract 会拿
+        # 历史名单再走一遍闸门,重复弹确认卡(实测);陈述句新单不受影响。
+        # 放在所有其他改写之后,保证这是最终意图。
+        if intent == "split_bill" and state.get("bill") \
+                and _is_inquiry_followup(latest):
+            intent = "chat"
         # 新一轮对话:清掉上一轮的控制态(notice/order/decision 会误导下游路由),
         # 但保留 slots/split/contact_draft/linkage/bill_slots/wealth/card 等业务记忆,
         # 支持"改成1000""换成上个月"这类跨轮补充。plan_slots 同样跨轮保留。
@@ -3032,7 +3050,11 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         else:
             notice.update({"deliveries": delivery.get("deliveries", []),
                            "sent_count": delivery.get("sent_count", 0)})
-        return {"bank_calls": calls, "bill": bill, "notice": notice}
+        # 建单即终态:清掉 split 槽位。否则下一轮追问(哪怕只是问"都会收到吗")
+        # 会带着完整旧槽位再过一遍抽取→闸门,重复弹确认卡(实测)。
+        # bank_error 的早退分支不清——建单失败时保留槽位供用户纠正后重试。
+        return {"bank_calls": calls, "bill": bill, "notice": notice,
+                "split": {}}
 
     async def sb_report(state: AgentState) -> dict:
         return await _announce(state)

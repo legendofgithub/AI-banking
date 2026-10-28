@@ -803,6 +803,103 @@ def test_split_bill_dispatch_creates_request_for_registered_user(tmp_path):
     run(scenario())
 
 
+def test_split_created_inquiry_followup_goes_chat_no_duplicate(tmp_path):
+    """建单成功后的疑问性追问(2026-10-28 实测)不得重复走发起流程。
+
+    场景回放:确认建单后用户问「张三老王都会收到你发出的收款账单是吗」,
+    路由 LLM 误判回 split_bill,旧实现 sb_extract 拿历史名单再过一遍闸门,
+    重复弹确认卡。守卫:已有 bill 且本轮是问句 → 改写 chat;建单即清 split 槽位。
+    """
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            # 第 1 轮:发起 → 闸门 → 播报
+            '{"intent": "split_bill"}',
+            json.dumps({"title": "火锅", "total_yuan": "300", "even": True,
+                        "participants": [{"name": "我"}, {"name": "小刘"},
+                                         {"name": "老王"}]}, ensure_ascii=False),
+            "AA 已发起,三人各 100 元。",
+            # 第 2 轮:路由 LLM 照实测误判 split_bill(守卫应改写为 chat)
+            '{"intent": "split_bill"}',
+            "会的,小刘和老王的 Agent 都会收到交款单。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "dup1"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("发起AA,火锅300,我、小刘、老王均摊")]}, cfg)
+            assert _interrupt_payload(r1)["type"] == "confirm_split"
+            r2 = await graph.ainvoke(Command(resume="确认"), cfg)
+            assert "AA" in _ai_text(r2)
+
+            # 建单即终态:split 槽位被清空(防下一轮带旧名单重走闸门)
+            snap = await graph.aget_state(cfg)
+            assert not (snap.values.get("split") or {}).get("participants")
+
+            # 追问轮:不再弹确认卡,落在 chat 答疑;库里仍然只有一张单
+            r3 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("小刘老王都会收到你发出的收款账单是吗")]}, cfg)
+            assert not r3.get("__interrupt__"), "追问被再次拉进发起流程,重复弹确认卡"
+            snap3 = await graph.aget_state(cfg)
+            assert snap3.values.get("intent") == "chat"
+            assert "收到" in _ai_text(r3)
+            conn = _ro(db)
+            try:
+                n = conn.execute("SELECT COUNT(*) FROM split_bills").fetchone()[0]
+            finally:
+                conn.close()
+            assert n == 1
+            assert _audited_tools(db).count("create_split_bill") == 1
+
+    run(scenario())
+
+
+def test_split_statement_after_create_still_starts_new_bill(tmp_path):
+    """守卫不误伤陈述句:建单后「再来一单…」没有问句记号,照常走新一轮发起。"""
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "split_bill"}',
+            json.dumps({"title": "火锅", "total_yuan": "300", "even": True,
+                        "participants": [{"name": "我"}, {"name": "小刘"},
+                                         {"name": "老王"}]}, ensure_ascii=False),
+            "AA 已发起。",
+            '{"intent": "split_bill"}',
+            json.dumps({"title": "下午茶", "total_yuan": "90", "even": True,
+                        "participants": [{"name": "我"}, {"name": "小刘"},
+                                         {"name": "老王"}]}, ensure_ascii=False),
+            "AA 已发起。",
+        ]) as graph:
+            cfg = {"configurable": {"thread_id": "dup2"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("发起AA,火锅300,三人均摊")]}, cfg)
+            assert _interrupt_payload(r1)["type"] == "confirm_split"
+            await graph.ainvoke(Command(resume="确认"), cfg)
+            # 陈述句新单:应该再次出现确认闸门(这是合法的第二单)
+            r3 = await graph.ainvoke(
+                {"auth_user_id": 1, "messages": [HumanMessage("再发一单下午茶90元,还是三人均摊")]}, cfg)
+            assert _interrupt_payload(r3)["type"] == "confirm_split"
+            await graph.ainvoke(Command(resume="确认"), cfg)
+            conn = _ro(db)
+            try:
+                n = conn.execute("SELECT COUNT(*) FROM split_bills").fetchone()[0]
+            finally:
+                conn.close()
+            assert n == 2
+
+    run(scenario())
+
+
+def test_is_inquiry_followup_pure_function():
+    """问句记号判定:追问 True,陈述句/空串 False。"""
+    assert graph_mod._is_inquiry_followup("张三老王都会收到收款账单是吗")
+    assert graph_mod._is_inquiry_followup("会自动扣款?")
+    assert graph_mod._is_inquiry_followup("他们是不是已经收到了")
+    assert not graph_mod._is_inquiry_followup("再发一单下午茶90元,三人均摊")
+    assert not graph_mod._is_inquiry_followup("")
+
+
 def test_payment_request_list_and_pay_flow(tmp_path):
     """收件人 Agent:查看待付交款单 → 确认支付(支付密码闸门)→ 账单推进。"""
     db = _mk_multi_user_db(tmp_path)
