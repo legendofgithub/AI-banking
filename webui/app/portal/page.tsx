@@ -326,13 +326,13 @@ export default function PortalPage() {
 
   return (
     <div className="min-h-dvh bg-aurora">
-      {/* 顶部导航条:字标/图标/导航放大,压缩中间留白 */}
-      <header className="glass-bar sticky top-0 z-20 border-b border-white/60 dark:border-white/10">
-        <div className="mx-auto flex h-16 w-full max-w-6xl items-center gap-4 px-5">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-2xl bg-brand-red-solid text-white shadow-[0_6px_16px_-6px_rgba(211,46,25,0.7)]">
-            <Landmark className="size-5" />
+      {/* 顶部导航条:桌面放大字标;手机端收缩为单行(safe-area 让位状态栏) */}
+      <header className="glass-bar safe-area-top sticky top-0 z-20 border-b border-white/60 dark:border-white/10">
+        <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-3 px-4 md:h-16 md:gap-4 md:px-5">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-red-solid text-white shadow-[0_6px_16px_-6px_rgba(211,46,25,0.7)] md:size-10 md:rounded-2xl">
+            <Landmark className="size-4 md:size-5" />
           </div>
-          <span className="text-[21px] font-bold tracking-wide text-ink dark:text-brand-blue">
+          <span className="whitespace-nowrap text-[16px] font-bold tracking-wide text-ink dark:text-brand-blue md:text-[21px]">
             小小微银行助手
           </span>
           <nav className="ml-4 hidden items-center gap-2 text-[15px] font-medium text-muted-foreground md:flex">
@@ -359,14 +359,14 @@ export default function PortalPage() {
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {guest ? (
               <Link
-                className="sheen inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-5 text-[14px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
+                className="sheen inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-3.5 text-[13px] font-medium md:h-10 md:px-5 md:text-[14px] text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
                 href="/login"
               >
                 登录
               </Link>
             ) : (
               <Link
-                className="sheen inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-5 text-[14px] font-medium text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
+                className="sheen inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-brand-red-solid px-3.5 text-[13px] font-medium md:h-10 md:px-5 md:text-[14px] text-white shadow-[0_8px_20px_-10px_rgba(211,46,25,0.7)] transition-colors hover:bg-brand-red-deep"
                 href="/chat"
               >
                 <SparklesIcon className="size-4" />
@@ -379,7 +379,7 @@ export default function PortalPage() {
             >
               <DropdownMenuTrigger
                 aria-label="账号与设置"
-                className="flex size-10 items-center justify-center rounded-full outline-none transition-colors hover:bg-brand-red-soft focus-visible:ring-2 focus-visible:ring-brand-red/40 dark:text-foreground"
+                className="flex size-9 items-center justify-center rounded-full outline-none transition-colors hover:bg-brand-red-soft focus-visible:ring-2 focus-visible:ring-brand-red/40 dark:text-foreground md:size-10"
               >
                 {user ? (
                   <span className="brand-surface flex size-8 items-center justify-center rounded-full text-[14px] font-semibold text-white shadow-[0_4px_12px_-6px_rgba(211,46,25,0.55)]">
