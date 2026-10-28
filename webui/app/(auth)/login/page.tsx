@@ -162,11 +162,10 @@ export default function LoginPage() {
   const finishLogin = useCallback(
     (json: LoginResponse) => {
       storeBankAuth(json.token ?? "", json);
-      // 登录后第一屏统一是银行首页(余额/今日待办),对话从首页「进入对话」进;
-      // 手机端不再跳 /chat/<thread>(电脑端会话由 /chat 打开时自动恢复)。
-      // replace 而非 push:登录成功后 /login 不得留在浏览器历史栈,
-      // 手机 App 返回键(goBack)才不会从首页退回登录页;登出才是回登录页的唯一入口
-      router.replace("/home");
+      // 登录后第一屏统一落展示门户 /portal(手机/桌面同版,已做响应式)。
+      // replace 而非 push:登录成功后 /login 不得留在浏览器历史栈,手机 App
+      // 返回键(goBack)才不会从门户退回登录页;登出才是回登录页的唯一入口
+      router.replace("/portal");
     },
     [router]
   );

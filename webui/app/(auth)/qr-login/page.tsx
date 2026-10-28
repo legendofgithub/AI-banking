@@ -62,7 +62,7 @@ function QrLoginInner() {
         storeBankAuth(json.token, json);
         setNickname(json.nickname ?? "");
         setState("ok");
-        // 登录后第一屏统一是银行首页(余额/今日待办),与 /login 同口径;
+        // 登录后第一屏统一落展示门户 /portal,与 /login 同口径;
         // 电脑端会话由 /chat 打开时自动恢复,不再显式跳 /chat/<thread>
         if (cancelled) {
           return;
@@ -70,7 +70,7 @@ function QrLoginInner() {
         // 给"登录成功"一个可见瞬间再跳转,避免白屏式的突兀
         setTimeout(() => {
           if (!cancelled) {
-            router.replace("/home");
+            router.replace("/portal");
           }
         }, 600);
       } catch {

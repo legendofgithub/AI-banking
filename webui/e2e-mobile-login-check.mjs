@@ -34,8 +34,8 @@ try {
   // 两步登录(2026-10-27):第二步验证码——模拟短信卡「填入」→「验证并登录」
   await page.locator('[data-testid="demo-sms-fill"]').click({ timeout: 15_000 });
   await page.getByRole("button", { name: /验证并登录/ }).click();
-  // 桌面端登录后落在 /home(首屏,无输入框);后续用例都在 /chat 里做
-  await page.waitForURL(/\/home(\/)?$|\/chat/, { timeout: 30_000 });
+  // 桌面端登录后落在 /portal(展示门户,无输入框);后续用例都在 /chat 里做
+  await page.waitForURL(/\/portal(\/)?$|\/chat/, { timeout: 30_000 });
   await page.goto(`${BASE}/chat`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("textarea", { timeout: 30_000 });
   await page.waitForSelector('[data-testid="mobile-login-button"]', {
@@ -137,9 +137,9 @@ try {
     timeout: 15_000,
   });
   await phone.getByRole("button", { name: /验证并登录/ }).click();
-  // 2026-10-27 产品改版:登录统一落 /home(首页),不再自动跳电脑会话;
+  // 2026-10-28 产品改版:登录统一落 /portal(展示门户),不再自动跳电脑会话;
   // 加入同一会话的路径 = 会话列表点开(这里等效为直接进线程 URL)
-  await phone.waitForURL(/\/home/, { timeout: 30_000 });
+  await phone.waitForURL(/\/portal/, { timeout: 30_000 });
   await phone.goto(`${BASE}/chat/${desktopThreadId}`, {
     waitUntil: "domcontentloaded",
   });
