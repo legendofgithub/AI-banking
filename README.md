@@ -8,10 +8,13 @@
 
 ## 快速开始
 
+> 前置:Python **3.12**、Node.js **≥ 20.9**(Next 16 的 engines 下限,Node 18 构建会失败)、
+> npm 或 pnpm 任一。后端起 4 个服务,端口 3000 / 8788 / 8789 / 8800 需空闲。
+
 ```bash
 # —— macOS —— 装依赖(一次性)
 python3.12 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt   # 不要用 requirements.lock.txt(Windows 专用,含 pywin32)
 cd webui && npm install && cd ..      # 或 pnpm install
 
 # 一键路线(Windows/macOS 同一口径):首次运行会自动生成 webui/.env.local
@@ -49,6 +52,9 @@ python -m venv .venv
 
 > macOS 首次使用 `.command` 脚本：若从压缩包/git archive 解出来的文件没有执行权限，
 > 在终端里执行一次 `chmod +x 启动演示-Mac.command 停止演示-Mac.command` 即可；之后双击就能启动/停止。
+>
+> 若双击时被 Gatekeeper 拦下（"无法验证开发者"）：右键 → 打开，或执行一次
+> `xattr -d com.apple.quarantine 启动演示-Mac.command 停止演示-Mac.command`。
 
 ## 试用界面（demo/index.html）
 
