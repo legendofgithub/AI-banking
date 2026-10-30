@@ -1059,6 +1059,36 @@ def test_chat_fallback_no_bank_calls(tmp_path):
     run(scenario())
 
 
+def test_chat_balance_word_roots_single_readonly_call(tmp_path):
+    """余额问句(chat 兜底):登录用户词根命中 → 单次只读 list_accounts 注入
+    【实时账户余额】块;未登录用户同样问句零查询——绝不能把 user1 的
+    演示账户漏给观光模式(2026-10-29 微信渠道实测修复:"查一下我的余额"
+    原先无事实块被"诚实拒答")。"""
+    db = _mk_db(tmp_path)
+
+    async def scenario():
+        async with _AgentSession(db, tmp_path, [
+            '{"intent": "chat"}',
+            "您名下工资卡余额 10000.00 元。",
+            '{"intent": "chat"}',
+            "我这边暂时查不到,请先绑定账户。",
+        ]) as graph:
+            cfg1 = {"configurable": {"thread_id": "tb1"}}
+            r1 = await graph.ainvoke(
+                {"auth_user_id": 1,
+                 "messages": [HumanMessage("查一下我的余额")]}, cfg1)
+            assert "工资卡" in _ai_text(r1)
+            assert _audited_tools(db) == ["list_accounts"]
+            # 未登录:同问句不触发第二次查询(工具会落 user1,必须拦)
+            cfg2 = {"configurable": {"thread_id": "tb2"}}
+            r2 = await graph.ainvoke(
+                {"auth_user_id": None,
+                 "messages": [HumanMessage("查一下我的余额")]}, cfg2)
+            assert _audited_tools(db) == ["list_accounts"]
+
+    run(scenario())
+
+
 def test_router_prompt_self_intro_goes_chat_not_contact_add():
     """路由提示词守卫:自我介绍必须导向 chat,contact_add 必须要求显式动作词。
 

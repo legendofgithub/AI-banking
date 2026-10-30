@@ -5389,6 +5389,41 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
                  "交款单,自己那份直接计入),不是故障,请向用户讲清这一点。")
         return block, [call]
 
+    # 账户余额问句词根(2026-10-29 微信渠道实测:"查一下我的余额"路由进 chat,
+    # 无事实块被"诚实拒答"——余额是演示第一问句,任何渠道都该答得出来。
+    # 与通讯录同款"词根命中+单次只读调用"机制;仅登录用户注入,观光模式
+    # 不查询(未登录时工具落 user1,绝不能把演示账户漏给陌生人)。
+    _BALANCE_WORDS = ("余额", "存款", "我的账户", "名下账户", "卡里还有", "资产")
+
+    async def _balance_fact_block(state: AgentState) -> tuple[str, list[dict]]:
+        """账户余额问句的事实注入:词根命中且已登录时,单次只读拉
+        list_accounts,作为【实时账户余额】块喂给闲聊模型。"""
+        if not state.get("auth_user_id"):
+            return "", []
+        msgs = state.get("messages") or []
+        last_user = next((m for m in reversed(msgs)
+                          if getattr(m, "type", "") == "human"), None)
+        text = str(getattr(last_user, "content", "") or "")
+        if not any(w in text for w in _BALANCE_WORDS):
+            return "", []
+        accts = await tools.call("get_accounts")  # MCP 工具名;审计侧记 list_accounts
+        call = _jr("get_accounts", {}, accts)
+        if _has_error(accts):
+            return ("\n【实时账户余额】银行系统返回了错误,暂时查不到账户余额,"
+                    "请照实告知用户稍后再试;禁止编造任何金额。"), [call]
+        rows = accts if isinstance(accts, list) else []
+        if not rows:
+            return ("\n【实时账户余额】银行系统返回:名下暂无账户。"
+                    "请照实告知;禁止编造任何金额。"), [call]
+        lines = "\n".join(
+            f"- {a.get('name', '')}({a.get('type', '')}):"
+            f"{a.get('balance_yuan', '')}元"
+            for a in rows if isinstance(a, dict))
+        block = (f"\n【实时账户余额】以下是银行系统返回的本人全部账户"
+                 f"(共{len(rows)}个)。回答余额/账户/存款相关问题只能引用"
+                 f"这份清单:\n{lines}")
+        return block, [call]
+
     async def chat(state: AgentState) -> dict:
         # 条目 3:System Prompt 一律传**模块常量原样**,禁止在调用点拼接——
         # 静态前缀跨轮字节级不变才能命中 API 前缀缓存;人设/长期记忆这类每用户
@@ -5396,12 +5431,14 @@ def build_agent_graph(llm: Any, tools: BankTools, checkpointer: Any = None,
         persona_block, persona_temp = _persona_ctx(state)
         contact_block, contact_calls = await _contact_fact_block(state)
         bill_block, bill_calls = await _split_bill_fact_block(state)
+        balance_block, balance_calls = await _balance_fact_block(state)
         text = await ask_llm(CHAT_SYS, state["messages"],
                              _dynamic_ctx(persona_block, _profile_ctx(state),
-                                          contact_block, bill_block),
+                                          contact_block, bill_block,
+                                          balance_block),
                              strong=True, temperature=persona_temp)
         out: dict = {"messages": [AIMessage(content=text or "我在。")]}
-        calls = contact_calls + bill_calls
+        calls = contact_calls + bill_calls + balance_calls
         if calls:
             out["bank_calls"] = calls
         return out

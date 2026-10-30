@@ -44,6 +44,11 @@ WEBUI = ROOT / "webui"
 LOG_DIR = ROOT / "logs"
 PORTS = (8800, 8789, 8788, 3000)
 ZAI_KEYS = ("ZAI_API_KEY", "ZAI_BASE_URL", "ZAI_MODEL")
+# 微信 IM 渠道(docs/微信IM接入方案-20261029.md):与 ZAI_* 一样从 .env.local
+# 回填进子进程环境——agent 后端不读 webui/.env.local,只认进程环境变量。
+WECHAT_KEYS = ("WECHAT_CALLBACK_TOKEN", "WECHAT_TEST_APPID",
+               "WECHAT_TEST_APPSECRET", "WECHAT_AES_KEY",
+               "WECHAT_REPLY_MODE")
 
 # 控制台程序专用:子进程完全无窗口(DETACHED 语义由独立隐藏 console 达成)。
 CREATE_NO_WINDOW = 0x08000000
@@ -174,7 +179,7 @@ def load_env_subset(path: Path) -> dict[str, str]:
         key = key.strip()
         if key.startswith("export "):
             key = key[len("export "):].strip()
-        if key not in ZAI_KEYS:
+        if key not in ZAI_KEYS and key not in WECHAT_KEYS:
             continue
         values[key] = value.strip().strip('"').strip("'")
     return values
@@ -197,8 +202,8 @@ def ensure_data() -> None:
 
 
 def apply_zai_env(values: dict[str, str]) -> None:
-    """把 .env.local 的 ZAI_* 回填进子进程环境(已有的其它环境变量不动)。"""
-    for key in ZAI_KEYS:
+    """把 .env.local 的 ZAI_*/WECHAT_* 回填进子进程环境(已有的其它环境变量不动)。"""
+    for key in ZAI_KEYS + WECHAT_KEYS:
         if key in values:
             os.environ[key] = values[key]
     if values.get("ZAI_BASE_URL"):
@@ -207,6 +212,8 @@ def apply_zai_env(values: dict[str, str]) -> None:
             f"端点={values.get('ZAI_BASE_URL', '')}  "
             f"模型={values.get('ZAI_MODEL', '')}"
         )
+    if any(values.get(k) for k in WECHAT_KEYS):
+        print("[配置] WECHAT_* 微信回调渠道已启用(WECHAT_CALLBACK_TOKEN 等)")
     if not values.get("ZAI_API_KEY"):
         print("[警告] 未找到 ZAI_API_KEY —— 对话会报\"未配置 API Key\"。")
         print("       请在 webui/.env.local 里配置,或在 webui 界面设置里填 BYOK Key。")

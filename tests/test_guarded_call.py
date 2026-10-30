@@ -33,7 +33,9 @@ EXPECTED_DIRECT_CALLS = {
     # list_contacts 1 处——堵 LLM 无事实编造联系人名单的洞)
     # 56→57(2026-10-28 AA 账单问句事实注入:_split_bill_fact_block 拉
     # get_split_bill 1 处——交款单"未发送原因"有据可答,不再拒答)
-    "agent/graph.py": (r"tools\.call\(", 57),
+    # 57→58(2026-10-29 余额问句事实注入:_balance_fact_block 拉
+    # get_accounts 1 处——修"查一下我的余额"被 chat 无事实"诚实拒答")
+    "agent/graph.py": (r"tools\.call\(", 58),
     "agent/skills.py": (r"tools\.call\(", 8),
     "agent/api.py": (r"\.call\(", 4),
 }

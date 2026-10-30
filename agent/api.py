@@ -104,6 +104,7 @@ from agent import auth as auth_mod
 from agent import memory as memory_mod
 from agent import persona as persona_mod
 from agent import tasks as tasks_mod
+from agent import wechat as wechat_mod
 from agent.bank import BankTools, load_bank_tools
 from agent.graph import (_looks_like_new_transfer, build_agent_graph,
                          make_sqlite_checkpointer)
@@ -461,6 +462,7 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         auth_mod.init_auth(auth_conn)
         auth_mod.ensure_demo_auth(auth_conn)
         migrate_cards_bound(auth_conn)  # 演示绑卡列(老库补列)
+        wechat_mod.ensure_tables(auth_conn)  # 微信绑定表(方案 §4.4)
         # 评审修复:生产模型必须带超时/重试上限(测试注入的假模型原样使用)
         # 模型选择:显式 ZAI_MODEL 优先;否则按端点清单自动选(最新 flash 级,
         # 与前端模型探测同源,端点上新模型后重启即自动跟进)。
@@ -2101,6 +2103,10 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             in ("1", "true", "yes", "on"):
         from agent.insights_api import router as insights_router
         app.include_router(insights_router)
+
+    # 微信 IM 渠道(docs/微信IM接入方案-20261029.md):路由常驻,未配置
+    # WECHAT_CALLBACK_TOKEN 时回调返回 503 引导,现有行为与测试完全不变
+    wechat_mod.mount(app)
 
     return app
 

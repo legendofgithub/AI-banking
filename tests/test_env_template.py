@@ -40,10 +40,18 @@ REQUIRED_KEYS = {
     "ZAI_API_KEY",
     "ZAI_BASE_URL",
     "ZAI_MODEL",
+    # 微信 IM 渠道(agent/wechat.py,2026-10-29):选填,留空=功能关闭;
+    # WECHAT_REPLY_MODE 带默认值 cs,不破坏"只填一个 Key"契约
+    "WECHAT_REPLY_MODE",
+    "WECHAT_CALLBACK_TOKEN",
+    "WECHAT_TEST_APPID",
+    "WECHAT_TEST_APPSECRET",
+    "WECHAT_AES_KEY",
 }
 
 # 这些键在模板里必须有默认值——队友只填 ZAI_API_KEY 一个就能跑
-KEYS_WITH_DEFAULTS = {"AUTH_URL", "NEXT_PUBLIC_AGENT_API_PORT", "ZAI_BASE_URL", "ZAI_MODEL"}
+KEYS_WITH_DEFAULTS = {"AUTH_URL", "NEXT_PUBLIC_AGENT_API_PORT", "ZAI_BASE_URL",
+                      "ZAI_MODEL", "WECHAT_REPLY_MODE"}
 
 
 def _kv(text: str) -> dict[str, str]:
