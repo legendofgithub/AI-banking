@@ -5,18 +5,16 @@
  * 主按钮指向 GitHub Release 公网直链(releases/latest/download,永远最新构建,
  * 由 mobile-app/ 的 GitHub Actions 自动发布)——任何人扫码都能下,不依赖演示本机。
  * 页面动态展示电脑端局域网地址,方便装好 App 后回填。
- * 不需要登录;保留「手机网页版」入口兜底。
+ * 不需要登录;手机端产品形态唯一=App(2026-10-31 起不设网页版兜底入口)。
  */
 
 import {
-  ArrowRightIcon,
   DownloadIcon,
   Landmark,
   ShieldCheckIcon,
   SmartphoneIcon,
   WifiIcon,
 } from "lucide-react";
-import Link from "next/link";
 import { useEffect, useState } from "react";
 import { bankAgentBase } from "@/hooks/use-bank-auth";
 
@@ -99,12 +97,13 @@ export default function DownloadPage() {
             下载 Android App(APK)
           </a>
 
-          {!isAndroid ? (
+          {isAndroid ? null : (
             <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
-              当前设备不像 Android:APK 仅支持 Android 安装;iPhone 可点下方
-              「手机网页版」使用全部功能。
+              当前设备不像 Android:App 仅提供 Android 安装包(iPhone 暂无
+              对应安装方式)。手机端产品形态只有本 App,电脑端用浏览器打开
+              演示地址即可使用全部功能。
             </p>
-          ) : null}
+          )}
 
           <div className="mt-4 rounded-xl border border-brand-blue/15 bg-brand-blue-soft/60 px-3 py-2.5 dark:border-white/10 dark:bg-white/[0.04]">
             <div className="text-[11px] text-muted-foreground">
@@ -147,17 +146,8 @@ export default function DownloadPage() {
           </ol>
         </section>
 
-        {/* 兜底:网页版 */}
-        <Link
-          className="flex items-center justify-between rounded-2xl border border-brand-blue/15 bg-card/80 px-4 py-3 text-[13px] text-foreground transition-colors hover:border-brand-red/25 hover:text-brand-red-deep dark:border-white/10 dark:bg-white/[0.04] dark:hover:text-brand-red"
-          href="/"
-        >
-          <span className="flex items-center gap-2">
-            <SmartphoneIcon className="size-4 text-brand-blue" />
-            先不装 App,用手机网页版(功能相同)
-          </span>
-          <ArrowRightIcon className="size-4" />
-        </Link>
+        {/* 手机端产品形态唯一 = App:不再提供"手机网页版"兜底入口
+            (2026-10-31 收敛;电脑端浏览器访问照常,与本页无关) */}
       </main>
     </div>
   );

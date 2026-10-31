@@ -12,8 +12,8 @@
  */
 
 import { SmartphoneIcon } from "lucide-react";
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -81,7 +81,9 @@ export function MobileLoginButton() {
     ? `aibanking://pair?server=${encodeURIComponent(pcOrigin)}`
     : "";
 
-  const openDialog = () => setOpen(true);
+  const openDialog = useCallback(() => {
+    setOpen(true);
+  }, []);
 
   return (
     <>
@@ -182,7 +184,7 @@ export function MobileLoginButton() {
               className="text-[12px] text-brand-blue underline-offset-4 hover:underline dark:text-brand-blue"
               href="/download"
             >
-              查看图文安装指引(含网页版入口)
+              查看图文安装指引
             </Link>
           </div>
         </DialogContent>
