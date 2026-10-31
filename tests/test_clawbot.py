@@ -21,10 +21,10 @@ args = sys.argv[1:]
 if "status" in args:
     mode = os.environ.get("FAKE_STATUS", "running")
     if mode == "running":
-        print("- openclaw-weixin 286add22a0a3-im-bot: enabled, configured, "
+        print("- openclaw-weixin demo-bot-0001-im-bot: enabled, configured, "
               "running, in:3m ago", flush=True)
     else:
-        print("- openclaw-weixin 286add22a0a3-im-bot: enabled, configured, "
+        print("- openclaw-weixin demo-bot-0001-im-bot: enabled, configured, "
               "stopped", flush=True)
     sys.exit(0)
 mode = os.environ.get("FAKE_LOGIN", "qr")
