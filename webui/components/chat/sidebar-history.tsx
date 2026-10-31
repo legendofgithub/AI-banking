@@ -1,11 +1,22 @@
 "use client";
 
 import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
-import { MessageCircleIcon } from "lucide-react";
 import { motion } from "framer-motion";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  MessageCircleIcon,
+} from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
-import { useCallback, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
@@ -26,8 +37,8 @@ import {
   SidebarMenu,
   useSidebar,
 } from "@/components/ui/sidebar";
-import type { Chat } from "@/lib/db/schema";
 import { bankAgentBase, bankAuthHeaders } from "@/hooks/use-bank-auth";
+import type { Chat } from "@/lib/db/schema";
 import { fetcher } from "@/lib/utils";
 import { LoaderIcon } from "./icons";
 import { ChatItem } from "./sidebar-history-item";
@@ -50,6 +61,20 @@ export type ChatHistory = {
 };
 
 const PAGE_SIZE = 20;
+
+// 双面板(会话/微信 ClawBot)布局持久化:比例与折叠态存 localStorage,
+// 刷新/换设备标签页保持上次布局。SSR 安全:initializer 里判 window。
+const RATIO_KEY = "sidebar-wx-ratio";
+const WEB_COLLAPSED_KEY = "sidebar-web-collapsed";
+const WX_COLLAPSED_KEY = "sidebar-wx-collapsed";
+const WX_RATIO_DEFAULT = 0.38; // 微信分区默认占两区可用高度的 38%
+const WX_RATIO_MIN = 0.12;
+const WX_RATIO_MAX = 0.85;
+
+const readLS = (key: string, fallback: string) =>
+  typeof window === "undefined"
+    ? fallback
+    : (window.localStorage.getItem(key) ?? fallback);
 
 const groupChatsByDate = (chats: HistoryChat[]): GroupedChats => {
   const now = new Date();
@@ -146,6 +171,59 @@ export function SidebarHistory({
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
+  // ---- 双面板布局:上下两区可折叠,中间分隔条可拖拽调相对高度 ----
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ startY: number; startRatio: number } | null>(null);
+  const [wxRatio, setWxRatio] = useState<number>(
+    () =>
+      Number.parseFloat(readLS(RATIO_KEY, String(WX_RATIO_DEFAULT))) ||
+      WX_RATIO_DEFAULT
+  );
+  const [webCollapsed, setWebCollapsed] = useState<boolean>(
+    () => readLS(WEB_COLLAPSED_KEY, "0") === "1"
+  );
+  const [wxCollapsed, setWxCollapsed] = useState<boolean>(
+    () => readLS(WX_COLLAPSED_KEY, "0") === "1"
+  );
+  useEffect(() => {
+    window.localStorage.setItem(WEB_COLLAPSED_KEY, webCollapsed ? "1" : "0");
+  }, [webCollapsed]);
+  useEffect(() => {
+    window.localStorage.setItem(WX_COLLAPSED_KEY, wxCollapsed ? "1" : "0");
+  }, [wxCollapsed]);
+
+  const handleDividerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      dragRef.current = { startRatio: wxRatio, startY: e.clientY };
+    },
+    [wxRatio]
+  );
+  const handleDividerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!dragRef.current || !containerRef.current) {
+        return;
+      }
+      const height = containerRef.current.clientHeight || 1;
+      const next =
+        dragRef.current.startRatio +
+        (e.clientY - dragRef.current.startY) / height;
+      const clamped = Math.min(WX_RATIO_MAX, Math.max(WX_RATIO_MIN, next));
+      setWxRatio(clamped);
+      window.localStorage.setItem(RATIO_KEY, String(clamped));
+    },
+    []
+  );
+  const handleDividerUp = useCallback(() => {
+    dragRef.current = null;
+  }, []);
+  const toggleWeb = useCallback(() => {
+    setWebCollapsed((v) => !v);
+  }, []);
+  const toggleWx = useCallback(() => {
+    setWxCollapsed((v) => !v);
+  }, []);
+
   const chatsFromHistory = searching
     ? (searchData?.chats ?? [])
     : (paginatedChatHistories ?? []).flatMap((page) => page.chats);
@@ -163,12 +241,6 @@ export function SidebarHistory({
     ? true
     : paginatedChatHistories
       ? paginatedChatHistories.some((page) => page.hasMore === false)
-      : false;
-
-  const hasEmptyChatHistory = searching
-    ? Boolean(searchData) && chatsFromHistory.length === 0
-    : paginatedChatHistories
-      ? paginatedChatHistories.every((page) => page.chats.length === 0)
       : false;
 
   const historyGroups = [
@@ -267,30 +339,12 @@ export function SidebarHistory({
     );
   }
 
-  if (hasEmptyChatHistory) {
+  // 搜索态:结果按相关度混排,不做双面板分区(来源分区在搜索里没有意义)
+  if (searching) {
     return (
       <SidebarGroup className="group-data-[collapsible=icon]:hidden">
         <SidebarGroupLabel className="text-[10px] font-semibold tracking-[0.12em] text-sidebar-foreground/70">
-          {searching ? "搜索结果" : "会话"}
-        </SidebarGroupLabel>
-        <SidebarGroupContent>
-          <div className="flex w-full flex-row items-center justify-center gap-2 px-3 py-4 text-center text-[12px] leading-relaxed text-sidebar-foreground/60">
-            {searching
-              ? `没有找到与「${debouncedQuery}」相关的会话,换个关键词试试`
-              : "还没有会话,点上方 + 新建一个吧"}
-          </div>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    );
-  }
-
-  return (
-    <>
-      <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-        <SidebarGroupLabel className="text-[10px] font-semibold tracking-[0.12em] text-sidebar-foreground/70">
-          {searching
-            ? `搜索结果 ${searchData?.total ?? chatsFromHistory.length} 条`
-            : "会话"}
+          {`搜索结果 ${searchData?.total ?? chatsFromHistory.length} 条`}
         </SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
@@ -307,48 +361,116 @@ export function SidebarHistory({
                       key={chat.id}
                       onDelete={handleShowDeleteDialog}
                       setOpenMobile={setOpenMobile}
-                      snippet={searching ? chat.snippet : undefined}
+                      snippet={chat.snippet}
                     />
                   ))}
                 </div>
               ))}
-
-              {/* 微信 ClawBot 分区:微信侧对话(wx: 会话)单独归档,点开即完整历史 */}
-              {wechatChats.length > 0 ? (
-                <div>
-                  <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold tracking-[0.12em] text-sidebar-foreground/70">
-                    <MessageCircleIcon className="size-3" />
-                    微信 ClawBot
-                  </div>
-                  {wechatChats.map((chat) => (
-                    <ChatItem
-                      chat={chat}
-                      isActive={chat.id === id}
-                      key={chat.id}
-                      onDelete={handleShowDeleteDialog}
-                      setOpenMobile={setOpenMobile}
-                    />
-                  ))}
+              {chatsFromHistory.length === 0 ? (
+                <div className="px-3 py-4 text-center text-[12px] leading-relaxed text-sidebar-foreground/60">
+                  {`没有找到与「${debouncedQuery}」相关的会话,换个关键词试试`}
                 </div>
               ) : null}
             </div>
           </SidebarMenu>
-
-          {searching ? null : (
-            <>
-              <motion.div onViewportEnter={handleViewportEnter} />
-
-              {hasReachedEnd ? null : (
-                <div className="mt-1 flex flex-row items-center gap-2 px-4 py-2 text-sidebar-foreground/50">
-                  <div className="animate-spin">
-                    <LoaderIcon />
-                  </div>
-                  <div className="text-[11px]">Loading...</div>
-                </div>
-              )}
-            </>
-          )}
         </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
+
+  const bothExpanded = !webCollapsed && !wxCollapsed;
+
+  return (
+    <>
+      <SidebarGroup className="flex min-h-0 flex-1 flex-col group-data-[collapsible=icon]:hidden">
+        <div className="flex h-full min-h-0 flex-col" ref={containerRef}>
+          <HistorySection
+            collapsed={webCollapsed}
+            count={webChats.length}
+            grow={wxCollapsed ? 1 : 1 - wxRatio}
+            onToggle={toggleWeb}
+            title="会话"
+          >
+            {historyGroups.map((group) => (
+              <div key={group.label}>
+                <div className="px-2 py-1 text-[10px] font-semibold tracking-[0.12em] text-sidebar-foreground/70">
+                  {group.label}
+                </div>
+                {group.chats.map((chat) => (
+                  <ChatItem
+                    chat={chat}
+                    isActive={chat.id === id}
+                    key={chat.id}
+                    onDelete={handleShowDeleteDialog}
+                    setOpenMobile={setOpenMobile}
+                  />
+                ))}
+              </div>
+            ))}
+
+            {webChats.length === 0 ? (
+              <div className="px-3 py-4 text-center text-[12px] leading-relaxed text-sidebar-foreground/60">
+                还没有会话,点上方 + 新建一个吧
+              </div>
+            ) : (
+              <>
+                <motion.div onViewportEnter={handleViewportEnter} />
+
+                {hasReachedEnd ? null : (
+                  <div className="mt-1 flex flex-row items-center gap-2 px-4 py-2 text-sidebar-foreground/50">
+                    <div className="animate-spin">
+                      <LoaderIcon />
+                    </div>
+                    <div className="text-[11px]">Loading...</div>
+                  </div>
+                )}
+              </>
+            )}
+          </HistorySection>
+
+          {/* 分隔条:两区都展开时可拖拽调相对高度(下拖放大微信区);折叠时只是分界线 */}
+          <div
+            className={
+              bothExpanded
+                ? "group relative h-2 shrink-0 touch-none select-none"
+                : "h-px shrink-0 bg-sidebar-foreground/10"
+            }
+            onLostPointerCapture={handleDividerUp}
+            onPointerDown={bothExpanded ? handleDividerDown : undefined}
+            onPointerMove={bothExpanded ? handleDividerMove : undefined}
+            onPointerUp={handleDividerUp}
+            style={bothExpanded ? { cursor: "row-resize" } : undefined}
+            title={bothExpanded ? "拖动调整两个板块的相对高度" : undefined}
+          >
+            {bothExpanded ? (
+              <div className="absolute inset-x-8 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-sidebar-foreground/10 transition-colors group-hover:bg-brand-red/50" />
+            ) : null}
+          </div>
+
+          <HistorySection
+            collapsed={wxCollapsed}
+            count={wechatChats.length}
+            grow={webCollapsed ? 1 : wxRatio}
+            icon={<MessageCircleIcon className="size-3 shrink-0" />}
+            onToggle={toggleWx}
+            title="微信 ClawBot"
+          >
+            {wechatChats.map((chat) => (
+              <ChatItem
+                chat={chat}
+                isActive={chat.id === id}
+                key={chat.id}
+                onDelete={handleShowDeleteDialog}
+                setOpenMobile={setOpenMobile}
+              />
+            ))}
+            {wechatChats.length === 0 ? (
+              <div className="px-3 py-4 text-center text-[12px] leading-relaxed text-sidebar-foreground/60">
+                配置微信 ClawBot 后,微信里的对话会出现在这里
+              </div>
+            ) : null}
+          </HistorySection>
+        </div>
       </SidebarGroup>
 
       <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
@@ -369,5 +491,60 @@ export function SidebarHistory({
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/** 双面板里的一个区:标题固定在滚动区外(冻结),列表独立滚动。 */
+function HistorySection({
+  title,
+  icon,
+  count,
+  collapsed,
+  onToggle,
+  grow,
+  children,
+}: {
+  title: string;
+  icon?: ReactNode;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  /** flex 比例(相对另一区);折叠时本区高度由标题行决定,不参与分配 */
+  grow: number;
+  children: ReactNode;
+}) {
+  const header = (
+    <button
+      aria-expanded={!collapsed}
+      className="flex w-full items-center gap-1 px-2 py-1.5 text-left text-[10px] font-semibold tracking-[0.12em] text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
+      onClick={onToggle}
+      type="button"
+    >
+      {collapsed ? (
+        <ChevronRightIcon className="size-3 shrink-0" />
+      ) : (
+        <ChevronDownIcon className="size-3 shrink-0" />
+      )}
+      {icon}
+      <span className="flex-1 truncate">{title}</span>
+      <span className="rounded-full bg-sidebar-foreground/10 px-1.5 text-[9px] leading-4 tabular-nums">
+        {count}
+      </span>
+    </button>
+  );
+
+  if (collapsed) {
+    return <div className="shrink-0">{header}</div>;
+  }
+  return (
+    <section
+      className="flex min-h-0 flex-col"
+      style={{ flexBasis: 0, flexGrow: grow }}
+    >
+      {header}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {children}
+      </div>
+    </section>
   );
 }
