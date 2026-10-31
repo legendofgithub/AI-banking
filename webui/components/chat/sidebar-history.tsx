@@ -30,6 +30,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -167,7 +176,7 @@ export function SidebarHistory({
     // 2s 轮询:与 useDeviceSync 的 1.5s 会话内容同步同节奏——微信 ClawBot
     // 侧每轮对话(relay 回合)登记进目录后,列表标题/新会话约 2 秒内跟进,
     // 与"正在看着的会话内容刷新"体感一致(实时);焦点重验证仍刻意关闭
-    { fallbackData: [], revalidateOnFocus: false, refreshInterval: 2_000 }
+    { fallbackData: [], refreshInterval: 2000, revalidateOnFocus: false }
   );
 
   const router = useRouter();
@@ -295,6 +304,86 @@ export function SidebarHistory({
     setShowDeleteDialog(true);
   }, []);
 
+  // ---- 会话重命名:手动命名后 title_locked,标题不再随内容变化 ----
+  const [renameTarget, setRenameTarget] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
+
+  const handleShowRename = useCallback((chatId: string, title: string) => {
+    setRenameTarget({ id: chatId, title });
+    setRenameValue(title);
+  }, []);
+
+  const handleRename = useCallback(async () => {
+    const target = renameTarget;
+    const title = renameValue.trim();
+    if (!target || !title || title === target.title) {
+      setRenameTarget(null);
+      return;
+    }
+    setRenaming(true);
+    try {
+      const res = await fetch(
+        `${bankAgentBase()}/api/threads/${encodeURIComponent(target.id)}`,
+        {
+          body: JSON.stringify({ title }),
+          headers: { ...bankAuthHeaders(), "Content-Type": "application/json" },
+          method: "PATCH",
+        }
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        toast.error(body?.error ?? "重命名失败，请稍后重试");
+        return;
+      }
+      setRenameTarget(null);
+      mutate();
+      if (searchUrl) {
+        globalMutate(searchUrl);
+      }
+      toast.success("会话已重命名，标题已固定");
+    } catch {
+      toast.error("重命名失败，请检查网络");
+    } finally {
+      setRenaming(false);
+    }
+  }, [globalMutate, mutate, renameTarget, renameValue, searchUrl]);
+
+  const closeRename = useCallback(() => {
+    setRenameTarget(null);
+  }, []);
+
+  // 遮罩/ESC 关闭:重命名请求进行中不允许关(防半途丢状态)
+  const closeRenameFromOverlay = useCallback(
+    (open: boolean) => {
+      if (!open && !renaming) {
+        setRenameTarget(null);
+      }
+    },
+    [renaming]
+  );
+
+  const handleRenameInput = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setRenameValue(e.target.value);
+    },
+    []
+  );
+
+  const handleRenameKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter" && renameValue.trim() && !renaming) {
+        handleRename();
+      }
+    },
+    [handleRename, renameValue, renaming]
+  );
+
   const handleViewportEnter = useCallback(() => {
     if (!isValidating && !hasReachedEnd) {
       setSize((size) => size + 1);
@@ -363,6 +452,7 @@ export function SidebarHistory({
                       isActive={chat.id === id}
                       key={chat.id}
                       onDelete={handleShowDeleteDialog}
+                      onRename={handleShowRename}
                       setOpenMobile={setOpenMobile}
                       snippet={chat.snippet}
                     />
@@ -405,6 +495,7 @@ export function SidebarHistory({
                     isActive={chat.id === id}
                     key={chat.id}
                     onDelete={handleShowDeleteDialog}
+                    onRename={handleShowRename}
                     setOpenMobile={setOpenMobile}
                   />
                 ))}
@@ -464,6 +555,7 @@ export function SidebarHistory({
                 isActive={chat.id === id}
                 key={chat.id}
                 onDelete={handleShowDeleteDialog}
+                onRename={handleShowRename}
                 setOpenMobile={setOpenMobile}
               />
             ))}
@@ -475,6 +567,50 @@ export function SidebarHistory({
           </HistorySection>
         </div>
       </SidebarGroup>
+
+      <Dialog
+        onOpenChange={closeRenameFromOverlay}
+        open={renameTarget !== null}
+      >
+        <DialogContent className="sm:max-w-sm" data-testid="rename-dialog">
+          <DialogHeader className="pb-1">
+            <DialogTitle className="text-[15px]">重命名会话</DialogTitle>
+            <DialogDescription className="text-[12px] leading-relaxed">
+              手动命名后标题将固定,不再随对话内容自动变化
+              (微信会话默认跟随你最新一条消息)。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 px-1 pb-1">
+            <Input
+              autoFocus
+              data-testid="rename-input"
+              maxLength={60}
+              onChange={handleRenameInput}
+              onKeyDown={handleRenameKeyDown}
+              value={renameValue}
+            />
+            <div className="flex justify-end gap-2">
+              <Button
+                disabled={renaming}
+                onClick={closeRename}
+                size="sm"
+                variant="ghost"
+              >
+                取消
+              </Button>
+              <Button
+                data-testid="rename-confirm"
+                disabled={renaming || !renameValue.trim()}
+                onClick={handleRename}
+                size="sm"
+              >
+                {renaming ? <LoaderIcon /> : null}
+                保存
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
         <AlertDialogContent>

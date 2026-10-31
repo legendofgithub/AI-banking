@@ -254,6 +254,12 @@ class ThreadCreateIn(BaseModel):
     title: str = ""
 
 
+class ThreadRenameIn(BaseModel):
+    """会话手动重命名:置 title_locked,标题从此不再随内容变化。"""
+
+    title: str = Field(min_length=1, max_length=60)
+
+
 class OrderConfirmIn(BaseModel):
     token: str = Field(min_length=16, max_length=128)
     order_id: int
@@ -437,6 +443,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             await tconn.execute(
                 "ALTER TABLE threads ADD COLUMN last_reasoning "
                 "TEXT NOT NULL DEFAULT ''")
+        except Exception:  # noqa: BLE001
+            pass
+        try:  # 手动重命名锁:置 1 后标题固定,微信 feed 式标题不再跟随内容
+            await tconn.execute(
+                "ALTER TABLE threads ADD COLUMN title_locked "
+                "INTEGER NOT NULL DEFAULT 0")
         except Exception:  # noqa: BLE001
             pass
         # 每个用户当前正在看的会话:手机扫码登录后自动跟随电脑端所在的会话
@@ -1354,6 +1366,33 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
             (owner, thread_id, now))
         await app.state.threads.commit()
         return {"id": thread_id, "title": title, "createdAt": now}
+
+    @app.patch("/api/threads/{thread_id}")
+    async def rename_thread(thread_id: str, req: ThreadRenameIn,
+                            x_bank_token: str | None = Header(default=None)):
+        """会话重命名:改标题并落 title_locked=1——此后任何渠道(webui 首句
+        /微信 feed 式最新消息)都不再改写标题,直到用户再次手动重命名。
+
+        归属校验与 DELETE 同口径:登录用户只能改自己的;观光只能改观光的。
+        """
+        me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
+        owner = me["user_id"] if me else 0
+        cur = await app.state.threads.execute(
+            "SELECT user_id FROM threads WHERE thread_id=?", (thread_id,))
+        row = await cur.fetchone()
+        if not row:
+            return JSONResponse(status_code=404, content={"error": "会话不存在"})
+        if int(row[0]) != int(owner):
+            return JSONResponse(status_code=403, content={"error": "无权重命名该会话"})
+        title = req.title.strip().replace("\n", " ")[:60]
+        if not title:
+            raise HTTPException(status_code=400, detail="标题不能为空")
+        now = datetime.now().isoformat(timespec="microseconds")
+        await app.state.threads.execute(
+            "UPDATE threads SET title=?, title_locked=1, updated_at=? "
+            "WHERE thread_id=?", (title, now, thread_id))
+        await app.state.threads.commit()
+        return {"renamed": thread_id, "title": title, "titleLocked": True}
 
     @app.delete("/api/threads/{thread_id}")
     async def delete_thread(thread_id: str,

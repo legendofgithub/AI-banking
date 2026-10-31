@@ -466,3 +466,43 @@ def test_cs_turn_registers_thread_unbound_owner_zero(tmp_path, monkeypatch):
         texts = [p["text"] for m in h.json()["messages"]
                  for p in m["parts"] if p.get("type") == "text"]
         assert any("你好呀" in t for t in texts)
+
+
+def test_rename_locks_title_against_wechat_feed(tmp_path, monkeypatch):
+    """手动重命名后标题冻结:微信 feed 式标题不再跟随最新消息。
+
+    覆盖:PATCH 归属校验(别人改 403)+ 锁定生效(第三轮 relay 后标题不变)。
+    """
+    client, _db, app, _sent = _client(
+        tmp_path, monkeypatch,
+        ['{"intent": "chat"}', '{"intent": "chat"}', '{"intent": "chat"}',
+         "第一轮回复", "第二轮回复", "第三轮回复"])
+    with client:
+        client.post("/api/wechat/relay",
+                    json={"openid": "oRX", "text": "绑定 13800000000"})
+        client.post("/api/wechat/relay",
+                    json={"openid": "oRX", "text": "第一条消息内容"})
+        # 越权校验:不带 token(观光 owner=0)改别人(user 1)的会话 → 403
+        r403 = client.patch("/api/threads/wx:oRX", json={"title": "越权重命名"})
+        assert r403.status_code == 403
+        # 本人(陈明)重命名成功 → title_locked=1
+        c2 = client.post("/api/auth/login",
+                         json={"identifier": "13800000000",
+                               "password": "Demo@12345"}).json()
+        tok = client.post("/api/auth/login",
+                          json={"identifier": "13800000000",
+                                "password": "Demo@12345",
+                                "challenge_id": c2["challenge_id"],
+                                "code": c2["demo_code"]}).json()["token"]
+        r = client.patch("/api/threads/wx:oRX", json={"title": "我的微信专席"},
+                         headers={"x-bank-token": tok})
+        assert r.status_code == 200 and r.json()["title"] == "我的微信专席"
+        # 第三轮微信对话:feed 标题不再覆盖锁定的标题
+        client.post("/api/wechat/relay",
+                    json={"openid": "oRX", "text": "第二条消息内容"})
+        _wait(lambda: True, timeout=1)  # 让登记协程跑完
+        import sqlite3 as _s
+        row = _s.connect(tmp_path / "wx_threads.sqlite").execute(
+            "SELECT title, title_locked FROM threads "
+            "WHERE thread_id='wx:oRX'").fetchone()
+        assert row == ("我的微信专席", 1)

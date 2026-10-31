@@ -167,7 +167,7 @@ ClawBot 插件 → 本机 OpenClaw → `POST /api/wechat/relay` → 项目图执
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 665 个用例全绿(2026-10-31 实测,含微信 IM 渠道 21 + ClawBot 入口 7 个)
+.venv/Scripts/python.exe -m pytest tests -q      # 666 个用例全绿(2026-10-31 实测,含微信 IM 渠道 22 + ClawBot 入口 7 个)
 .venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
 
 # 用例数不写固定值,一律以 --collect-only 实测为准(历史文档里的 205/245/133/413/481 均已过期)
