@@ -77,10 +77,11 @@ function PureChatHeader() {
       {/* 手机端:返回门户首页(/home 仍是手机扫码/登录落地页,聊天返回统一回门户) */}
       <Link
         aria-label="返回首页"
-        className="relative z-10 flex size-9 items-center justify-center rounded-full text-ink transition-colors hover:bg-brand-red-soft hover:text-brand-red active:bg-brand-red-soft dark:text-foreground md:hidden"
+        className="relative z-10 ml-1 flex h-9 items-center gap-0.5 rounded-full px-2 text-[14px] font-medium text-ink transition-colors hover:bg-brand-red-soft hover:text-brand-red active:bg-brand-red-soft dark:text-foreground md:hidden"
         href="/portal#services"
       >
-        <ChevronLeftIcon className="size-5" />
+        <ChevronLeftIcon className="size-4" />
+        <span>返回首页</span>
       </Link>
 
       {/* 手机端:居中服务名(不吃点击) */}
