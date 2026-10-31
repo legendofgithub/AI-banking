@@ -421,22 +421,31 @@ def test_relay_registers_thread_with_owner(tmp_path, monkeypatch):
     这是「侧边栏微信 ClawBot 分区」的后端契约:列表/历史/删除端点对 wx:
     会话零改动复用,靠的就是这行目录登记。
     """
-    # 绑定指令在渠道层直处理不过图,只消耗一次图调用(路由+回复)
+    # 绑定指令在渠道层直处理不过图;两轮业务对话各自消耗一次图调用
     client, _db, app, _sent = _client(tmp_path, monkeypatch,
-                                      ['{"intent": "chat"}', "余额是1万元"])
+                                      ['{"intent": "chat"}', "第一轮回复",
+                                       '{"intent": "chat"}', "第二轮回复"])
     with client:
         client.post("/api/wechat/relay",
                     json={"openid": "oR9", "text": "绑定 13800000000"})
         r = client.post("/api/wechat/relay",
                         json={"openid": "oR9", "text": "查一下我的余额"})
-        assert "余额" in r.json()["reply"]
+        assert "第一轮回复" in r.json()["reply"]
         import sqlite3 as _s
-        row = _s.connect(tmp_path / "wx_threads.sqlite").execute(
+        tdb = _s.connect(tmp_path / "wx_threads.sqlite")
+        row = tdb.execute(
             "SELECT title, user_id, last_client_id FROM threads "
             "WHERE thread_id='wx:oR9'").fetchone()
-        assert row[0].startswith("查一下我的余额")  # 标题=首条消息(同 webui 口径)
         assert row[1] == 1                          # 归属=绑定的演示用户
         assert row[2] == "wechat"
+        # 标题跟随最新一条用户消息(feed 式):微信是一人一会话,
+        # 钉死首句会让每轮新话在列表上毫无变化,用户会误以为"没同步"
+        assert row[0].startswith("查一下我的余额")
+        client.post("/api/wechat/relay",
+                    json={"openid": "oR9", "text": "第二句:看下订阅清单"})
+        row2 = tdb.execute(
+            "SELECT title FROM threads WHERE thread_id='wx:oR9'").fetchone()
+        assert row2[0].startswith("第二句:看下订阅清单")
         # 归属校验:未登录(history 只许看观光 0)看不到别人的微信会话
         h = client.get("/api/history", params={"thread_id": "wx:oR9"})
         assert h.json()["messages"] == []

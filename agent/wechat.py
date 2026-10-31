@@ -381,7 +381,10 @@ async def _record_wechat_thread(app: Any, openid: str, uid: int | None,
     - 不动 active_threads(不抢 webui 当前会话的跨设备跟随焦点);
     - 已存在会话不改归属(防串号),与 webui 同口径;
     - 停在澄清轮时把问题存 pending_question,/api/history 恢复现场时
-      最后一条"没理人"的追问才补得上。
+      最后一条"没理人"的追问才补得上;
+    - **标题跟随最新一条用户消息**(webui 是首条消息定标题):微信是
+      "一人一会话",标题若钉死在第一句,每句新话都看不出列表变化,
+      用户会误以为"没同步"——feed 式标题让每轮对话立即可见。
     """
     thread_id = f"wx:{openid}"
     title = first_text.strip().replace("\n", " ")
@@ -402,6 +405,7 @@ async def _record_wechat_thread(app: Any, openid: str, uid: int | None,
                VALUES (?,?,?,?, '',?,?,1,'wechat')
                ON CONFLICT(thread_id) DO UPDATE SET
                  updated_at=excluded.updated_at,
+                 title=excluded.title,
                  pending_question=excluded.pending_question,
                  pending_payload='',
                  revision=revision+1""",
