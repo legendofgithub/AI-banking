@@ -411,3 +411,49 @@ def test_relay_key_guard(tmp_path, monkeypatch):
                          json={"openid": "oR3", "text": "绑定 13800000000"},
                          headers={"X-Relay-Key": "sekret-1"})
         assert r2.status_code == 200
+
+
+# ----------------------------------------------------------------- 会话目录(wx: 线程进侧边栏)
+
+def test_relay_registers_thread_with_owner(tmp_path, monkeypatch):
+    """relay 回合后:wx:{openid} 进 threads 目录,归属=绑定用户,标题取首条消息。
+
+    这是「侧边栏微信 ClawBot 分区」的后端契约:列表/历史/删除端点对 wx:
+    会话零改动复用,靠的就是这行目录登记。
+    """
+    # 绑定指令在渠道层直处理不过图,只消耗一次图调用(路由+回复)
+    client, _db, app, _sent = _client(tmp_path, monkeypatch,
+                                      ['{"intent": "chat"}', "余额是1万元"])
+    with client:
+        client.post("/api/wechat/relay",
+                    json={"openid": "oR9", "text": "绑定 13800000000"})
+        r = client.post("/api/wechat/relay",
+                        json={"openid": "oR9", "text": "查一下我的余额"})
+        assert "余额" in r.json()["reply"]
+        import sqlite3 as _s
+        row = _s.connect(tmp_path / "wx_threads.sqlite").execute(
+            "SELECT title, user_id, last_client_id FROM threads "
+            "WHERE thread_id='wx:oR9'").fetchone()
+        assert row[0].startswith("查一下我的余额")  # 标题=首条消息(同 webui 口径)
+        assert row[1] == 1                          # 归属=绑定的演示用户
+        assert row[2] == "wechat"
+        # 归属校验:未登录(history 只许看观光 0)看不到别人的微信会话
+        h = client.get("/api/history", params={"thread_id": "wx:oR9"})
+        assert h.json()["messages"] == []
+
+
+def test_cs_turn_registers_thread_unbound_owner_zero(tmp_path, monkeypatch):
+    """未绑定(cs 回调)回合:目录行归属 0(观光),无 token 的 history 可见。"""
+    client, _db, _app, sent = _client(tmp_path, monkeypatch,
+                                      ['{"intent": "chat"}', "观光回复内容"])
+    with client:
+        _post_xml(client, _text_xml("oA9", "你好呀", msg_id="A9"))
+        assert _wait(lambda: sent and "观光回复内容" in sent[0][1])
+        import sqlite3 as _s
+        row = _s.connect(tmp_path / "wx_threads.sqlite").execute(
+            "SELECT user_id FROM threads WHERE thread_id='wx:oA9'").fetchone()
+        assert row[0] == 0  # 未绑定 → 观光归属,侧边栏未登录态可见
+        h = client.get("/api/history", params={"thread_id": "wx:oA9"})
+        texts = [p["text"] for m in h.json()["messages"]
+                 for p in m["parts"] if p.get("type") == "text"]
+        assert any("你好呀" in t for t in texts)

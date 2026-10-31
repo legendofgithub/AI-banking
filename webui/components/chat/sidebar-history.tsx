@@ -1,6 +1,7 @@
 "use client";
 
 import { isToday, isYesterday, subMonths, subWeeks } from "date-fns";
+import { MessageCircleIcon } from "lucide-react";
 import { motion } from "framer-motion";
 import { usePathname, useRouter } from "next/navigation";
 import type { User } from "next-auth";
@@ -148,7 +149,14 @@ export function SidebarHistory({
   const chatsFromHistory = searching
     ? (searchData?.chats ?? [])
     : (paginatedChatHistories ?? []).flatMap((page) => page.chats);
-  const groupedChats = groupChatsByDate(chatsFromHistory);
+  // 微信(ClawBot/公众号)会话:thread_id 以 wx: 开头,单独成区(在会话分组下方);
+  // 搜索时不拆——结果按相关度混排,来源分区没有意义。
+  const isWechatChat = (c: HistoryChat) => c.id.startsWith("wx:");
+  const wechatChats = searching ? [] : chatsFromHistory.filter(isWechatChat);
+  const webChats = searching
+    ? chatsFromHistory
+    : chatsFromHistory.filter((c) => !isWechatChat(c));
+  const groupedChats = groupChatsByDate(webChats);
   const historyLoading = searching ? searchLoading : isLoading;
 
   const hasReachedEnd = searching
@@ -304,6 +312,25 @@ export function SidebarHistory({
                   ))}
                 </div>
               ))}
+
+              {/* 微信 ClawBot 分区:微信侧对话(wx: 会话)单独归档,点开即完整历史 */}
+              {wechatChats.length > 0 ? (
+                <div>
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold tracking-[0.12em] text-sidebar-foreground/70">
+                    <MessageCircleIcon className="size-3" />
+                    微信 ClawBot
+                  </div>
+                  {wechatChats.map((chat) => (
+                    <ChatItem
+                      chat={chat}
+                      isActive={chat.id === id}
+                      key={chat.id}
+                      onDelete={handleShowDeleteDialog}
+                      setOpenMobile={setOpenMobile}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </div>
           </SidebarMenu>
 

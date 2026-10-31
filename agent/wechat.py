@@ -369,7 +369,51 @@ async def _push(app: Any, openid: str, text: str) -> None:
     await client.push_text(openid, text)
 
 
-async def _invoke_turn(app: Any, inbound: Inbound, conn: sqlite3.Connection) -> str:
+async def _record_wechat_thread(app: Any, openid: str, uid: int | None,
+                                first_text: str, reply: str) -> None:
+    """把 wx:{openid} 会话登记进 threads 目录,让 webui 侧边栏(含手机端)
+    的「微信 ClawBot」分区能列出/打开/删除微信对话。
+
+    消息本体早已在检查点库里(每轮 relay/callback 都走同一 thread 的图执行),
+    这里只补目录行——列表/历史/删除端点对 wx: 会话零改动复用。
+
+    与 /api/chat 的 _touch_thread 的差异:
+    - 不动 active_threads(不抢 webui 当前会话的跨设备跟随焦点);
+    - 已存在会话不改归属(防串号),与 webui 同口径;
+    - 停在澄清轮时把问题存 pending_question,/api/history 恢复现场时
+      最后一条"没理人"的追问才补得上。
+    """
+    thread_id = f"wx:{openid}"
+    title = first_text.strip().replace("\n", " ")
+    title = title[:30] + ("…" if len(title) > 30 else "")
+    paused = False
+    try:
+        graph = await app.state.get_user_graph(uid or 1)
+        snap = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+        paused = bool(snap.next)
+    except Exception:  # noqa: BLE001 —— 状态读失败按非暂停处理,登记照常
+        pass
+    now = datetime.now().isoformat(timespec="microseconds")
+    try:
+        await app.state.threads.execute(
+            """INSERT INTO threads (thread_id,title,created_at,updated_at,
+                                   pending_question,pending_payload,user_id,
+                                   revision,last_client_id)
+               VALUES (?,?,?,?, '',?,?,1,'wechat')
+               ON CONFLICT(thread_id) DO UPDATE SET
+                 updated_at=excluded.updated_at,
+                 pending_question=excluded.pending_question,
+                 pending_payload='',
+                 revision=revision+1""",
+            (thread_id, title or "微信对话", now, now,
+             reply if paused else "", uid or 0))
+        await app.state.threads.commit()
+    except Exception:  # noqa: BLE001 —— 目录登记失败绝不影响回话本身
+        logger.warning("登记微信会话目录失败 openid=%s", openid, exc_info=True)
+
+
+async def _invoke_turn(app: Any, inbound: Inbound,
+                       conn: sqlite3.Connection) -> str:
     """整轮图调用,返回最终回复文本(含闸门引导/错误兜底)。只取答案,不负责投递。"""
     openid = inbound.openid
     uid = lookup_uid(conn, openid)
@@ -405,6 +449,7 @@ async def _run_turn(app: Any, inbound: Inbound, conn: sqlite3.Connection) -> Non
     openid = inbound.openid
     uid = lookup_uid(conn, openid)
     reply = await _invoke_turn(app, inbound, conn)
+    await _record_wechat_thread(app, openid, uid, inbound.content, reply)
     for chunk in split_for_wechat(markdown_to_plain(reply)):
         await _push(app, openid, chunk)
     if uid is None:  # 观光模式:业务意图已被 auth_guard 拦,补一条绑定引导
@@ -473,6 +518,9 @@ def mount(app: Any) -> None:
                 # 抢答成功的请求醒来后把首页从箱里取走直接回给用户,
                 # 放弃抢答(已回"正在处理")的答案留在箱里等用户发 1 领取。
                 inbox.setdefault(inbound.openid, []).extend(t.pages)
+                await _record_wechat_thread(app, inbound.openid,
+                                            lookup_uid(conn, inbound.openid),
+                                            inbound.content, text)
                 t.event.set()
 
             asyncio.create_task(_bg())
@@ -619,6 +667,8 @@ def mount(app: Any) -> None:
         lock = app.state.wechat_locks.setdefault(openid, asyncio.Lock())
         async with lock:  # 同一 openid 串行,避免同 thread 并发写状态
             reply = await _invoke_turn(app, inbound, conn)
+        await _record_wechat_thread(app, openid, lookup_uid(conn, openid),
+                                    content, reply)
         if lookup_uid(conn, openid) is None:  # 观光模式:补绑定引导
             reply += "\n(未绑定账户:发送「绑定 你的手机号」即可绑定后办理业务)"
         return {"reply": markdown_to_plain(reply)}
