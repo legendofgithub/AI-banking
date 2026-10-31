@@ -1402,6 +1402,12 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
         归属校验与 GET /api/threads 同口径:登录用户只能删自己的;
         观光态(无 token)只能删 user_id=0 的观光会话。
         """
+        if thread_id.startswith("wx:"):
+            # 微信侧对话记录不在 webui 删(前端也不给入口,这里兜底防误调):
+            # 那是用户与微信 bot 的沟通留痕,删了微信端也找不回
+            return JSONResponse(
+                status_code=403,
+                content={"error": "微信会话是微信端的沟通记录,不支持在此删除"})
         me = auth_mod.resolve_token(app.state.auth_conn, x_bank_token)
         owner = me["user_id"] if me else 0
         cur = await app.state.threads.execute(

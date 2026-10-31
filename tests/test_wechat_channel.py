@@ -502,7 +502,13 @@ def test_rename_locks_title_against_wechat_feed(tmp_path, monkeypatch):
                     json={"openid": "oRX", "text": "第二条消息内容"})
         _wait(lambda: True, timeout=1)  # 让登记协程跑完
         import sqlite3 as _s
-        row = _s.connect(tmp_path / "wx_threads.sqlite").execute(
+        tdb = _s.connect(tmp_path / "wx_threads.sqlite")
+        row = tdb.execute(
             "SELECT title, title_locked FROM threads "
             "WHERE thread_id='wx:oRX'").fetchone()
         assert row == ("我的微信专席", 1)
+        # 微信会话是微信端的记录:DELETE 被后端兜底拒绝(前端已无入口)
+        d = client.delete("/api/threads/wx:oRX", headers={"x-bank-token": tok})
+        assert d.status_code == 403
+        assert tdb.execute(
+            "SELECT 1 FROM threads WHERE thread_id='wx:oRX'").fetchone()

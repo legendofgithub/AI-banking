@@ -24,8 +24,9 @@ const PureChatItem = ({
 }: {
   chat: Chat;
   isActive: boolean;
-  onDelete: (chatId: string) => void;
-  /** 点「重命名」:父层弹对话框改标题;手动命名后标题不再随内容变化 */
+  /** 点「删除」。微信(wx:)会话不传——那是微信端的对话记录,不在 webui 侧删 */
+  onDelete?: (chatId: string) => void;
+  /** 点「重命名」:父层弹对话框改标题,手动命名后标题不再随内容变化 */
   onRename: (chatId: string, currentTitle: string) => void;
   setOpenMobile: (open: boolean) => void;
   /** 内容搜索命中片段(手机端会话总览搜索时展示) */
@@ -36,7 +37,7 @@ const PureChatItem = ({
   }, [setOpenMobile]);
 
   const handleDelete = useCallback(() => {
-    onDelete(chat.id);
+    onDelete?.(chat.id);
   }, [chat.id, onDelete]);
 
   const handleRename = useCallback(() => {
@@ -80,10 +81,12 @@ const PureChatItem = ({
             <PencilEditIcon size={15} />
             <span>重命名</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={handleDelete} variant="destructive">
-            <TrashIcon />
-            <span>Delete</span>
-          </DropdownMenuItem>
+          {onDelete ? (
+            <DropdownMenuItem onSelect={handleDelete} variant="destructive">
+              <TrashIcon />
+              <span>Delete</span>
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
     </SidebarMenuItem>

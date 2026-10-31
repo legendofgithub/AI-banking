@@ -554,7 +554,7 @@ export function SidebarHistory({
                 chat={chat}
                 isActive={chat.id === id}
                 key={chat.id}
-                onDelete={handleShowDeleteDialog}
+                /* 微信端记录不在 webui 侧删:不传 onDelete,菜单只有重命名 */
                 onRename={handleShowRename}
                 setOpenMobile={setOpenMobile}
               />
