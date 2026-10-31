@@ -148,10 +148,26 @@ LangGraph 编排层（agent/，多节点 / 11 路由意图 / 13 类人工闸门�
 | 生日联动 | "林悦的生日"（播种日 + 4 天，每年重复） | 预留资金 + 提前 2 天礼物提醒 |
 | 到期转账 | 3 天后 500 元家用定时转账 | 到期提醒 → 用户确认执行 |
 
+## 微信 ClawBot 接入(可选)
+
+让 BankAgent 出现在**微信聊天列表**里:对 bot 说"查一下我的余额",消息经微信官方
+ClawBot 插件 → 本机 OpenClaw → `POST /api/wechat/relay` → 项目图执行(绑定/审计/
+支付密码闸门全部保留)。走官方插件,不需要公网、不需要穿透。
+
+```bash
+.venv/Scripts/python.exe scripts/setup_clawbot.py --check   # 先体检
+.venv/Scripts/python.exe scripts/setup_clawbot.py           # 自动装 OpenClaw+插件+技能
+```
+
+装完仍需人工三步(配模型 / 扫码 / 微信里发「绑定 手机号」),**前置条件、9 条已知坑与
+诚实限制清单见 [integrations/openclaw/README.md](integrations/openclaw/README.md)**。
+其中"微信客户端须有 ClawBot 插件入口"(灰度功能)与"多账号扫码行为未验证"两条
+无法由代码保证,对外演示前请自行确认。
+
 ## 测试
 
 ```
-.venv/Scripts/python.exe -m pytest tests -q      # 656 个用例全绿(2026-10-30 实测,含微信 IM 渠道 19 个)
+.venv/Scripts/python.exe -m pytest tests -q      # 662 个用例全绿(2026-10-31 实测,含微信 IM 渠道 19 + ClawBot 入口 6 个)
 .venv/Scripts/python.exe -m pytest tests --collect-only -q   # 只标定用例数,秒出
 
 # 用例数不写固定值,一律以 --collect-only 实测为准(历史文档里的 205/245/133/413/481 均已过期)

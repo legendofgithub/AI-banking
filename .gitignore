@@ -83,8 +83,9 @@ docs/项目扫描报告-*.md
 # HACK-CX 迁移方案/实施报告:从参考项目取材的内部过程文档,仅本地留存
 # (同 *微众化* 规则,对外叙事只讲"客户洞察引擎"本体)
 docs/HACK-CX迁移*.md
-# 微信 IM 接入方案与 OpenClaw 转发技能:内部规划/外部工具指令类文档,仅本地留存
-# (渠道代码本体 agent/wechat.py 与协作契约 §3.5 已入库,方案细节与技能提示词不出库)
+# 微信 IM 接入方案:内部规划文档,仅本地留存
+# (渠道代码 agent/wechat.py + 协作契约 §3.5 已入库;转发技能的**可运行实体**
+#  已出库到 integrations/openclaw/(别人 clone 后要能装起来),此规则只拦内部稿)
 docs/微信IM接入方案-*.md
 docs/openclaw-bankagent-relay-*.md
 # tools/ 为本地运行时工具(cloudflared.exe 回调穿透二进制,约 55MB),不入库

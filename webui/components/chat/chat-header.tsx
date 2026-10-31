@@ -25,13 +25,15 @@ import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
 import { MobileLoginButton } from "./mobile-login-button";
 import { MobileSettingsDialog } from "./sidebar-settings";
+import { WechatClawbotButton } from "./wechat-clawbot-button";
 
-/* 右上角动作区:手机 App 下载二维码(位于后台入口左边) + 管理台。
-   均仅 PC 端显示——前者是"电脑演示 → 手机装 App 直连"的入口,手机端自己没有
-   扫码刚需;管理台 8789 只绑 127.0.0.1,新标签打开的是本机地址。 */
+/* 右上角动作区:微信 ClawBot 接入 + 手机 App 下载二维码 + 管理台。
+   前两者均仅 PC 端显示——都是"电脑演示 → 手机/微信接入"的入口,手机端
+   自己已在目标端上,没有扫码刚需;管理台 8789 只绑 127.0.0.1。 */
 function HeaderActions() {
   return (
     <div className="flex items-center gap-2 md:ml-auto">
+      <WechatClawbotButton />
       <MobileLoginButton />
       <a
         aria-label="后台入口"

@@ -101,6 +101,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from agent import auth as auth_mod
+from agent import clawbot as clawbot_mod
 from agent import memory as memory_mod
 from agent import persona as persona_mod
 from agent import tasks as tasks_mod
@@ -2107,6 +2108,9 @@ def create_app(*, llm: Any = None, db_path: str | Path | None = None,
     # 微信 IM 渠道(docs/微信IM接入方案-20261029.md):路由常驻,未配置
     # WECHAT_CALLBACK_TOKEN 时回调返回 503 引导,现有行为与测试完全不变
     wechat_mod.mount(app)
+    # 微信 ClawBot 接入(顶栏二维码入口):后台代拉 OpenClaw 登录会话,
+    # 前端轮询动态二维码——ClawBot 的码是一次性凭证,必须现场向微信申请。
+    clawbot_mod.mount(app)
 
     return app
 
