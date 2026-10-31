@@ -27,6 +27,20 @@ import { MobileLoginButton } from "./mobile-login-button";
 import { MobileSettingsDialog } from "./sidebar-settings";
 import { WechatClawbotButton } from "./wechat-clawbot-button";
 
+/* 左上角「返回首页」:PC 与手机端同款文字按钮(回门户服务区) */
+function BackHomeLink() {
+  return (
+    <Link
+      aria-label="返回首页"
+      className="relative z-10 ml-1 flex h-9 shrink-0 items-center gap-0.5 rounded-full px-2 text-[14px] font-medium text-ink transition-colors hover:bg-brand-red-soft hover:text-brand-red active:bg-brand-red-soft dark:text-foreground"
+      href="/portal#services"
+    >
+      <ChevronLeftIcon className="size-4" />
+      <span>返回首页</span>
+    </Link>
+  );
+}
+
 /* 右上角动作区:微信 ClawBot 接入 + 手机 App 下载二维码 + 管理台。
    前两者均仅 PC 端显示——都是"电脑演示 → 手机/微信接入"的入口,手机端
    自己已在目标端上,没有扫码刚需;管理台 8789 只绑 127.0.0.1。 */
@@ -63,6 +77,7 @@ function PureChatHeader() {
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-brand-red via-brand-violet/40 to-transparent"
         />
+        <BackHomeLink />
         <HeaderActions />
       </header>
     );
@@ -74,15 +89,8 @@ function PureChatHeader() {
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-brand-red via-brand-violet/40 to-transparent"
       />
-      {/* 手机端:返回门户首页(/home 仍是手机扫码/登录落地页,聊天返回统一回门户) */}
-      <Link
-        aria-label="返回首页"
-        className="relative z-10 ml-1 flex h-9 items-center gap-0.5 rounded-full px-2 text-[14px] font-medium text-ink transition-colors hover:bg-brand-red-soft hover:text-brand-red active:bg-brand-red-soft dark:text-foreground md:hidden"
-        href="/portal#services"
-      >
-        <ChevronLeftIcon className="size-4" />
-        <span>返回首页</span>
-      </Link>
+      {/* 手机端:返回门户首页;PC 端同一按钮出现在顶栏最左(两端同款) */}
+      <BackHomeLink />
 
       {/* 手机端:居中服务名(不吃点击) */}
       <div className="pointer-events-none absolute inset-x-0 flex justify-center md:hidden">
