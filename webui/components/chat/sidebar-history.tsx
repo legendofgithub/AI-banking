@@ -164,7 +164,9 @@ export function SidebarHistory({
   } = useSWRInfinite<ChatHistory>(
     user && !searching ? getChatHistoryPaginationKey : () => null,
     fetcher,
-    { fallbackData: [], revalidateOnFocus: false }
+    // 20s 轮询:微信 ClawBot 侧新对话(relay 回合)登记进目录后,侧边栏
+    // 不刷新页面也能自动冒出(焦点重验证是刻意关的,演示切窗频繁,定时轮询更稳)
+    { fallbackData: [], revalidateOnFocus: false, refreshInterval: 20_000 }
   );
 
   const router = useRouter();

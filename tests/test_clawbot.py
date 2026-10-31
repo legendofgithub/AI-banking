@@ -101,6 +101,28 @@ def test_connected_skips_qr(tmp_path, monkeypatch):
         assert st["qr_url"] == ""
 
 
+def test_start_punctures_stale_false_connection_cache(tmp_path, monkeypatch):
+    """回归(2026-10-31 实修):15s 连接缓存里的 False 不能误判"未连接"。
+
+    场景:某次检查时网关未起(channels status 报 stopped → 缓存 False),
+    随后网关起来了。用户点开弹窗时 start() 若吃缓存会错走去拉登录 CLI
+    → 弹窗错出二维码。修复:start 用 is_connected(force=True) 穿透缓存。
+    """
+    app = _app(tmp_path, monkeypatch, status="stopped")
+    with TestClient(app) as client:
+        # 先制造一次"未连接"的缓存(直接调内部方法,等它把 False 存进缓存)
+        import asyncio
+        loop = asyncio.new_event_loop()
+        assert loop.run_until_complete(
+            app.state.clawbot.is_connected(force=True)) is False
+        loop.close()
+        # 网关起来了(假脚本切到 running):start 必须穿透缓存直接判已连接
+        monkeypatch.setenv("FAKE_STATUS", "running")
+        st = client.post("/api/wechat/clawbot/start").json()
+        assert st["status"] == "connected"
+        assert st["qr_url"] == "" and st["alive"] is False
+
+
 def test_expired_qr_marks_failed(tmp_path, monkeypatch):
     """CLI 报二维码多次失效 → failed + 可读提示。"""
     app = _app(tmp_path, monkeypatch, login="expired", status="stopped")

@@ -23,6 +23,7 @@ ClawBot 的二维码是**一次性登录凭证**:由 `openclaw channels login` �
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shutil
@@ -31,6 +32,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("agent.clawbot")
 
 LINK_RE = re.compile(r"https://liteapp\.weixin\.qq\.com/q/\S+")
 CONN_CACHE_S = 15.0        # channels status 结果缓存(该命令 3-5s,别每次轮询都跑)
@@ -80,9 +83,13 @@ def _cli() -> str | None:
         resolved = explicit if Path(explicit).exists() else None
     else:
         home = Path.home()
+        # 顺序即优先级:本仓库 setup_clawbot.py 的回退安装位(openclaw-new,
+        # 装着微信插件的新版)最优先;npm root -g 与全局默认位次之——
+        # 那里可能残留没插件的旧版 openclaw,选了它 channels status 永远
+        # 查不到 openclaw-weixin,弹窗会错出二维码(2026-10-31 实修)
         candidates = [
-            # 本仓库 setup_clawbot.py 的回退安装位
-            home / "openclaw-new" / "node_modules" / "openclaw" / "dist" / "index.js",
+            home / "openclaw-new" / "node_modules" / "openclaw" / "dist"
+            / "index.js",
             # npm -g 默认位(Windows / POSIX)
             home / "AppData" / "Roaming" / "npm" / "node_modules" / "openclaw"
             / "dist" / "index.js",
@@ -91,7 +98,7 @@ def _cli() -> str | None:
         ]
         root = _npm_global_root()
         if root is not None:
-            candidates.insert(0, root / "openclaw" / "dist" / "index.js")
+            candidates.append(root / "openclaw" / "dist" / "index.js")
         resolved = next((str(c) for c in candidates if c.exists()), None)
     _cli_cache = (explicit, resolved)
     return resolved
@@ -132,7 +139,9 @@ class ClawbotService:
                 return self.snapshot()
             if not force and self._alive():
                 return self.snapshot()
-            if not force and await self.is_connected():
+            # 连接检查必须穿透 15s 缓存:缓存里可能是上次网关未起时的 False,
+            # 吃缓存会把已连接误判成未连接,弹窗错出二维码(2026-10-31 实修)
+            if not force and await self.is_connected(force=True):
                 self.st.status = "connected"
                 self.st.qr_url = ""
                 self.st.message = "微信已连接,无需扫码"
@@ -177,9 +186,19 @@ class ClawbotService:
                 stderr=asyncio.subprocess.STDOUT)
             out, _ = await asyncio.wait_for(proc.communicate(), STATUS_TIMEOUT_S)
         except (OSError, asyncio.TimeoutError):
-            return self._conn  # 查不动就沿用上次结论,不误报
+            # 查不动就沿用上次结论,不误报;但必须留痕——这里静默吞过
+            # "CLI 因配置残留拒跑"的故障(2026-10-31 实修前查了半小时)
+            logger.warning("channels status 执行失败,沿用上次连接态 %s",
+                           self._conn, exc_info=True)
+            return self._conn
         text = out.decode("utf-8", "replace")
         ok = bool(re.search(rf"{re.escape(CHANNEL)}\b.*\brunning\b", text))
+        if not ok and out:
+            logger.warning(
+                "channels status 未命中(rc=%s HOME=%r USERPROFILE=%r "
+                "node=%r cli=%r 尾部=%r)",
+                proc.returncode, os.environ.get("HOME"),
+                os.environ.get("USERPROFILE"), _node(), cli, text[-120:])
         self._conn_at, self._conn = time.time(), ok
         # 只在没有活动登录会话时才据旧连接态落状态:正在申请新码期间,
         # 上一次的连接仍是 running,不能把 waiting 翻回 connected(否则
